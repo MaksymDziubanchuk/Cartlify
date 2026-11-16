@@ -1,3 +1,4 @@
+import { sendsToAddress } from '@config/deliveryMethods.js';
 import type { Prisma } from '@prisma/client';
 
 import type { OrderDeliverySuggestionDto } from 'types/dto/orders.dto.js';
@@ -36,7 +37,7 @@ export async function deliverySuggestionOf(
       phone: last.recipientPhone,
     },
     address:
-      last.method === 'manual' && last.country && last.city && last.street && last.house
+      sendsToAddress(last.method) && last.country && last.city && last.street && last.house
         ? {
             country: last.country,
             postalCode: last.postalCode,

@@ -317,7 +317,8 @@ export async function sendReturnMoneyEmail(
     }
 
     // a statement of the system cancelled an order whose money went back another way: its own mail
-    if (statement.source === 'system') {
+    // (a refusal the carrier told is a statement of the buyer's refusal, with the usual mails)
+    if (statement.source === 'system' && statement.reason !== 'refused') {
       await sendSystemCancel(statement, itemIds);
       return;
     }

@@ -1,3 +1,4 @@
+import { sendsToAddress } from '@config/deliveryMethods.js';
 import { prisma } from '@db/client.js';
 import { mailLocaleOf } from '@helpers/locale.js';
 import { assertRedisReady } from '@redis/client.js';
@@ -229,7 +230,8 @@ export async function createCheckoutSession({
         // the delivery is part of the total: its own line on the page
         deliveryPrice: order.delivery ? Number(order.delivery.price) : 0,
         shipping:
-          order.delivery?.method === 'manual' &&
+          order.delivery &&
+          sendsToAddress(order.delivery.method) &&
           order.delivery.country &&
           order.delivery.city &&
           order.delivery.street &&

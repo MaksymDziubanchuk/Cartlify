@@ -101,6 +101,8 @@ const productResponseExample = {
     warnings: 'Do not listen at a high volume for a long time.',
     documents: [],
     withdrawal: { rule: 'sealed_media', right: 'conditional' },
+    hsCode: '851830',
+    originCountry: 'DE',
   },
   variant: variantFullExample,
   variants: [variantShortExample],
@@ -685,6 +687,8 @@ const postProductRouterSchema = {
         '(PARTY_ID_INVALID, `details.field`), the values of a new party missing ' +
         '(PARTY_FIELDS_REQUIRED, `details.fields`) or wrong (PARTY_FIELDS_INVALID, ' +
         '`details.fields`), warnings over 2000 signs (PRODUCT_WARNINGS_TOO_LONG, `details.max`), a ' +
+        'customs code that is not 6 to 10 digits (PRODUCT_HS_CODE_INVALID), a country of origin ' +
+        'that is not two letters (PRODUCT_ORIGIN_COUNTRY_INVALID), a ' +
         'rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, `details.allowed`), a ' +
         'manufacturer outside the EU without a person responsible in the EU ' +
         '(PRODUCT_EU_RESPONSIBLE_REQUIRED), a person that is not in the EU ' +
@@ -873,7 +877,8 @@ const updateProductByIdRouterSchema = {
         '(VALIDATION_ERROR for a JSON body, PRODUCT_NAME_INVALID, CATEGORY_ID_INVALID, ' +
         'POPULARITY_OVERRIDE_INVALID, an id of a party that is not a whole number ' +
         '(PARTY_ID_INVALID, `details.field`), warnings over 2000 signs (PRODUCT_WARNINGS_TOO_LONG, ' +
-        '`details.max`), a rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, ' +
+        '`details.max`), a customs code that is not 6 to 10 digits (PRODUCT_HS_CODE_INVALID), a ' +
+        'country of origin that is not two letters (PRODUCT_ORIGIN_COUNTRY_INVALID), a rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, ' +
         '`details.allowed`), a manufacturer outside the EU without a person responsible in the EU ' +
         '(PRODUCT_EU_RESPONSIBLE_REQUIRED), a person that is not in the EU ' +
         '(EU_RESPONSIBLE_NOT_IN_EU), ' +
@@ -950,7 +955,8 @@ const patchProductsBatchRouterSchema = {
         '`details.productIds`), or a product with nothing to change (NO_FIELDS_TO_UPDATE), a ' +
         'wrong field (PRODUCT_NAME_INVALID, CATEGORY_ID_INVALID, ' +
         'POPULARITY_OVERRIDE_INVALID, POPULARITY_OVERRIDE_UNTIL_INVALID, ' +
-        'PARTY_ID_INVALID, PRODUCT_WARNINGS_TOO_LONG, WITHDRAWAL_RULE_INVALID, ' +
+        'PARTY_ID_INVALID, PRODUCT_WARNINGS_TOO_LONG, PRODUCT_HS_CODE_INVALID, ' +
+        'PRODUCT_ORIGIN_COUNTRY_INVALID, WITHDRAWAL_RULE_INVALID, ' +
         'PRODUCT_EU_RESPONSIBLE_REQUIRED, ' +
         'EU_RESPONSIBLE_NOT_IN_EU, DOCUMENT_ID_INVALID, DOCUMENT_IDS_REPEATED, ' +
         'PRODUCT_DOCUMENTS_TOO_MANY), a popularity override without its end ' +

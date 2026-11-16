@@ -110,6 +110,7 @@ const APP_FUNCTIONS = [
   'cartlify.decide_money_use(integer, jsonb, numeric, text)',
   'cartlify.share_money_line(integer)',
   'cartlify.record_order_shipment_cost(integer, numeric)',
+  'cartlify.void_order_parcel(integer)',
   'cartlify.expire_order_reservation(integer)',
   'cartlify.anonymize_login_logs(integer)',
   // maintenance the periodic tasks run as the system
@@ -130,6 +131,10 @@ const APP_FUNCTIONS = [
   // a CHECK constraint cannot hold a subquery, these run as the role that writes the row)
   'cartlify.shop_setting_value_valid(text, jsonb)',
   'cartlify.shop_setting_list_valid(jsonb, text)',
+  'cartlify.shop_setting_money_valid(jsonb, boolean)',
+  'cartlify.shop_setting_zones_valid(jsonb)',
+  'cartlify.shop_setting_sender_valid(jsonb)',
+  'cartlify.shipment_box_items_valid(jsonb)',
   'cartlify.log_variant_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
   'cartlify.receive_variant_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
   'cartlify.write_off_variant_stock(uuid, integer, integer, integer, text, text)',
@@ -396,6 +401,7 @@ describe(`role ${APP}`, () => {
     ['refresh_return_state', 'select cartlify.refresh_return_state(1)'],
     ['order_goods_on_shelf', `select cartlify.order_goods_on_shelf(1, 'paid')`],
     ['take_back_manual_units', 'select cartlify.take_back_manual_units(1, 1, 1, 1)'],
+    ['void_statement_parcels', 'select cartlify.void_statement_parcels(1)'],
     ['assert_return_accepted', 'select cartlify.assert_return_accepted(1)'],
     ['return_units_to_batches', `select cartlify.return_units_to_batches(1, 1, 1, 1, 'to_stock')`],
     ['consume_variant_stock', 'select cartlify.consume_variant_stock(1, 1, 1)'],

@@ -4,7 +4,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
+import {
+  resetShopSettings,
+  setShopSettings,
+  testZonePrice,
+} from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createProduct,
@@ -58,7 +62,7 @@ const cartOf = (user: TestUser) =>
 
 describe('GET /api/orders/current: the delivery of a cart', () => {
   it('has no delivery yet and quotes each method of the shop for the items in it', async () => {
-    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 30 });
+    setShopSettings(testZonePrice(4.99, 30));
     const buyer = await newUser();
     await addToCart(buyer, (await createProduct({ price: 10, stock: 5 })).variantId, 2);
 
@@ -70,8 +74,10 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
       itemsTotal: 20,
       total: 20,
       delivery: null,
+      // no country yet: the price of the manual delivery comes with the address
+      // (POST /api/orders/current/delivery-options)
       deliveryQuotes: [
-        { method: 'manual', price: 4.99, freeFrom: 30, remainingToFree: 10 },
+        { method: 'manual', price: null, freeFrom: null, remainingToFree: null },
         { method: 'pickup', price: 0, freeFrom: null, remainingToFree: null },
       ],
     });
@@ -79,27 +85,33 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
   });
 
   it('quotes a free delivery once the items reach the sum, and shows it again when they fall under', async () => {
-    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 30 });
+    setShopSettings(testZonePrice(4.99, 30));
     const buyer = await newUser();
     const product = await createProduct({ price: 10, stock: 10 });
     const added = await addToCart(buyer, product.variantId, 3);
+    const toUkraine = () =>
+      app.inject({
+        method: 'POST',
+        url: '/api/orders/current/delivery-options',
+        headers: withCsrf(csrf, accessCookie(buyer)),
+        payload: { address: deliveryBody.address },
+      });
 
-    expect(added.json().deliveryQuotes[0]).toEqual({
-      method: 'manual',
-      price: 0,
-      freeFrom: 30,
-      remainingToFree: 0,
-    });
+    const free = (await toUkraine()).json();
+    expect(free).toMatchObject({ zone: { freeFrom: 30 }, remainingToFree: 0 });
+    expect(free.options[0]).toMatchObject({ method: 'manual', price: 0 });
 
     const itemId = added.json().items[0].id;
-    const lowered = await app.inject({
+    await app.inject({
       method: 'PATCH',
       url: `/api/orders/current/items/${itemId}`,
       headers: withCsrf(csrf, accessCookie(buyer)),
       payload: { quantity: 2 },
     });
 
-    expect(lowered.json().deliveryQuotes[0]).toMatchObject({ price: 4.99, remainingToFree: 10 });
+    const priced = (await toUkraine()).json();
+    expect(priced).toMatchObject({ remainingToFree: 10 });
+    expect(priced.options[0]).toMatchObject({ method: 'manual', price: 4.99 });
   });
 
   it('quotes only the methods the shop has enabled, and no price when the shop names none', async () => {

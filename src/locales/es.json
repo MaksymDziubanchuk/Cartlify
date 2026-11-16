@@ -140,7 +140,8 @@
     "preview": "El pedido #{{orderId}} se envió y va en camino hacia ti.",
     "leadTxt": "Tu pedido de {{appName}} #{{orderId}} se envió y va en camino hacia ti. Te avisaremos cuando se entregue.",
     "heading": "Pedido enviado",
-    "body": "Tu pedido #{{orderId}} se envió y va en camino hacia ti. Te avisaremos cuando se entregue."
+    "body": "Tu pedido #{{orderId}} se envió y va en camino hacia ti. Te avisaremos cuando se entregue.",
+    "parcelHeading": "Paquete {{number}}"
   },
   "orderPaymentRefunded": {
     "subject": "{{appName}} — Te enviamos de vuelta el pago del pedido #{{orderId}}",

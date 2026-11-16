@@ -192,6 +192,12 @@ beforeAll(async () => {
     // sent: a row of the sends of the order
     await tx.$executeRaw`update cartlify.orders set status = 'shipped' where id = ${paid.id}`;
     await tx.$executeRaw`insert into cartlify.order_shipments ("orderId", carrier) values (${paid.id}, 'DHL')`;
+    // and its box with the item: the staff reads it
+    await tx.$executeRaw`insert into cartlify.shipment_boxes ("shipmentId", number, items)
+      select s.id, 1, jsonb_build_array(jsonb_build_object('orderItemId', i.id, 'quantity', 1))
+      from cartlify.order_shipments as s
+      join cartlify.order_items as i on i."orderId" = s."orderId"
+      where s."orderId" = ${paid.id}`;
   });
 
   await testTx(async (tx) => {
@@ -466,7 +472,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(43);
+    expect(Object.keys(hidden)).toHaveLength(44);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

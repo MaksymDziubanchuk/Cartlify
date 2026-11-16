@@ -5,6 +5,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { normalizeWarnings } from '@helpers/party.js';
+import { normalizeHsCode, normalizeOriginCountry } from '@helpers/customs.js';
 import { parseWithdrawalRule } from '@helpers/withdrawal.js';
 
 import {
@@ -63,6 +64,8 @@ export async function createProduct({
   euResponsibleId,
   euResponsible,
   warnings,
+  hsCode,
+  originCountry,
   withdrawal,
   documentIds,
   categoryId,
@@ -91,6 +94,9 @@ export async function createProduct({
     euResponsible,
   });
   const warningsNorm = normalizeWarnings(warnings);
+  // what customs need of it, both optional
+  const hsCodeNorm = normalizeHsCode(hsCode);
+  const originCountryNorm = normalizeOriginCountry(originCountry);
   // the rule of withdrawal of its own, none when the field is empty or not sent
   const withdrawalNorm = parseWithdrawalRule(withdrawal) ?? null;
   // the documents of the directory the product names, in their order
@@ -156,6 +162,8 @@ export async function createProduct({
             manufacturerId: parties.manufacturer.id,
             euResponsibleId: parties.euResponsible?.id ?? null,
             warnings: warningsNorm,
+            hsCode: hsCodeNorm,
+            originCountry: originCountryNorm,
             withdrawal: withdrawalNorm,
             categoryId: categoryIdRaw,
           },
@@ -184,6 +192,10 @@ export async function createProduct({
               ? [{ field: 'euResponsibleId', old: null, new: parties.euResponsible.id }]
               : []),
             ...(warningsNorm ? [{ field: 'warnings', old: null, new: warningsNorm }] : []),
+            ...(hsCodeNorm ? [{ field: 'hsCode', old: null, new: hsCodeNorm }] : []),
+            ...(originCountryNorm
+              ? [{ field: 'originCountry', old: null, new: originCountryNorm }]
+              : []),
             ...(withdrawalNorm ? [{ field: 'withdrawal', old: null, new: withdrawalNorm }] : []),
             ...(documentIdsNorm.length
               ? [{ field: 'documentIds', old: null, new: documentIdsNorm }]

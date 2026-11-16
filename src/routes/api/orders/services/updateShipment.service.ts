@@ -80,7 +80,8 @@ export async function updateShipment(
             expense: boolean;
             rolledBackAt: Date | null;
           }[]
-        >`select id, carrier, "trackingNumber", "trackingUrl", expense, "rolledBackAt"
+        >`select id, carrier, "trackingNumber", "trackingUrl",
+            (expense and state <> 'voided'::cartlify."ParcelState") as expense, "rolledBackAt"
           from cartlify.order_shipments
           where id = ${shipmentId}::int and "orderId" = ${orderId}::int and "returnId" is null
           for update`;

@@ -152,7 +152,11 @@ describe('the rule of withdrawal an order keeps', () => {
       payload: {
         orderId: cartId,
         delivery: deliveryBody,
-        expectedDeliveryPrice: quotedDeliveryPrice(shown),
+        expectedDeliveryPrice: await quotedDeliveryPrice(
+          app,
+          withCsrf(csrf, accessCookie(buyer)),
+          deliveryBody,
+        ),
       },
     });
 

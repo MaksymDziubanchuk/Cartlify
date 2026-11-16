@@ -667,7 +667,16 @@ describe('GET /api/admin/reports/accounting', () => {
   });
 
   it('lets root read the report too', async () => {
-    const res = await report({}, await newUser({ role: 'ROOT' }));
+    // of a product of its own: the report of the whole shop is of every other test too
+    const own = await createProduct({ price: 10 });
+    const res = await report(
+      {
+        from: new Date(Date.now() - 60_000).toISOString(),
+        to: new Date(Date.now() + 60_000).toISOString(),
+        productIds: String(own.id),
+      },
+      await newUser({ role: 'ROOT' }),
+    );
 
     expect(res.statusCode).toBe(200);
   });

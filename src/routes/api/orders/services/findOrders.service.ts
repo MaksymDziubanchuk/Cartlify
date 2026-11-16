@@ -1,3 +1,5 @@
+import type { Prisma } from '@prisma/client';
+
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { toCsv, type CsvColumn } from '@helpers/csv.js';
@@ -19,6 +21,7 @@ import {
   itemNameOf,
   shipmentCostsOf,
 } from './helpers/index.js';
+import { ordersOfParcelCase } from './helpers/parcelCases.helper.js';
 
 import type { FindOrdersDto, GetOrdersResponseDto, OrderBuyerDto } from 'types/dto/orders.dto.js';
 import type { UserId } from 'types/ids.js';
@@ -38,7 +41,19 @@ const buyerOf = (user: {
   deleted: user.deletedAt !== null,
 });
 
-const whereOf = (q: ReturnType<typeof normalizeFindOrdersInput>) =>
+// the orders of the case of the parcels the list asks, in its transaction; none without the filter
+const parcelOrderIdsOf = (
+  tx: Prisma.TransactionClient,
+  q: ReturnType<typeof normalizeFindOrdersInput>,
+) =>
+  q.parcels && q.parcels !== 'none'
+    ? ordersOfParcelCase(tx, q.parcels, q.parcelsMadeTo)
+    : undefined;
+
+const whereOf = (
+  q: ReturnType<typeof normalizeFindOrdersInput>,
+  parcelOrderIds: number[] | undefined,
+) =>
   buildOrdersWhere({
     actorId: q.actorId,
     actorRole: q.actorRole,
@@ -64,6 +79,8 @@ const whereOf = (q: ReturnType<typeof normalizeFindOrdersInput>) =>
     shippedTo: q.shippedTo,
     holds: q.holds,
     fraudWarnedFrom: q.fraudWarnedFrom,
+    parcelOrderIds,
+    withoutParcels: q.parcels === 'none',
     sortBy: q.sortBy,
   });
 
@@ -72,20 +89,20 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
   const { actorId, actorRole, limit, cursor, sortBy, sortDir } = q;
   const isAdmin = actorRole === 'ADMIN' || actorRole === 'ROOT';
 
-  const baseWhere = whereOf(q);
   // the oldest send without a cost is a value of many rows: that sort reads the ids first
   const byMissingCost = sortBy === 'shippingCostMissingSince';
   const cursorWhere = byMissingCost
     ? undefined
     : buildOrdersCursorWhere({ sortBy, sortDir, cursor });
-
-  const where = cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere;
   const orderBy = buildOrdersOrderBy(sortBy, sortDir);
 
   try {
     return await prisma.$transaction(async (tx) => {
       // set rls session context
       await setUserContext(tx, { userId: actorId, role: actorRole });
+
+      const baseWhere = whereOf(q, await parcelOrderIdsOf(tx, q));
+      const where = cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere;
 
       // unconfirmed orders of the user show current prices and no hidden variants, paid ones
       // keep the prices they were paid with: a confirmed order never changes its items
@@ -175,8 +192,8 @@ type CsvOrder = {
     note: string | null;
     price: unknown;
   } | null;
-  // the send on its way: the latest that was not rolled back, with what the shop pays the carrier
-  // for it (the money journal), none while it is not written
+  // the sends a carrier has or had that were not rolled back, the first one first, with what the
+  // shop pays the carrier for each (the money journal), none while it is not written
   shipments: { carrier: string | null; trackingNumber: string | null; cost: number | null }[];
   user: { email: string; deletedAt: Date | null };
   items: {
@@ -190,6 +207,16 @@ type CsvOrder = {
 
 // the weight of the order: what the variants that have a weight add up to (the weight of one times
 // the units), and whether every variant has one
+// the carriers and the numbers of the sends of an order, each once, in the order of the sends
+const listOf = (values: (string | null)[]): string | null =>
+  [...new Set(values.filter((value): value is string => Boolean(value)))].join('; ') || null;
+
+// what the shop pays for the sends of an order together, null while no cost of them is written
+const costOf = (row: CsvOrder): number | null => {
+  const known = row.shipments.flatMap((send) => (send.cost === null ? [] : [send.cost]));
+  return known.length ? known.reduce((sum, cost) => sum + Math.round(cost * 100), 0) / 100 : null;
+};
+
 const weightOf = (row: CsvOrder) => ({
   grams: row.items.reduce((sum, item) => sum + (item.variant.weightGrams ?? 0) * item.quantity, 0),
   complete: row.items.every((item) => item.variant.weightGrams !== null),
@@ -241,13 +268,18 @@ const CSV_COLUMNS: CsvColumn<CsvOrder>[] = [
     value: (row) => (weightOf(row).complete ? 'yes' : 'no'),
   },
   { header: 'Total', kind: 'money', value: (row) => Number(row.total) },
-  { header: 'Carrier', kind: 'text', value: (row) => row.shipments[0]?.carrier },
-  { header: 'Tracking number', kind: 'text', value: (row) => row.shipments[0]?.trackingNumber },
+  // an order in several parcels: every send, the costs added up
   {
-    header: 'Shipping cost',
-    kind: 'money',
-    value: (row) => row.shipments[0]?.cost ?? null,
+    header: 'Carrier',
+    kind: 'text',
+    value: (row) => listOf(row.shipments.map((send) => send.carrier)),
   },
+  {
+    header: 'Tracking number',
+    kind: 'text',
+    value: (row) => listOf(row.shipments.map((send) => send.trackingNumber)),
+  },
+  { header: 'Shipping cost', kind: 'money', value: costOf },
 ];
 
 // every order of the filters as a csv file, in the order of the sort, without pages (admin and
@@ -261,15 +293,16 @@ export async function findOrdersCsv(
     const rows = await prisma.$transaction(async (tx) => {
       await setUserContext(tx, { userId: q.actorId, role: q.actorRole });
 
+      const where = whereOf(q, await parcelOrderIdsOf(tx, q));
       // the oldest send without a cost is a value of many rows: that sort reads the ids first
       const byMissingCost =
         q.sortBy === 'shippingCostMissingSince'
-          ? (await ordersByMissingCost(tx, whereOf(q), q.sortDir)).ids
+          ? (await ordersByMissingCost(tx, where, q.sortDir)).ids
           : null;
 
       // a query reads at most two relations side by side, so the sends and the buyers are read apart
       const found = await tx.order.findMany({
-        where: byMissingCost ? { id: { in: byMissingCost } } : whereOf(q),
+        where: byMissingCost ? { id: { in: byMissingCost } } : where,
         ...(byMissingCost ? {} : { orderBy: buildOrdersOrderBy(q.sortBy, q.sortDir) }),
         select: {
           id: true,
@@ -311,14 +344,16 @@ export async function findOrdersCsv(
         ? byMissingCost.map((id) => found.find((order) => order.id === id)!)
         : found;
 
-      // the send on its way: the latest that was not rolled back
+      // the sends a carrier has or had that were not rolled back, the first one first (a parcel
+      // only made, or voided, is no send)
       const sends = await tx.orderShipment.findMany({
         where: {
           orderId: { in: orders.map((order) => order.id) },
           returnId: null,
           rolledBackAt: null,
+          state: { notIn: ['created', 'void_pending', 'voided'] },
         },
-        orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
         select: { id: true, orderId: true, carrier: true, trackingNumber: true },
       });
       // what the shop paid for each of them: the lines of the money journal
@@ -332,22 +367,17 @@ export async function findOrdersCsv(
       });
       const buyerOf = new Map(buyers.map((buyer) => [buyer.id, buyer]));
 
-      return orders.map((order) => {
-        const send = sends.find((s) => s.orderId === order.id);
-        return {
-          ...order,
-          shipments: send
-            ? [
-                {
-                  carrier: send.carrier,
-                  trackingNumber: send.trackingNumber,
-                  cost: costs.get(send.id) ?? null,
-                },
-              ]
-            : [],
-          user: buyerOf.get(order.userId)!,
-        };
-      });
+      return orders.map((order) => ({
+        ...order,
+        shipments: sends
+          .filter((send) => send.orderId === order.id)
+          .map((send) => ({
+            carrier: send.carrier,
+            trackingNumber: send.trackingNumber,
+            cost: costs.get(send.id) ?? null,
+          })),
+        user: buyerOf.get(order.userId)!,
+      }));
     });
 
     return {

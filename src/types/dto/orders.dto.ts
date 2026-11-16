@@ -1,8 +1,15 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import type { DeliveryQuote } from '@helpers/deliveryPrice.js';
-import type { MoneyPart, MoneyPurpose, MoneyState, ReturnStatus } from '@prisma/client';
+import type {
+  MoneyPart,
+  MoneyPurpose,
+  MoneyState,
+  ParcelState,
+  ReturnStatus,
+} from '@prisma/client';
 import type { OrderHold } from '@helpers/orderHolds.js';
+import type { ParcelCase } from '@routes/api/orders/services/helpers/parcelCases.helper.js';
 import type { WithdrawalRight, WithdrawalRuleName } from '@helpers/withdrawal.js';
 import type {
   BuyerReturnDto,
@@ -54,11 +61,25 @@ export interface OrderDeliveryAddressDto {
   apartment: string | null;
 }
 
-// the send on its way, as the buyer sees it: who carries it and how to follow it
+// a parcel on its way, as the buyer sees it: who carries it, how to follow it, where it stands
 export interface OrderShipmentPublicDto {
   carrier: string | null;
   trackingNumber: string | null;
   trackingUrl: string | null;
+  state: ParcelState;
+}
+
+// a box of a parcel as the admin sees it: its weight and sizes (none for a manual send without
+// them), the number and the label of the carrier for it, and what is in it
+export interface ShipmentBoxDto {
+  number: number;
+  weightGrams: number | null;
+  lengthMm: number | null;
+  widthMm: number | null;
+  heightMm: number | null;
+  trackingNumber: string | null;
+  labelUrl: string | null;
+  items: { orderItemId: number; quantity: number }[];
 }
 
 // a send as the admin sees it, with what the shop pays the carrier
@@ -68,9 +89,13 @@ export interface OrderShipmentAdminDto extends OrderShipmentPublicDto {
   cost: number | null;
   // false when the shop owes the carrier nothing for it
   expense: boolean;
-  shippedAt: Date;
+  // empty while the carrier has not taken a parcel of the delivery provider
+  shippedAt: Date | null;
   // when the status went back from shipped; the send stays as history
   rolledBackAt: Date | null;
+  // a parcel of the delivery provider: the label to print; none for a manual send
+  labelUrl: string | null;
+  boxes: ShipmentBoxDto[];
 }
 
 // a movement of the money of an order as the card of an admin shows it, short: a line of the money
@@ -96,8 +121,8 @@ export interface OrderDeliveryDto {
   note: string | null;
   // where and when to collect the order, the pickup only
   pickup: { address: string; hours: string } | null;
-  // the send on its way, once the order is shipped
-  shipment: OrderShipmentPublicDto | null;
+  // the parcels on their way, once the order is shipped (a carrier took them); none before
+  shipments: OrderShipmentPublicDto[];
 }
 
 // a delivery of an earlier order of the buyer, offered for the cart to start from
@@ -282,6 +307,43 @@ export interface ConfirmDeliveryBodyDto {
   };
   // optional; an empty one removes the note
   note?: string;
+  // the method carrier: the line of the prices the buyer picked (POST
+  // /api/orders/current/delivery-options), none for the other methods
+  carrier?: DeliveryCarrierDto;
+}
+
+// a carrier of the delivery provider as a line of its prices names it
+export interface DeliveryCarrierDto {
+  name: string;
+  service: string;
+  connection: string;
+}
+
+// POST /current/delivery-options: the address the cart would go to
+export interface DeliveryOptionsBodyDto {
+  address: NonNullable<ConfirmDeliveryBodyDto['address']>;
+}
+
+// a way the cart goes to the address and its price for the items of the cart; a carrier with its
+// name for the buyer and how long it takes
+export interface DeliveryOptionDto {
+  method: DeliveryMethodName;
+  price: number;
+  carrier: DeliveryCarrierDto | null;
+  label: string | null;
+  days: string | null;
+}
+
+export interface DeliveryOptionsResponseDto {
+  currency: string;
+  // the zone of the country: its name and the sum of the items from which every delivery is free
+  zone: { name: string; freeFrom: number | null };
+  // what the cart lacks of that sum, 0 once the delivery is free; null for a zone without one
+  remainingToFree: number | null;
+  options: DeliveryOptionDto[];
+  // why no carrier is in the list; null when the carriers are there
+  carriersUnavailable:
+    'not_enabled' | 'shipping_data_missing' | 'provider_down' | 'no_carrier_for_parcel' | null;
 }
 
 export interface ConfirmCurrentOrderBodyDto {
@@ -296,6 +358,7 @@ export interface ConfirmCurrentOrderBodyDto {
 export interface ConfirmCurrentOrderDto extends ConfirmCurrentOrderBodyDto {
   actorId: UserId;
   actorRole: Role;
+  log: FastifyBaseLogger;
 }
 
 // GET /
@@ -355,6 +418,10 @@ export interface GetOrdersQueryDto {
   // the provider warned of after they were sent, from this time (an iso date-time)
   holds?: string;
   fraudWarnedFrom?: string;
+  // the orders whose parcels of the delivery provider wait for an admin (parcelCases.helper.ts), and
+  // the parcels made before this time (an iso date-time)
+  parcels?: ParcelCase;
+  parcelsMadeTo?: string;
 
   sortBy?: OrdersSortBy;
   sortDir?: OrdersSortDir;
@@ -389,6 +456,8 @@ export interface FindOrdersDto {
   shippedTo?: Date;
   holds?: string;
   fraudWarnedFrom?: Date;
+  parcels?: ParcelCase;
+  parcelsMadeTo?: Date;
 
   // without them the list takes the sort of its filters (normalizeFindOrdersInput)
   sortBy?: OrdersSortBy;
@@ -435,12 +504,72 @@ export interface ShipmentInputDto {
   trackingUrl?: string;
   // what the shop pays the carrier; none until the admin writes it
   cost?: number | null;
+  // the boxes and what is in each; none for the one parcel of an order: one box with every unit
+  boxes?: ShipmentBoxInputDto[];
+}
+
+// the parcels of an order of a carrier as the admin lays them out (POST /:orderId/parcels): each
+// with its boxes; none sent: one parcel of one box of every unit (the draft)
+export interface ParcelsBodyDto {
+  parcels?: { boxes: ShipmentBoxInputDto[] }[];
+}
+
+// what the app puts in the parcels when the admin says nothing, and the carrier of the order
+// GET /:orderId/carriers: the carriers of the delivery provider for the order now, the cheapest
+// first; the price is what the provider counts, the cost of the shop (the buyer paid theirs)
+export interface OrderCarriersDto {
+  carriers: {
+    carrier: DeliveryCarrierDto;
+    label: string | null;
+    days: string | null;
+    price: number;
+  }[];
+}
+
+export interface ParcelsDraftDto {
+  carrier: DeliveryCarrierDto;
+  parcels: {
+    boxes: {
+      weightGrams: number | null;
+      lengthMm: number | null;
+      widthMm: number | null;
+      heightMm: number | null;
+      items: { orderItemId: number; quantity: number }[];
+    }[];
+  }[];
+}
+
+// the parcels made: the order as the admin sees it, the ids of the parcels made now, and the parcel
+// that was not made (its place in the request, the code, the reason of the carrier) when one was not
+export interface ParcelsResultDto {
+  order: OrderResponseDto;
+  made: number[];
+  failed: { parcel: number; errorCode: string; message: string | null } | null;
+}
+
+export interface ParcelsBulkResultDto {
+  results: {
+    orderId: number;
+    ok: boolean;
+    made: number[];
+    errorCode?: string;
+    message?: string | null;
+  }[];
+}
+
+// a box of a parcel as the admin lays it out
+export interface ShipmentBoxInputDto {
+  weightGrams?: number | null;
+  lengthMm?: number | null;
+  widthMm?: number | null;
+  heightMm?: number | null;
+  items: { orderItemId: number; quantity: number }[];
 }
 
 export interface UpdateOrderStatusBodyDto {
   status: OrderStatus;
-  // with shipped, of a manual order
-  shipment?: ShipmentInputDto;
+  // with shipped, of a manual order: the parcels it goes in (none: one parcel, nothing known of it)
+  shipments?: ShipmentInputDto[];
   // with the step back to paid, of a manual order shipped: the cost of the send stays owed or not
   keepShippingCost?: boolean;
   // with the step to delivered: the moment the carrier delivered it, now when none is given
@@ -510,6 +639,10 @@ export interface UpdateOrderDeliveryBodyDto {
   recipientPhone?: string;
   address?: NonNullable<ConfirmDeliveryBodyDto['address']>;
   note?: string;
+  // an order of a carrier: another carrier of the prices of the delivery provider, or sent by hand
+  // (manual) outside the provider; the price of the buyer stays
+  carrier?: DeliveryCarrierDto;
+  method?: 'manual';
 }
 
 export interface UpdateOrderDeliveryDto {
@@ -517,6 +650,7 @@ export interface UpdateOrderDeliveryDto {
   actorRole: Role;
   orderId: number;
   changes: UpdateOrderDeliveryBodyDto;
+  log: FastifyBaseLogger;
 }
 
 export interface UpdateOrderStatusDto {
@@ -524,7 +658,7 @@ export interface UpdateOrderStatusDto {
   actorRole: Role;
   orderId: OrderId;
   status: OrderStatus;
-  shipment?: ShipmentInputDto;
+  shipments?: ShipmentInputDto[];
   keepShippingCost?: boolean;
   deliveredAt?: string;
   // the step comes from the route of many orders (the admin log tells it)
@@ -539,7 +673,7 @@ export interface UpdateOrdersStatusBodyDto {
   // each order with its own send, and its own choice for a step back
   orders: {
     orderId: OrderId;
-    shipment?: ShipmentInputDto;
+    shipments?: ShipmentInputDto[];
     keepShippingCost?: boolean;
     deliveredAt?: string;
   }[];

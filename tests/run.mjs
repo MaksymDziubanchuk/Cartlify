@@ -72,6 +72,9 @@ const SERVICES = [
   { name: 'openai', real: true },
   // the dummy secrets of Cloudflare need no account and no secret: nothing is taken from .env
   { name: 'turnstile', real: true },
+  // ShippyPro has no sandbox: every parcel of its contract takes a label of the account, so it runs
+  // for real only when the words of the run name it, never from a saved selection or a checkbox
+  { name: 'shippypro', real: true, explicitOnly: true },
 ];
 const SERVICE_PREFIX = 'service:';
 
@@ -200,7 +203,9 @@ function saveSelection({ selected, services }) {
     selectionFile,
     JSON.stringify([
       ...selected.map((part) => part.name),
-      ...services.map((service) => `${SERVICE_PREFIX}${service.name}`),
+      ...services
+        .filter((service) => !service.explicitOnly)
+        .map((service) => `${SERVICE_PREFIX}${service.name}`),
     ]),
   );
 }
@@ -220,7 +225,7 @@ async function promptSelection(parts) {
     new Separator('-- integration (builds the docker test database, removes it after) --'),
     ...parts.filter((part) => part.integration).map(toChoice),
     new Separator('-- services (checked: the real service, unchecked: its mock) --'),
-    ...SERVICES.map((service) => ({
+    ...SERVICES.filter((service) => !service.explicitOnly).map((service) => ({
       name: service.name + (service.real ? '' : '  (real mode not set up yet)'),
       value: `${SERVICE_PREFIX}${service.name}`,
       checked: saved.includes(`${SERVICE_PREFIX}${service.name}`),

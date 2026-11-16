@@ -1,6 +1,13 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { UserEntity } from 'types/user.js';
 import type {
+  ParcelsBodyDto,
+  ParcelsBulkResultDto,
+  ParcelsDraftDto,
+  ParcelsResultDto,
+  OrderCarriersDto,
+  DeliveryOptionsBodyDto,
+  DeliveryOptionsResponseDto,
   GetCurrentOrderDto,
   CurrentAddItemBodyDto,
   CurrentAddItemDto,
@@ -34,6 +41,14 @@ import type {
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
+import {
+  assertStaff,
+  createParcels,
+  createParcelsOf,
+  orderCarriers,
+  parcelsDraft,
+} from './services/parcels.service.js';
+import { confirmParcelVoid, voidOrderParcels } from './services/voidParcels.service.js';
 
 const getCurrentOrder: ControllerRouter<{}, {}, {}, OrderResponseDto> = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
@@ -105,11 +120,111 @@ const postConfirm: ControllerRouter<{}, ConfirmCurrentOrderBodyDto, {}, OrderRes
   const { orderId, delivery, expectedDeliveryPrice } = req.body;
 
   const args = pickDefined<ConfirmCurrentOrderDto>(
-    { actorId, actorRole, orderId, expectedDeliveryPrice },
+    { actorId, actorRole, orderId, expectedDeliveryPrice, log: req.log },
     { delivery },
   );
 
   const result = await ordersServices.confirmOrder(args);
+  return reply.code(200).send(result);
+};
+
+// the parcels of an order of a carrier of the delivery provider
+type OrderParams = { orderId: string };
+
+const getParcelsDraft: ControllerRouter<OrderParams, {}, {}, ParcelsDraftDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const result = await parcelsDraft({ actorId, actorRole, orderId: Number(req.params.orderId) });
+  return reply.code(200).send(result);
+};
+
+const getOrderCarriers: ControllerRouter<OrderParams, {}, {}, OrderCarriersDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const result = await orderCarriers(
+    { actorId, actorRole, orderId: Number(req.params.orderId) },
+    req.log,
+  );
+  return reply.code(200).send(result);
+};
+
+const postParcels: ControllerRouter<OrderParams, ParcelsBodyDto, {}, ParcelsResultDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const result = await createParcels(
+    { actorId, actorRole, orderId: Number(req.params.orderId), body: req.body ?? undefined },
+    req.log,
+  );
+  return reply.code(200).send(result);
+};
+
+const postParcelsBulk: ControllerRouter<
+  {},
+  { orderIds: number[] },
+  {},
+  ParcelsBulkResultDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const result = await createParcelsOf(
+    { actorId, actorRole, orderIds: req.body.orderIds },
+    req.log,
+  );
+  return reply.code(200).send(result);
+};
+
+const postParcelsVoid: ControllerRouter<
+  OrderParams,
+  { shipmentId?: number } | undefined,
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  assertStaff(actorRole);
+  const result = await voidOrderParcels(
+    {
+      actorId,
+      actorRole,
+      orderId: Number(req.params.orderId),
+      ...(req.body?.shipmentId === undefined ? {} : { shipmentId: req.body.shipmentId }),
+    },
+    req.log,
+  );
+  return reply.code(200).send(result);
+};
+
+const postParcelVoidConfirmation: ControllerRouter<
+  { orderId: string; shipmentId: string },
+  {},
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  assertStaff(actorRole);
+  const result = await confirmParcelVoid({
+    actorId,
+    actorRole,
+    orderId: Number(req.params.orderId),
+    shipmentId: Number(req.params.shipmentId),
+  });
+  return reply.code(200).send(result);
+};
+
+// the ways the cart goes to an address, with their prices
+const postDeliveryOptions: ControllerRouter<
+  {},
+  DeliveryOptionsBodyDto,
+  {},
+  DeliveryOptionsResponseDto
+> = async (req, reply) => {
+  const { id: actorId } = req.user as UserEntity;
+
+  const result = await ordersServices.deliveryOptions({ actorId, body: req.body, log: req.log });
   return reply.code(200).send(result);
 };
 
@@ -145,6 +260,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
     shippedTo,
     holds,
     fraudWarnedFrom,
+    parcels,
+    parcelsMadeTo,
     sortBy,
     sortDir,
   } = req.query;
@@ -184,6 +301,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
       shippedTo: shippedTo ? new Date(shippedTo) : undefined,
       holds,
       fraudWarnedFrom: fraudWarnedFrom ? new Date(fraudWarnedFrom) : undefined,
+      parcels,
+      parcelsMadeTo: parcelsMadeTo ? new Date(parcelsMadeTo) : undefined,
     },
   );
 
@@ -238,11 +357,11 @@ const putOrderStatus: ControllerRouter<
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const orderId = Number(req.params.orderId);
-  const { status, shipment, keepShippingCost, deliveredAt } = req.body;
+  const { status, shipments, keepShippingCost, deliveredAt } = req.body;
 
   const args = pickDefined<UpdateOrderStatusDto>(
     { actorId, actorRole, orderId, status },
-    { shipment, keepShippingCost, deliveredAt, bulk: undefined },
+    { shipments, keepShippingCost, deliveredAt, bulk: undefined },
   );
 
   const result = await ordersServices.updateOrderStatus(args, req.log);
@@ -322,7 +441,7 @@ const patchOrderDelivery: ControllerRouter<
   const { id: actorId, role: actorRole } = req.user as UserEntity;
 
   const result = await ordersServices.updateOrderDelivery(
-    { actorId, actorRole, orderId: Number(req.params.orderId), changes: req.body },
+    { actorId, actorRole, orderId: Number(req.params.orderId), changes: req.body, log: req.log },
     req.log,
   );
   return reply.code(200).send(result);
@@ -436,6 +555,13 @@ export const ordersController = {
   patchCurrentItems,
   deleteCurrentItems,
   postConfirm,
+  postDeliveryOptions,
+  getParcelsDraft,
+  getOrderCarriers,
+  postParcels,
+  postParcelsBulk,
+  postParcelsVoid,
+  postParcelVoidConfirmation,
 
   getOrders,
   getOrderById,

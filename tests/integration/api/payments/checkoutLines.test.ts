@@ -12,7 +12,11 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { asAdmin } from '../../../helpers/db.js';
-import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
+import {
+  resetShopSettings,
+  setShopSettings,
+  testZonePrice,
+} from '../../../helpers/shopSettings.js';
 import { deliveryBody, quotedDeliveryPrice, shippingData } from '../../../helpers/orders.js';
 import { openPaymentPage } from '../../../helpers/payments.js';
 import {
@@ -128,7 +132,11 @@ describe('the delivery on the payment page of an order', () => {
       payload: {
         orderId,
         delivery,
-        expectedDeliveryPrice: quotedDeliveryPrice(cart, String(delivery.method)),
+        expectedDeliveryPrice: await quotedDeliveryPrice(
+          app,
+          withCsrf(csrf, accessCookie(buyer)),
+          delivery,
+        ),
       },
     });
     expect(confirmed.statusCode).toBe(200);
@@ -136,7 +144,7 @@ describe('the delivery on the payment page of an order', () => {
   }
 
   it('has a line for the delivery that costs something, and the lines are the total', async () => {
-    setShopSettings({ deliveryFlatPrice: 4.99 });
+    setShopSettings(testZonePrice(4.99));
     const { buyer, orderId } = await confirmedOrder();
 
     const sessionId = await openPaymentPage(app, csrf, buyer, orderId);
@@ -149,7 +157,7 @@ describe('the delivery on the payment page of an order', () => {
   });
 
   it('has no line for a delivery that is free', async () => {
-    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 20 });
+    setShopSettings(testZonePrice(4.99, 20));
     const { buyer, orderId } = await confirmedOrder();
 
     const sessionId = await openPaymentPage(app, csrf, buyer, orderId);
@@ -159,7 +167,7 @@ describe('the delivery on the payment page of an order', () => {
   });
 
   it('is the delivery alone for an order of free items', async () => {
-    setShopSettings({ deliveryFlatPrice: 1 });
+    setShopSettings(testZonePrice(1));
     const buyer = await createUser();
     userIds.push(buyer.id);
     const gift = await createProduct({ price: 0, stock: 5, name: 'Gift' });
@@ -172,7 +180,11 @@ describe('the delivery on the payment page of an order', () => {
       payload: {
         orderId,
         delivery: deliveryBody,
-        expectedDeliveryPrice: quotedDeliveryPrice(cart),
+        expectedDeliveryPrice: await quotedDeliveryPrice(
+          app,
+          withCsrf(csrf, accessCookie(buyer)),
+          deliveryBody,
+        ),
       },
     });
 

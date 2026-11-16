@@ -5,6 +5,7 @@ import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import { AVAILABLE_LOCALES } from './locales.js';
 import { isDeliveryMethodName, type DeliveryMethodName } from './deliveryMethods.js';
+import type { DeliverySender, DeliveryZone } from './deliveryZones.js';
 
 import type { UserId } from 'types/ids.js';
 
@@ -18,9 +19,14 @@ import type { UserId } from 'types/ids.js';
 
 export type ShopSettingsValues = {
   deliveryMethods: DeliveryMethodName[];
-  deliveryFlatPrice: number | null;
-  deliveryFreeFrom: number | null;
-  deliveryCountries: string[];
+  // the countries the shop delivers to, in zones with the price of the manual delivery and the sum
+  // from which a delivery is free (@config/deliveryZones.js)
+  deliveryZones: DeliveryZone[];
+  // the countries a parcel goes to without customs (the country of the shop and its customs union);
+  // null: not set, nothing is checked for customs
+  customsFreeCountries: string[] | null;
+  // where the parcels of the delivery provider go from; needed by the method carrier
+  deliverySender: DeliverySender | null;
   pickupAddress: string;
   pickupHours: string;
 
@@ -62,9 +68,9 @@ export type ShopSettingKey = keyof ShopSettingsValues;
 // every key a row may have, the same list the database checks (db/05, shop_setting_value_valid)
 export const SHOP_SETTING_KEYS = [
   'deliveryMethods',
-  'deliveryFlatPrice',
-  'deliveryFreeFrom',
-  'deliveryCountries',
+  'deliveryZones',
+  'customsFreeCountries',
+  'deliverySender',
   'pickupAddress',
   'pickupHours',
   'shopName',
@@ -114,9 +120,9 @@ export type PublicShopSettings = Pick<
 // one but the logo, which its own routes write (src/routes/api/shopSettings/services/)
 export const WRITABLE_SHOP_SETTINGS_FIELDS = [
   'deliveryMethods',
-  'deliveryFlatPrice',
-  'deliveryFreeFrom',
-  'deliveryCountries',
+  'deliveryZones',
+  'customsFreeCountries',
+  'deliverySender',
   'pickupAddress',
   'pickupHours',
   'shopName',
@@ -149,8 +155,6 @@ export type WritableShopSettings = Pick<ShopSettingsValues, WritableShopSettingK
 // the start of the server (loadShopSettings); a setting not here has none (NO_DEFAULT_VALUES)
 const DEFAULTS: Partial<ShopSettingsValues> = {
   deliveryMethods: ['manual'],
-  deliveryFlatPrice: null,
-  deliveryFreeFrom: null,
   pickupAddress: '',
   pickupHours: '',
   shopName: 'Cartlify',
@@ -172,11 +176,14 @@ const DEFAULTS: Partial<ShopSettingsValues> = {
 };
 
 // what a setting with no default reads as while root has not set it: no row is written for it.
-// deliveryCountries blocks the routes that need it (confirming an order of the manual method); the
-// rest only keep the shop from naming itself on its public pages and mails
-// (missingShopSettingsFields)
+// Without zones the shop delivers nowhere (a delivery to an address is refused), without the
+// countries free of customs nothing is checked for customs, without the sender the method carrier
+// cannot be switched on; the rest only keep the shop from naming itself on its public pages and
+// mails (missingShopSettingsFields)
 const NO_DEFAULT_VALUES = {
-  deliveryCountries: [],
+  deliveryZones: [],
+  customsFreeCountries: null,
+  deliverySender: null,
   logoUrl: null,
   logoPublicId: null,
   sellerLegalName: null,
@@ -187,7 +194,8 @@ const NO_DEFAULT_VALUES = {
 } satisfies Partial<ShopSettingsValues>;
 
 const NO_DEFAULT_FIELDS = [
-  'deliveryCountries',
+  'deliveryZones',
+  'customsFreeCountries',
   'logoUrl',
   'sellerLegalName',
   'sellerAddress',
@@ -235,7 +243,21 @@ function valuesOf(rows: CurrentRows): ShopSettingsValues {
 const jsonOf = (value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull =>
   value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
 
-const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+// the same value whatever the order of the keys of its objects: the database keeps a json value
+// with its keys in an order of its own (jsonb), a write sends them in the order of the request
+const canonical = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : value && typeof value === 'object'
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, canonical((value as Record<string, unknown>)[key])]),
+        )
+      : value;
+
+const sameValue = (a: unknown, b: unknown) =>
+  JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
 // the languages a write takes away: the ones the rows held that the new set leaves out, each once, in
 // the order the rows had them
@@ -284,7 +306,12 @@ export function missingShopSettingsFields(): ShopSettingKey[] {
     return value === null || (Array.isArray(value) && value.length === 0);
   });
   const blankText = REQUIRED_TEXT_FIELDS.filter((key) => !values[key].trim());
-  return [...noDefault, ...blankText];
+  // the address the parcels go from, once a carrier of the delivery provider sends them
+  const sender: ShopSettingKey[] =
+    values.deliveryMethods.includes('carrier') && values.deliverySender === null
+      ? ['deliverySender']
+      : [];
+  return [...noDefault, ...blankText, ...sender];
 }
 
 // reads the latest row of each key (the system context: this runs at startup, never for a request

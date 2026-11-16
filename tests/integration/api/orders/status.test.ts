@@ -90,7 +90,7 @@ const shippedOrder = async (
     admin,
     orderId,
     'shipped',
-    delivery.method === 'pickup' ? {} : { shipment },
+    delivery.method === 'pickup' ? {} : { shipments: [shipment] },
   );
   expect(res.statusCode).toBe(200);
   return orderId;
@@ -147,12 +147,14 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
     const orderId = await paidOrder();
 
     const res = await setStatus(admin, orderId, 'shipped', {
-      shipment: {
-        carrier: 'DHL Express',
-        trackingNumber: 'JD0146000123',
-        trackingUrl: 'https://track.example.com/JD0146000123',
-        cost: 7.5,
-      },
+      shipments: [
+        {
+          carrier: 'DHL Express',
+          trackingNumber: 'JD0146000123',
+          trackingUrl: 'https://track.example.com/JD0146000123',
+          cost: 7.5,
+        },
+      ],
     });
 
     expect(res.statusCode).toBe(200);
@@ -161,11 +163,13 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
       status: 'shipped',
       delivery: {
         ...deliveryAnswer,
-        shipment: {
-          carrier: 'DHL Express',
-          trackingNumber: 'JD0146000123',
-          trackingUrl: 'https://track.example.com/JD0146000123',
-        },
+        shipments: [
+          {
+            carrier: 'DHL Express',
+            trackingNumber: 'JD0146000123',
+            trackingUrl: 'https://track.example.com/JD0146000123',
+          },
+        ],
       },
       shipments: [
         {
@@ -194,7 +198,7 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
     const orderId = await paidOrder();
 
     const res = await setStatus(admin, orderId, 'shipped', {
-      shipment: { carrier: 'DHL', cost: 7.5 },
+      shipments: [{ carrier: 'DHL', cost: 7.5 }],
     });
 
     expect(res.statusCode).toBe(200);
@@ -217,11 +221,9 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
     const res = await setStatus(admin, orderId, 'shipped');
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().delivery.shipment).toEqual({
-      carrier: null,
-      trackingNumber: null,
-      trackingUrl: null,
-    });
+    expect(res.json().delivery.shipments).toEqual([
+      { state: 'sent', carrier: null, trackingNumber: null, trackingUrl: null },
+    ]);
     expect(res.json().shipments).toEqual([
       expect.objectContaining({ carrier: null, trackingNumber: null, cost: null, expense: true }),
     ]);
@@ -233,9 +235,9 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
     const free = await paidOrder();
     const named = await paidOrder();
 
-    const zero = await setStatus(admin, free, 'shipped', { shipment: { cost: 0 } });
+    const zero = await setStatus(admin, free, 'shipped', { shipments: [{ cost: 0 }] });
     const carrier = await setStatus(admin, named, 'shipped', {
-      shipment: { carrier: 'Local post' },
+      shipments: [{ carrier: 'Local post' }],
     });
 
     expect(zero.statusCode).toBe(200);
@@ -378,11 +380,9 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
       headers: { cookie: accessCookie(admin) },
     });
 
-    expect(asBuyer.json().delivery.shipment).toEqual({
-      carrier: 'DHL',
-      trackingNumber: 'A1',
-      trackingUrl: null,
-    });
+    expect(asBuyer.json().delivery.shipments).toEqual([
+      { state: 'sent', carrier: 'DHL', trackingNumber: 'A1', trackingUrl: null },
+    ]);
     expect(asBuyer.json()).not.toHaveProperty('shipments');
     // what the send cost the shop is for the admin only
     expect(JSON.stringify(asBuyer.json())).not.toContain('"cost"');
@@ -407,7 +407,7 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
   ])('refuses %s and ships nothing', async (_case, shipment, errorCode) => {
     const orderId = await paidOrder();
 
-    const res = await setStatus(admin, orderId, 'shipped', { shipment });
+    const res = await setStatus(admin, orderId, 'shipped', { shipments: [shipment] });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode });
@@ -440,7 +440,7 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
   ])('refuses %s by the request schema', async (_case, shipment) => {
     const orderId = await paidOrder();
 
-    const res = await setStatus(admin, orderId, 'shipped', { shipment });
+    const res = await setStatus(admin, orderId, 'shipped', { shipments: [shipment] });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
@@ -450,11 +450,13 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
     const orderId = await paidOrder();
 
     const res = await setStatus(admin, orderId, 'shipped', {
-      shipment: {
-        carrier: ' DHL ',
-        trackingNumber: ' A1 ',
-        trackingUrl: 'https://track.example.com/1',
-      },
+      shipments: [
+        {
+          carrier: ' DHL ',
+          trackingNumber: ' A1 ',
+          trackingUrl: 'https://track.example.com/1',
+        },
+      ],
     });
 
     expect(res.json().shipments[0]).toMatchObject({ carrier: 'DHL', trackingNumber: 'A1' });
@@ -463,7 +465,7 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
   it('refuses a send with any step but shipped', async () => {
     const orderId = await shippedOrder();
 
-    const res = await setStatus(admin, orderId, 'delivered', { shipment: { carrier: 'DHL' } });
+    const res = await setStatus(admin, orderId, 'delivered', { shipments: [{ carrier: 'DHL' }] });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'SHIPMENT_NOT_ALLOWED' });
@@ -473,7 +475,7 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
   it('refuses a send for a pickup, which has no carrier', async () => {
     const orderId = await paidOrder(undefined, pickupBody);
 
-    const res = await setStatus(admin, orderId, 'shipped', { shipment: { carrier: 'DHL' } });
+    const res = await setStatus(admin, orderId, 'shipped', { shipments: [{ carrier: 'DHL' }] });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'SHIPMENT_NOT_ALLOWED' });
@@ -488,7 +490,7 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       status: 'shipped',
-      delivery: { method: 'pickup', shipment: null },
+      delivery: { method: 'pickup', shipments: [] },
     });
     expect(res.json().shipments).toEqual([]);
     expect(await shipmentsOf(orderId)).toEqual([]);
@@ -498,7 +500,7 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
     const orderId = await paidOrder();
 
     await setStatus(admin, orderId, 'shipped', {
-      shipment: { carrier: 'DHL', trackingNumber: 'A1', cost: 5 },
+      shipments: [{ carrier: 'DHL', trackingNumber: 'A1', cost: 5 }],
     });
     await setStatus(admin, orderId, 'delivered');
 
@@ -524,7 +526,7 @@ describe('PATCH /api/orders/:orderId/status: a step back', () => {
     const res = await setStatus(admin, orderId, 'paid', { keepShippingCost: true });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ status: 'paid', delivery: { shipment: null } });
+    expect(res.json()).toMatchObject({ status: 'paid', delivery: { shipments: [] } });
     const [send] = await shipmentsOf(orderId);
     expect(send).toMatchObject({ carrier: 'DHL', trackingNumber: 'A1', expense: true });
     expect(send!.rolledBackAt).not.toBeNull();
@@ -607,12 +609,12 @@ describe('PATCH /api/orders/:orderId/status: a step back', () => {
     await setStatus(admin, orderId, 'paid', { keepShippingCost: true });
 
     const res = await setStatus(admin, orderId, 'shipped', {
-      shipment: { carrier: 'UPS', cost: 9 },
+      shipments: [{ carrier: 'UPS', cost: 9 }],
     });
 
     expect(res.statusCode).toBe(200);
     expect(res.json().shipments.map((s: { carrier: string }) => s.carrier)).toEqual(['UPS', 'DHL']);
-    expect(res.json().delivery.shipment).toMatchObject({ carrier: 'UPS' });
+    expect(res.json().delivery.shipments[0]).toMatchObject({ carrier: 'UPS' });
     const sends = await shipmentsOf(orderId);
     expect(sends.map((s) => s.rolledBackAt === null)).toEqual([false, true]);
     // each send has the lines of its own cost
@@ -630,7 +632,7 @@ describe('PATCH /api/orders/:orderId/status: a step back', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       status: 'shipped',
-      delivery: { shipment: { carrier: 'DHL' } },
+      delivery: { shipments: [{ carrier: 'DHL' }] },
     });
     const sends = await shipmentsOf(orderId);
     expect(sends).toHaveLength(1);
@@ -650,8 +652,8 @@ describe('PATCH /api/orders/:orderId/status: a step back', () => {
         old: expect.objectContaining({ carrier: 'DHL', trackingNumber: 'A1', cost: 7 }),
         new: null,
       },
-      { field: 'shippingCostKept', old: null, new: false },
       { field: 'shippingCost', old: 7, new: 0 },
+      { field: 'shippingCostKept', old: null, new: false },
     ]);
   });
 
@@ -675,11 +677,13 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
     const mails = watchMail();
 
     await setStatus(admin, orderId, 'shipped', {
-      shipment: {
-        carrier: 'DHL',
-        trackingNumber: 'JD0146',
-        trackingUrl: 'https://track.example.com/JD0146',
-      },
+      shipments: [
+        {
+          carrier: 'DHL',
+          trackingNumber: 'JD0146',
+          trackingUrl: 'https://track.example.com/JD0146',
+        },
+      ],
     });
 
     expect(mails).toHaveLength(1);
@@ -718,15 +722,18 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
     const mails = watchMail();
 
     const res = await setStatus(admin, orderId, 'shipped', {
-      shipment: { carrier: 'DHL', trackingUrl: 'https://track.example.com/JD0146' },
+      shipments: [{ carrier: 'DHL', trackingUrl: 'https://track.example.com/JD0146' }],
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().delivery.shipment).toEqual({
-      carrier: 'DHL',
-      trackingNumber: null,
-      trackingUrl: 'https://track.example.com/JD0146',
-    });
+    expect(res.json().delivery.shipments).toEqual([
+      {
+        state: 'sent',
+        carrier: 'DHL',
+        trackingNumber: null,
+        trackingUrl: 'https://track.example.com/JD0146',
+      },
+    ]);
     expect(mails).toHaveLength(1);
     expect(mails[0]!.text).toContain('Carrier: DHL');
     expect(mails[0]!.text).toContain('Follow your parcel: https://track.example.com/JD0146');
@@ -809,7 +816,7 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
       tx.orderShipment.findFirstOrThrow({ where: { orderId }, select: { shippedAt: true } }),
     );
     // the moment of the send itself: the earliest the delivery can be, and surely not of the future
-    const moment = sent.shippedAt.toISOString();
+    const moment = sent.shippedAt!.toISOString();
 
     const future = await setStatus(admin, orderId, 'delivered', {
       deliveredAt: new Date(Date.now() + 86_400_000).toISOString(),
@@ -986,7 +993,7 @@ describe('PATCH /api/orders/:orderId/status: an order something holds', () => {
         admin,
         orderId,
         'shipped',
-        delivery.method === 'pickup' ? {} : { shipment: { carrier: 'DHL', cost: 5 } },
+        delivery.method === 'pickup' ? {} : { shipments: [{ carrier: 'DHL', cost: 5 }] },
       );
 
       expect(held.statusCode).toBe(409);
@@ -1040,8 +1047,8 @@ describe('PATCH /api/orders/:orderId/status: two requests at once', () => {
     const mails = watchMail();
 
     const [first, second] = await Promise.all([
-      setStatus(admin, orderId, 'shipped', { shipment: { carrier: 'DHL' } }),
-      setStatus(root, orderId, 'shipped', { shipment: { carrier: 'UPS' } }),
+      setStatus(admin, orderId, 'shipped', { shipments: [{ carrier: 'DHL' }] }),
+      setStatus(root, orderId, 'shipped', { shipments: [{ carrier: 'UPS' }] }),
     ]);
 
     expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
@@ -1063,6 +1070,9 @@ describe('an order shipped without the route', () => {
       headers: { cookie: accessCookie(owner) },
     });
 
-    expect(res.json().delivery.shipment).toMatchObject({ carrier: 'DPD', trackingNumber: 'Z9' });
+    expect(res.json().delivery.shipments[0]).toMatchObject({
+      carrier: 'DPD',
+      trackingNumber: 'Z9',
+    });
   });
 });

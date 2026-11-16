@@ -284,7 +284,14 @@ export async function followDisputes(
         and (
           (d.status not in ('warning_closed', 'won', 'lost', 'prevented')
             and d."draftedAt" is null and d."submissionCount" = 0)
-          or (d.status = 'lost' and o.status = 'paid'::cartlify."OrderStatus")
+          or (
+            d.status = 'lost' and o.status = 'paid'::cartlify."OrderStatus"
+            and not exists (
+              select 1 from cartlify.order_shipments as s
+              where s."orderId" = o.id and s."returnId" is null and s."rolledBackAt" is null
+                and s.state not in ('created', 'void_pending', 'voided')
+            )
+          )
           or (
             d.status in ('won', 'lost')
             and o.id is not null

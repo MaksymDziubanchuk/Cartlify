@@ -446,7 +446,7 @@ describe('POST /api/orders/status', () => {
     ['the list of ids it had before', { orderIds: [5], status: 'shipped' }],
     [
       'an order with a send that breaks the schema',
-      { orders: [{ orderId: 5, shipment: { cost: -1 } }], status: 'shipped' },
+      { orders: [{ orderId: 5, shipments: [{ cost: -1 }] }], status: 'shipped' },
     ],
   ])('refuses %s', async (_case, payload) => {
     const res = await bulk(payload);
@@ -483,12 +483,14 @@ describe('POST /api/orders/status', () => {
       orders: [
         {
           orderId: named,
-          shipment: {
-            carrier: 'DHL',
-            trackingNumber: 'A1',
-            trackingUrl: 'https://t.example.com/A1',
-            cost: 5,
-          },
+          shipments: [
+            {
+              carrier: 'DHL',
+              trackingNumber: 'A1',
+              trackingUrl: 'https://t.example.com/A1',
+              cost: 5,
+            },
+          ],
         },
         { orderId: bare },
       ],
@@ -517,7 +519,7 @@ describe('POST /api/orders/status', () => {
 
     const res = await bulk({
       status: 'shipped',
-      orders: [{ orderId: wrong, shipment: { trackingNumber: 'A1' } }, { orderId: fine }],
+      orders: [{ orderId: wrong, shipments: [{ trackingNumber: 'A1' }] }, { orderId: fine }],
     });
 
     expect(res.json().results).toEqual([
@@ -538,8 +540,8 @@ describe('POST /api/orders/status', () => {
     await bulk({
       status: 'shipped',
       orders: [
-        { orderId: kept, shipment: { carrier: 'DHL', cost: 5 } },
-        { orderId: cleared, shipment: { carrier: 'DHL', cost: 5 } },
+        { orderId: kept, shipments: [{ carrier: 'DHL', cost: 5 }] },
+        { orderId: cleared, shipments: [{ carrier: 'DHL', cost: 5 }] },
       ],
     });
 
@@ -582,7 +584,7 @@ describe('POST /api/orders/status', () => {
 
     const res = await bulk({
       status: 'shipped',
-      orders: [{ orderId: held, shipment: { carrier: 'DHL', cost: 5 } }, { orderId: free }],
+      orders: [{ orderId: held, shipments: [{ carrier: 'DHL', cost: 5 }] }, { orderId: free }],
     });
 
     expect(res.statusCode).toBe(200);

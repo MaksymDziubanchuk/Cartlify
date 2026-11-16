@@ -10,11 +10,20 @@ export type RedisLock = {
   // frees the lock if it is still ours; true when it was freed, false when it had run out already
   // (or redis could not be asked: the key then goes by its time to live)
   release: () => Promise<boolean>;
+  // gives the lock ttlMs from now if it is still ours; false when it ran out (another may hold it)
+  extend: (ttlMs: number) => Promise<boolean>;
 };
 
 const RELEASE_LUA = `
   if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('DEL', KEYS[1])
+  end
+  return 0
+`;
+
+const EXTEND_LUA = `
+  if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('PEXPIRE', KEYS[1], ARGV[2])
   end
   return 0
 `;
@@ -32,6 +41,16 @@ export async function takeRedisLock(key: string, ttlMs: number): Promise<RedisLo
     release: async () => {
       try {
         return Number(await redis.sendCommand(['EVAL', RELEASE_LUA, '1', key, token])) === 1;
+      } catch {
+        return false;
+      }
+    },
+    extend: async (ttlMs) => {
+      try {
+        return (
+          Number(await redis.sendCommand(['EVAL', EXTEND_LUA, '1', key, token, String(ttlMs)])) ===
+          1
+        );
       } catch {
         return false;
       }

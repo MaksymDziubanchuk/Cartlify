@@ -92,6 +92,13 @@ export const AUDIT_EVENTS = [
   'order.pickup_ready_back_bulk',
   'order.pickup_collected_back',
   'order.pickup_collected_back_bulk',
+  // the parcels of an order of a carrier of the delivery provider: made (one order, or many at once),
+  // sent to be voided to be made again, and voided after the admin cancelled one in the dashboard of
+  // the carrier
+  'order.parcel_create',
+  'order.parcel_create_bulk',
+  'order.parcel_void',
+  'order.parcel_void_confirm',
   // root sent the money of a refund that failed (of a payment the order could not take, or made by
   // hand in the dashboard of the provider) another way; the line names the lines of the money
   // journal (the work of the system on the money is in the money journal only)

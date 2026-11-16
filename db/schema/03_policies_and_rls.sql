@@ -1413,8 +1413,10 @@ CREATE POLICY order_shipments_select_owner ON cartlify.order_shipments FOR
 SELECT
   TO cartlify_owner USING (true);
 
--- INSERT: admin/root, a send of a shipped order; a new send is not rolled back and the shop owes
--- the carrier for it (expense). A parcel of a statement only by the functions of the owner (below)
+-- INSERT: admin/root, a send of a shipped order, or a parcel of the delivery provider made for a
+-- paid order of the method carrier before the carrier takes it (created); a new send is not rolled
+-- back and the shop owes the carrier for it (expense). A parcel of a statement only by the
+-- functions of the owner (below)
 CREATE POLICY order_shipments_insert ON cartlify.order_shipments FOR INSERT
 WITH
   CHECK (
@@ -1423,14 +1425,35 @@ WITH
     AND direction = 'to_buyer'
     AND "rolledBackAt" IS NULL
     AND "expense" = true
-    AND EXISTS (
-      SELECT
-        1
-      FROM
-        cartlify.orders o
-      WHERE
-        o.id = "orderId"
-        AND o.status = 'shipped'
+    AND (
+      (
+        state = 'sent'
+        AND "providerParcelId" IS NULL
+        AND EXISTS (
+          SELECT
+            1
+          FROM
+            cartlify.orders o
+          WHERE
+            o.id = "orderId"
+            AND o.status = 'shipped'
+        )
+      )
+      OR (
+        state = 'created'
+        AND "providerParcelId" IS NOT NULL
+        AND EXISTS (
+          SELECT
+            1
+          FROM
+            cartlify.orders o
+            JOIN cartlify.order_deliveries d ON d."orderId" = o.id
+          WHERE
+            o.id = order_shipments."orderId"
+            AND o.status = 'paid'
+            AND d.method = 'carrier'
+        )
+      )
     )
   );
 
@@ -1456,6 +1479,67 @@ WITH
   CHECK (true);
 
 -- DELETE: none, the history stays
+
+----------------------------------------
+-- SHIPMENT BOXES
+----------------------------------------
+-- The boxes of a parcel to the buyer and what is in them: written once with the parcel by an admin
+-- or root (a parcel made wrong is voided and made again), read by the staff only (the buyer sees
+-- the parcels, not how the shop packed them). Which items and how many: the trigger of the table
+-- (db/05). No update, no delete.
+ALTER TABLE cartlify.shipment_boxes ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.shipment_boxes FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS shipment_boxes_select ON cartlify.shipment_boxes;
+
+DROP POLICY IF EXISTS shipment_boxes_select_owner ON cartlify.shipment_boxes;
+
+DROP POLICY IF EXISTS shipment_boxes_insert ON cartlify.shipment_boxes;
+
+DROP POLICY IF EXISTS shipment_boxes_insert_owner ON cartlify.shipment_boxes;
+
+DROP POLICY IF EXISTS shipment_boxes_update_owner ON cartlify.shipment_boxes;
+
+-- SELECT: the buyer of the order of the parcel (the app shows a buyer the numbers of the boxes
+-- at the carrier), admin/root
+CREATE POLICY shipment_boxes_select ON cartlify.shipment_boxes FOR
+SELECT
+  USING (
+    EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.order_shipments s
+        JOIN cartlify.orders o ON o.id = s."orderId"
+      WHERE
+        s.id = "shipmentId"
+        AND cartlify.is_owner_or_admin (o."userId")
+    )
+  );
+
+-- SELECT for the system functions
+CREATE POLICY shipment_boxes_select_owner ON cartlify.shipment_boxes FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+-- UPDATE for the retention cleanup only; which columns - trg_shipment_boxes_update_columns (db/05)
+CREATE POLICY shipment_boxes_update_owner ON cartlify.shipment_boxes
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (true);
+
+-- INSERT: admin/root
+CREATE POLICY shipment_boxes_insert ON cartlify.shipment_boxes FOR INSERT
+WITH
+  CHECK (cartlify.current_actor_role () IN ('ADMIN', 'ROOT'));
+
+CREATE POLICY shipment_boxes_insert_owner ON cartlify.shipment_boxes FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+-- UPDATE, DELETE: none, a box is written once
 
 ----------------------------------------
 -- ORDER ITEMS

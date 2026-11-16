@@ -11,7 +11,7 @@ export type Items = [variantId: number, quantity: number][];
 
 // where and to whom an order goes, the way a buyer writes it (order_deliveries)
 export type DeliveryData = {
-  method: 'manual' | 'pickup';
+  method: 'manual' | 'pickup' | 'carrier';
   recipientFirstName: string;
   recipientLastName: string;
   recipientPhone: string;
@@ -22,6 +22,10 @@ export type DeliveryData = {
   house: string | null;
   apartment: string | null;
   note: string | null;
+  // the carrier the buyer picked from the prices, for the method carrier only
+  carrierName?: string | null;
+  carrierService?: string | null;
+  carrierConnection?: string | null;
 };
 
 export const DELIVERY: DeliveryData = {
@@ -49,6 +53,16 @@ export const PICKUP: DeliveryData = {
   house: null,
 };
 
+// a delivery by a carrier of the delivery provider: the address of the manual one and the line of
+// the prices the buyer picked
+export const CARRIER_DELIVERY: DeliveryData = {
+  ...DELIVERY,
+  method: 'carrier',
+  carrierName: 'MockExpress',
+  carrierService: 'Express',
+  carrierConnection: '7001',
+};
+
 // the price the shop asks for a manual delivery, the sum of the items from which it is free and the
 // price the buyer saw: what the server gives confirm_order from its settings
 export type DeliveryRule = {
@@ -73,14 +87,18 @@ export async function writeDelivery(
   await db.rows(
     `insert into cartlify.order_deliveries
        ("orderId", method, "recipientFirstName", "recipientLastName", "recipientPhone", country,
-        "postalCode", city, street, house, apartment, note)
-     values ($1, $2::cartlify."DeliveryMethod", $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "postalCode", city, street, house, apartment, note, "carrierName", "carrierService",
+        "carrierConnection")
+     values ($1, $2::cartlify."DeliveryMethod", $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+             $15)
      on conflict ("orderId") do update set
        method = excluded.method, "recipientFirstName" = excluded."recipientFirstName",
        "recipientLastName" = excluded."recipientLastName",
        "recipientPhone" = excluded."recipientPhone", country = excluded.country,
        "postalCode" = excluded."postalCode", city = excluded.city, street = excluded.street,
-       house = excluded.house, apartment = excluded.apartment, note = excluded.note
+       house = excluded.house, apartment = excluded.apartment, note = excluded.note,
+       "carrierName" = excluded."carrierName", "carrierService" = excluded."carrierService",
+       "carrierConnection" = excluded."carrierConnection"
      returning "orderId"`,
     orderId,
     row.method,
@@ -94,6 +112,9 @@ export async function writeDelivery(
     row.house,
     row.apartment,
     row.note,
+    row.carrierName ?? null,
+    row.carrierService ?? null,
+    row.carrierConnection ?? null,
   );
 }
 

@@ -17,7 +17,10 @@ import {
 } from '@routes/api/products/services/helpers/variant.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { withdrawalRightOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
-import { buyerReturnsOf } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
+import {
+  buyerReturnsOf,
+  SHOWN_STATES,
+} from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
 import {
   readReturnMoneyLines,
   rowSharesOf,
@@ -51,7 +54,7 @@ import { botLimits } from './chatBotLimits.service.js';
 import { offerAdminCall, withdrawAdminCall } from '../helpers/adminCall.helper.js';
 
 import type { ChatMessageItemDto, ChatThreadItemDto } from 'types/dto/chats.dto.js';
-import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
+import type { GetDeliveryMethodsResponseDto } from 'types/dto/delivery.dto.js';
 import type { UserId } from 'types/ids.js';
 import type { VariantContext } from 'types/dto/variants.dto.js';
 import type { Role } from 'types/user.js';
@@ -83,7 +86,7 @@ interface LoadedChatBotContextDto {
   // the last orders of a user, none for a guest
   orders: ChatBotOrderContextItemDto[];
   // the ways the shop delivers an order now
-  delivery: DeliveryMethodInfoDto[];
+  delivery: Pick<GetDeliveryMethodsResponseDto, 'methods' | 'zones'>;
   // only a user who confirmed the email talks to an admin
   emailConfirmed: boolean;
   // the answers the customer got from the bot in the last 24 hours
@@ -498,7 +501,7 @@ const loadChatBotContext = async ({
       // compact product context for shopping-related answers
       productContext: await loadProductContext(db, userMessage),
       orders: userId ? await findOrdersForBotContext(db, userId) : [],
-      delivery: (await getDeliveryMethods()).methods,
+      delivery: await getDeliveryMethods(),
       emailConfirmed: accountInfo.emailConfirmed,
       locale: accountInfo.locale,
       recentTurns: await countRecentBotTurns(db, chatBotActorRole, actorId),
@@ -661,6 +664,7 @@ const findOrdersForBotContext = async (
       trackingNumber: true,
       trackingUrl: true,
       rolledBackAt: true,
+      state: true,
     },
   });
 
@@ -706,8 +710,10 @@ const findOrdersForBotContext = async (
   return orders.map((order) => {
     const shipments = sends.filter((send) => send.orderId === order.id);
 
-    // the send on its way is the last one that was not taken back
-    const onItsWay = shipments.filter((send) => !send.rolledBackAt).at(-1);
+    // the parcels on their way, as the buyer sees them: not taken back, the carrier has or had them
+    const onTheirWay = shipments.filter(
+      (send) => !send.rolledBackAt && SHOWN_STATES.includes(send.state),
+    );
 
     return {
       id: order.id,
@@ -756,13 +762,12 @@ const findOrdersForBotContext = async (
             country: order.delivery.country,
           }
         : null,
-      shipment: onItsWay
-        ? {
-            carrier: onItsWay.carrier,
-            trackingNumber: onItsWay.trackingNumber,
-            trackingUrl: onItsWay.trackingUrl,
-          }
-        : null,
+      shipments: onTheirWay.map((send) => ({
+        carrier: send.carrier,
+        trackingNumber: send.trackingNumber,
+        trackingUrl: send.trackingUrl,
+        state: send.state,
+      })),
       // the name an item was confirmed with (the copy of the name of its variant), the name of
       // the variant of now for an unconfirmed order
       items: order.items.map((item) => ({

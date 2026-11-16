@@ -7,6 +7,7 @@ import { updateCurrentItem } from './services/updateCurrentItem.service.js';
 import { deleteCurrentItem } from './services/deleteCurrentItem.service.js';
 
 import { confirmOrder } from './services/confirmOrder.service.js';
+import { deliveryOptions } from './services/deliveryOptions.service.js';
 
 import { findOrders, findOrdersCsv } from './services/findOrders.service.js';
 
@@ -35,6 +36,7 @@ export const ordersServices = {
   updateCurrentItem,
   deleteCurrentItem,
   confirmOrder,
+  deliveryOptions,
 
   findOrders,
   findOrdersCsv,

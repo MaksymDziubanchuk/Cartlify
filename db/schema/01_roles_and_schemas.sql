@@ -331,6 +331,8 @@ BEGIN
     'cartlify.decide_money_use(integer, jsonb, numeric, text)',
     'cartlify.share_money_line(integer)',
     'cartlify.record_order_shipment_cost(integer, numeric)',
+    -- a parcel of the delivery provider the carrier never took: an admin, root or the system
+    'cartlify.void_order_parcel(integer)',
     'cartlify.expire_order_reservation(integer)',
     -- logins of a deleted account: root or the system
     'cartlify.anonymize_login_logs(integer)',
@@ -384,7 +386,12 @@ BEGIN
     -- a CHECK constraint cannot hold a subquery, these run instead, as the role that writes the
     -- row (shop_settings_insert, db/03)
     'cartlify.shop_setting_value_valid(text, jsonb)',
-    'cartlify.shop_setting_list_valid(jsonb, text)'
+    'cartlify.shop_setting_list_valid(jsonb, text)',
+    'cartlify.shop_setting_money_valid(jsonb, boolean)',
+    'cartlify.shop_setting_zones_valid(jsonb)',
+    'cartlify.shop_setting_sender_valid(jsonb)',
+    -- the items of a box (db/06, shipment_boxes_items_chk), as the role that writes the box
+    'cartlify.shipment_box_items_valid(jsonb)'
   ]
   LOOP
     IF to_regprocedure(v_fn) IS NOT NULL THEN

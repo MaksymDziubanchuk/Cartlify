@@ -88,6 +88,11 @@ const ADMIN_KINDS = [
   'pickup_not_collected',
   'shipped_without_cost',
   'shipped_without_tracking',
+  'parcels_not_collected',
+  'parcels_void_pending',
+  'parcels_coming_back',
+  'parcels_lost',
+  'parcels_ahead_of_order',
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
@@ -110,6 +115,7 @@ const ADMIN_KINDS = [
   'returns_money_late',
   'returns_goods_late',
   'worker_stalled',
+  'delivery_provider_down',
   'shop_settings_incomplete',
   'shop_locale_missing',
 ];
@@ -208,7 +214,7 @@ async function sentOrder(actor: TestUser): Promise<number> {
   const orderId = await paidOrder();
   const res = await change(actor, 'PATCH', `/api/orders/${orderId}/status`, {
     status: 'shipped',
-    shipment: { carrier: 'DHL' },
+    shipments: [{ carrier: 'DHL' }],
   });
   expect(res.statusCode).toBe(200);
   return orderId;

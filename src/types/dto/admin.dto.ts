@@ -944,6 +944,11 @@ export type AdminAlertKind =
   | 'pickup_not_collected'
   | 'shipped_without_cost'
   | 'shipped_without_tracking'
+  | 'parcels_not_collected'
+  | 'parcels_void_pending'
+  | 'parcels_coming_back'
+  | 'parcels_lost'
+  | 'parcels_ahead_of_order'
   | 'out_of_stock'
   | 'low_stock'
   | 'products_without_shipping_data'
@@ -974,6 +979,7 @@ export type AdminAlertKind =
   | 'returns_money_late'
   | 'returns_goods_late'
   | 'worker_stalled'
+  | 'delivery_provider_down'
   | 'shop_settings_incomplete'
   | 'shop_locale_missing'
   | 'newsletter_undelivered'
@@ -1021,7 +1027,8 @@ export interface AdminAlertDto {
   threshold: number | null;
   list: AdminAlertListDto | null;
   // when the thing the alert tells of last happened, for a kind that is an event (the stop of the
-  // sending worker); null for the others, and while it has not happened
+  // sending worker, the time the delivery provider stopped answering); null for the others, and
+  // while it has not happened
   occurredAt: string | null;
 }
 

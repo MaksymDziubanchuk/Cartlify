@@ -9,10 +9,12 @@
 {{/noRightLine}}{{#noRightItems}}- {{name}}: {{reason}}
 {{/noRightItems}}{{#shippingAddress}}{{shippingToLabel}}: {{shippingAddress}}
 {{/shippingAddress}}{{#recipient}}{{recipientLabel}}: {{recipient}}
-{{/recipient}}{{#carrier}}{{carrierLabel}}: {{carrier}}
+{{/recipient}}{{#parcels}}{{#heading}}
+{{heading}}
+{{/heading}}{{#carrier}}{{carrierLabel}}: {{carrier}}
 {{/carrier}}{{#trackingNumber}}{{trackingNumberLabel}}: {{trackingNumber}}
 {{/trackingNumber}}{{#trackingUrl}}{{followParcelLabel}}: {{trackingUrl}}
-{{/trackingUrl}}
+{{/trackingUrl}}{{/parcels}}
 {{seeOrderTxt}}
 {{orderUrl}}{{#withdrawalLine}}
 

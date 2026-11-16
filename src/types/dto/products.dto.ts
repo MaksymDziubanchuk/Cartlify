@@ -269,6 +269,9 @@ export type ProductCardDto = Omit<ProductResponseDto, 'category'> & {
   manufacturer: ProductPartyDto;
   euResponsible: ProductPartyDto | null;
   warnings: string | null;
+  // what customs need of it: the code of the goods (HS) and the country of origin, null when none
+  hsCode: string | null;
+  originCountry: string | null;
   documents: ProductDocumentDto[];
   withdrawal: ProductWithdrawalDto;
   // admin and root only
@@ -381,6 +384,9 @@ export interface CreateProductDto {
   euResponsibleId?: unknown;
   euResponsible?: unknown;
   warnings?: unknown;
+  // what customs need of it, both optional; checked by the service
+  hsCode?: unknown;
+  originCountry?: unknown;
   // the rule of withdrawal of its own: one of the rules, or none (the product follows its category);
   // checked by the service
   withdrawal?: unknown;
@@ -412,6 +418,10 @@ export interface UpdateProductBodyDto {
   manufacturerId?: number;
   euResponsibleId?: number | null;
   warnings?: string | null;
+  // what customs need of it: the code of the goods and the country of origin; null or empty takes
+  // each away
+  hsCode?: string | null;
+  originCountry?: string | null;
   // the rule of withdrawal of its own; null or empty gives it up and the product follows its
   // category. Checked by the service (WITHDRAWAL_RULE_INVALID)
   withdrawal?: string | null;

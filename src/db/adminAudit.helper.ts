@@ -54,6 +54,8 @@ export function buildProductUpdateAuditChanges(
     manufacturerId?: number;
     euResponsibleId?: number | null;
     warnings?: string | null;
+    hsCode?: string | null;
+    originCountry?: string | null;
     withdrawal?: string | null;
     weightGrams?: number | null;
     lengthMm?: number | null;
@@ -73,6 +75,8 @@ export function buildProductUpdateAuditChanges(
       manufacturerId?: number;
       euResponsibleId?: number | null;
       warnings?: string | null;
+      hsCode?: string | null;
+      originCountry?: string | null;
       withdrawal?: string | null;
       weightGrams?: number | null;
       lengthMm?: number | null;
@@ -88,6 +92,8 @@ export function buildProductUpdateAuditChanges(
       manufacturerId?: unknown;
       euResponsibleId?: unknown;
       warnings?: unknown;
+      hsCode?: unknown;
+      originCountry?: unknown;
       withdrawal?: unknown;
       sku?: unknown;
       price?: unknown;
@@ -147,6 +153,16 @@ export function buildProductUpdateAuditChanges(
       old: before.warnings ?? null,
       new: args.after.warnings ?? null,
     });
+  }
+
+  // what customs need of the product; null takes each away, which is a change too
+  for (const field of ['hsCode', 'originCountry'] as const) {
+    if (
+      args.input[field] !== undefined &&
+      (before[field] ?? null) !== (args.after[field] ?? null)
+    ) {
+      changes.push({ field, old: before[field] ?? null, new: args.after[field] ?? null });
+    }
   }
 
   // the rule of withdrawal of its own; null gives it up, which is a change too

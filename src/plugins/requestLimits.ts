@@ -76,6 +76,14 @@ export const REQUEST_LIMITS = {
     },
     windowMs: MINUTE,
   },
+  // the prices of the delivery of a cart and its confirmation: each may ask the delivery provider,
+  // whose account takes a few requests a second for the whole shop
+  deliveryPricesPerUser: {
+    get max() {
+      return env.LIMIT_DELIVERY_PRICES_PER_USER;
+    },
+    windowMs: MINUTE,
+  },
   // a session that guesses the current password to change it
   passwordChangePerUser: {
     get max() {
@@ -461,6 +469,7 @@ export const requestLimits = {
     limitBy('newsletterUnsubscribe', REQUEST_LIMITS.newsletterUnsubscribePerAddress, byAddress),
   ],
   checkout: [limitBy('checkout', REQUEST_LIMITS.checkoutPerUser, byUser)],
+  deliveryPrices: [limitBy('deliveryPrices', REQUEST_LIMITS.deliveryPricesPerUser, byUser)],
   passwordChange: [limitBy('passwordChange', REQUEST_LIMITS.passwordChangePerUser, byUser)],
   export: [limitBy('export', REQUEST_LIMITS.exportPerUser, byUser)],
   review: [limitBy('review', REQUEST_LIMITS.reviewPerUser, byUser)],

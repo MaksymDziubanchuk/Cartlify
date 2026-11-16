@@ -16,6 +16,7 @@ import {
 } from '@config/shopSettings.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { isPickupHours } from '@helpers/pickupHours.js';
+import { deliveryProvider } from '@providers/delivery/index.js';
 import { paymentPageBounds } from '@providers/payments/index.js';
 import { BadRequestError } from '@utils/errors.js';
 
@@ -56,9 +57,32 @@ export function getShopSettingsMissingFields(): string[] {
 // its key, but a row cannot see the rows of the other keys, and the countries a postal code is
 // known of and the languages with a dictionary are lists of the app (db/05, shop_setting_value_valid)
 function checkSettings(values: ShopSettingsValues): void {
-  // a free delivery from some sum is free of a price there must be
-  if (values.deliveryFreeFrom !== null && values.deliveryFlatPrice === null) {
-    throw new BadRequestError('DELIVERY_FREE_FROM_WITHOUT_PRICE');
+  // a carrier of the delivery provider needs the address the parcels go from, and the provider
+  // to be turned on (a key taken away later does not stop root changing the other settings)
+  if (values.deliveryMethods.includes('carrier')) {
+    const turnedOn = !shopSettings().deliveryMethods.includes('carrier');
+    if (turnedOn && !deliveryProvider.isConfigured()) {
+      throw new BadRequestError('DELIVERY_PROVIDER_NOT_CONFIGURED');
+    }
+    if (!values.deliverySender) throw new BadRequestError('DELIVERY_SENDER_REQUIRED');
+  }
+
+  // a country in one zone only, one zone of the rest at most, a name once (the database holds the
+  // same, the refusal here says which)
+  const zoneCountries = values.deliveryZones.flatMap((zone) =>
+    zone.countries === 'rest' ? [] : zone.countries,
+  );
+  const repeated = [...new Set(zoneCountries.filter((c, i) => zoneCountries.indexOf(c) !== i))];
+  if (repeated.length) {
+    throw new BadRequestError('DELIVERY_ZONE_COUNTRY_REPEATED', { countries: repeated });
+  }
+  if (values.deliveryZones.filter((zone) => zone.countries === 'rest').length > 1) {
+    throw new BadRequestError('DELIVERY_ZONE_REST_REPEATED');
+  }
+  const names = values.deliveryZones.map((zone) => zone.name);
+  const sameNames = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+  if (sameNames.length) {
+    throw new BadRequestError('DELIVERY_ZONE_NAME_REPEATED', { names: sameNames });
   }
 
   // a buyer who picks the pickup is told where and when to come
@@ -90,9 +114,9 @@ function checkSettings(values: ShopSettingsValues): void {
 
   // the countries the app knows how to take a postal code of, the same list POST
   // /api/orders/confirm checks a buyer's own address against
-  const unknownCountries = values.deliveryCountries.filter(
-    (code) => !isSupportedDeliveryCountry(code),
-  );
+  const unknownCountries = [
+    ...new Set([...zoneCountries, ...(values.customsFreeCountries ?? [])]),
+  ].filter((code) => !isSupportedDeliveryCountry(code));
   if (unknownCountries.length) {
     throw new BadRequestError('DELIVERY_COUNTRY_NOT_SUPPORTED', {
       countries: unknownCountries,

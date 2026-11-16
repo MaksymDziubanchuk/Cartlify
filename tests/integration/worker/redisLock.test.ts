@@ -80,6 +80,22 @@ describe('takeRedisLock', () => {
     expect(await next!.release()).toBe(true);
   });
 
+  it('extends the lock it holds, never one another took after it ran out', async () => {
+    const key = keyOf();
+    const lock = await takeRedisLock(key, 100);
+
+    expect(await lock!.extend(10_000)).toBe(true);
+    await sleep(250);
+    expect(await takeRedisLock(key, 10_000)).toBeNull();
+    expect(await lock!.release()).toBe(true);
+
+    const slow = await takeRedisLock(key, 100);
+    await sleep(250);
+    const next = await takeRedisLock(key, 10_000);
+    expect(await slow!.extend(10_000)).toBe(false);
+    expect(await next!.release()).toBe(true);
+  });
+
   it('keeps the locks of different keys apart', async () => {
     const one = await takeRedisLock(keyOf(), 10_000);
     const two = await takeRedisLock(keyOf(), 10_000);

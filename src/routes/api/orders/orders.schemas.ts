@@ -50,7 +50,7 @@ const deliveryExample = {
   },
   note: 'Leave near the door.',
   pickup: null,
-  shipment: null,
+  shipments: [],
 };
 
 // a cart: nothing chosen yet, the shop quotes each method it has enabled
@@ -91,11 +91,14 @@ const shippedOrderExample = {
   reservationExpiresAt: undefined,
   delivery: {
     ...deliveryExample,
-    shipment: {
-      carrier: 'DHL',
-      trackingNumber: 'JD0146000123',
-      trackingUrl: 'https://track.example.com/JD0146000123',
-    },
+    shipments: [
+      {
+        carrier: 'DHL',
+        trackingNumber: 'JD0146000123',
+        trackingUrl: 'https://track.example.com/JD0146000123',
+        state: 'sent',
+      },
+    ],
   },
   paidAt: '2026-01-01T10:05:00.000Z',
 };
@@ -245,6 +248,7 @@ const postCurrentItemsSchema = {
     409: {
       description:
         '`OUT_OF_STOCK`: fewer free units than the cart would hold, `details: { variantId, available, requested }`. ' +
+        '`PRODUCT_NOT_DELIVERABLE`: the shop sends by carriers of the delivery provider only and the variant has no weight or sizes, nothing can send it (the catalog shows it with no free units), `details.variantId`. ' +
         '`ORDER_NOT_EDITABLE`: another request confirmed the cart meanwhile. ' +
         '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
@@ -384,9 +388,9 @@ const postCurrentConfirmSchema = {
   summary: 'Confirm current order',
   description:
     'Confirms the current order, reserves stock and prepares it for checkout. ' +
-    'The `delivery` says where and to whom the order goes: the method the shop has enabled (`manual`: the shop sends it to an address; `pickup`: the buyer collects it at the shop, GET /api/delivery/methods lists them), the recipient and, for `manual`, the address (a country the shop delivers to, the postal code in the form of its country, the city, the street, the house, the apartment if there is one). A buyer is a person, not a company. It is whole when sent and replaces what the order has; an order that lost its reservation (`unconfirmed`) keeps it, so confirming it again needs only `orderId`. A confirmation that fails stores nothing. ' +
+    'The `delivery` says where and to whom the order goes: the method the shop has enabled (`manual`: the shop sends it to an address; `pickup`: the buyer collects it at the shop; `carrier`: a carrier of the delivery provider, `carrier` names the line of POST /api/orders/current/delivery-options picked; GET /api/delivery/methods lists them), the recipient and, for `manual` and `carrier`, the address (a country of a zone of the shop, the postal code in the form of its country, the city, the street, the house, the apartment if there is one). A buyer is a person, not a company. It is whole when sent and replaces what the order has; an order that lost its reservation (`unconfirmed`) keeps it, so confirming it again needs only `orderId`. A confirmation that fails stores nothing. ' +
     'A page can take the first name and the phone from the profile, the last name is asked from the person, and the cart offers the delivery of the last order (`deliverySuggestion`) to start from. `note` is optional. After the confirmation the order keeps the delivery as it is. ' +
-    'The confirmation fixes the price of the delivery by the rule of the shop (a flat price for `manual`, free from a sum of the items, nothing for `pickup`); `total` is the items and that price. `expectedDeliveryPrice` (required) is the price the page showed: another price now refuses the confirmation (`DELIVERY_PRICE_CHANGED`), the page shows the price now and the buyer confirms again. ' +
+    'The confirmation fixes the price of the delivery: for `manual` the price of the zone of the country, for `carrier` the price the delivery provider gives now, both free from the `freeFrom` of the zone, nothing for `pickup`; `total` is the items and that price. `expectedDeliveryPrice` (required) is the price the page showed: another price now refuses the confirmation (`DELIVERY_PRICE_CHANGED`), the page shows the price now and the buyer confirms again. ' +
     'When an item price differs from the current price of its variant, the order is not confirmed and `ORDER_PRICES_CHANGED` is returned: reload the order to get fresh prices and confirm again.',
 
   body: {
@@ -407,8 +411,10 @@ const postCurrentConfirmSchema = {
         '`RECIPIENT_FIRST_NAME_INVALID`, `RECIPIENT_LAST_NAME_INVALID`: a name without a letter or with a digit. `RECIPIENT_PHONE_INVALID`: a phone of another form (the request schema refuses it first, so over HTTP it is `VALIDATION_ERROR`). ' +
         '`DELIVERY_REQUIRED`: the order has no delivery and the request did not bring one. ' +
         '`DELIVERY_METHOD_NOT_AVAILABLE`: the shop has not enabled the method, `details.method`. ' +
-        '`DELIVERY_ADDRESS_REQUIRED`: the manual method without an address. `DELIVERY_ADDRESS_NOT_ALLOWED`: a pickup with an address. ' +
-        '`DELIVERY_COUNTRY_NOT_ALLOWED`: the shop does not deliver to the country, `details.country`. ' +
+        '`DELIVERY_ADDRESS_REQUIRED`: the manual method or a carrier without an address. `DELIVERY_ADDRESS_NOT_ALLOWED`: a pickup with an address. ' +
+        '`DELIVERY_CARRIER_REQUIRED`: the method carrier without the carrier picked; `DELIVERY_CARRIER_NOT_ALLOWED`: a carrier with another method. ' +
+        '`DELIVERY_COUNTRY_NOT_ALLOWED`: the country is in no zone of the shop, or in a zone the manual delivery does not go to, `details.country`. ' +
+        '`DELIVERY_CUSTOMS_DATA_MISSING`: the country is not free of customs and a product of the order has no customs code or country of origin, `details.products` `[{ productId, name }]`. ' +
         '`DELIVERY_POSTAL_CODE_INVALID`: not a postal code of that country (a typo, a code of another country). ' +
         '`DELIVERY_CITY_INVALID`, `DELIVERY_STREET_INVALID`: no letter in it. `DELIVERY_HOUSE_INVALID`: a house of only spaces. ' +
         '`ORDER_ITEMS_REQUIRED`: the order is empty. ' +
@@ -435,7 +441,9 @@ const postCurrentConfirmSchema = {
         '`{ itemId, variantId, reason: deleted | out_of_stock, available, requested }` (deleted: the variant is not for sale any more, taken out of sale, its product removed or without a picture); the owner removes or changes them and confirms again. ' +
         'The same code names the items when another buyer took the last free units at the same moment. ' +
         '`ORDER_PRICES_CHANGED`: the price of an item is not the price its variant sells at now, `details.items` names them `[{ itemId, variantId, unitPrice, price }]` (`price` is the one now); reload the order and confirm again. ' +
-        '`DELIVERY_PRICE_CHANGED`: the price of the delivery the page showed (`expectedDeliveryPrice`) is not the price now, `details.price` is the price now; the page shows it and the buyer confirms again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
+        '`DELIVERY_PRICE_CHANGED`: the price of the delivery the page showed (`expectedDeliveryPrice`) is not the price now (for a carrier: the price the delivery provider gives now for the cart), `details.price` is the price now; the page shows it and the buyer confirms again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
+        '`DELIVERY_SERVICE_UNAVAILABLE`: the carrier picked is not among the prices of the delivery provider for the cart and the address now; the page asks the prices again. ' +
+        '`ORDER_ITEMS_NOT_DELIVERABLE`: a carrier and a variant without its weight or sizes, `details.items` `[{ itemId, variantId }]`; the owner takes them out or picks another way. ' +
         '`ORDER_STATUS_NOT_ALLOWED`: the order is not a cart nor an unconfirmed order. ' +
         '`LEGAL_ACCEPTANCE_REQUIRED`: the customer did not accept a version in force of the terms ' +
         'or of the contract; `details.kinds` the kinds missing, `details.current` the versions in ' +
@@ -444,14 +452,313 @@ const postCurrentConfirmSchema = {
         '/api/legal/acceptances and confirms again.',
       $ref: 'errorResponseSchema#',
     },
+    429: {
+      description:
+        'Too many requests in a minute that price the delivery of the cart (RATE_LIMITED), the ' +
+        'confirmations and POST /api/orders/current/delivery-options together: every request ' +
+        'counts, those that were refused too.',
+      $ref: 'errorResponseSchema#',
+    },
     500: {
       description: 'Unexpected server error while confirming order.',
       $ref: 'errorResponseSchema#',
     },
     503: {
-      description: 'Order confirmation is temporarily unavailable because Redis is down.',
+      description:
+        'Order confirmation is temporarily unavailable. `REDIS_UNAVAILABLE`: Redis is down. ' +
+        '`DELIVERY_PROVIDER_UNAVAILABLE`: the delivery provider does not answer the price of the ' +
+        'carrier picked; nothing is confirmed, ask again a bit later.',
       $ref: 'errorResponseSchema#',
     },
+  },
+} satisfies FastifySchema;
+
+// the ways the cart goes to an address, with their prices
+const postDeliveryOptionsSchema = {
+  operationId: 'getDeliveryOptions',
+  summary: 'Get the ways the cart goes to an address, with their prices',
+  description:
+    'The ways the cart of the buyer (the order GET /api/orders/current gives) goes to the address, ' +
+    'with their prices for its items: the manual delivery at the price of the zone of the country ' +
+    '(when the zone has one), the pickup, and the carriers of the delivery provider from the ' +
+    'cheapest, with the name for the buyer and how long each takes (the carriers and their ' +
+    'prices are the ones the shop set at the provider). From the free-from sum of the zone every ' +
+    'delivery there costs nothing. The page asks it again when the address or the cart changes; ' +
+    'the confirmation takes the carrier of a line as `delivery.carrier` and its price as ' +
+    '`expectedDeliveryPrice`. `carriersUnavailable` says why no carrier is in the list. The prices ' +
+    'of the carriers are kept five minutes for the address and the cart. Nothing of the buyer goes ' +
+    'to the provider for a price.',
+
+  body: {
+    $ref: 'ordersDeliveryOptionsBodySchema#',
+    examples: [
+      {
+        address: {
+          country: 'ES',
+          postalCode: '28013',
+          city: 'Madrid',
+          street: 'Calle Mayor',
+          house: '1',
+        },
+      },
+    ],
+  },
+
+  response: {
+    200: {
+      description: 'The ways the cart goes to the address.',
+      $ref: 'ordersDeliveryOptionsResponseSchema#',
+      examples: [
+        {
+          currency: 'eur',
+          zone: { name: 'Spain', freeFrom: 60 },
+          remainingToFree: 30.02,
+          options: [
+            { method: 'manual', price: 5, carrier: null, label: null, days: null },
+            { method: 'pickup', price: 0, carrier: null, label: null, days: null },
+            {
+              method: 'carrier',
+              price: 4.2,
+              carrier: { name: 'Correos', service: 'Standard', connection: '6001' },
+              label: 'Correos',
+              days: '1-3',
+            },
+          ],
+          carriersUnavailable: null,
+        },
+      ],
+    },
+    400: {
+      description:
+        'Invalid request. `VALIDATION_ERROR`: a part of the address breaks the schema. ' +
+        '`DELIVERY_COUNTRY_NOT_ALLOWED`: the country is in no zone of the shop, `details.country`. ' +
+        '`DELIVERY_POSTAL_CODE_INVALID`, `DELIVERY_CITY_INVALID`, `DELIVERY_STREET_INVALID`, ' +
+        '`DELIVERY_HOUSE_INVALID`: a part of the address is not what it should be. ' +
+        '`ORDER_ITEMS_REQUIRED`: there is no cart, or it is empty. ' +
+        '`DELIVERY_CUSTOMS_DATA_MISSING`: the country is not free of customs and a product of the ' +
+        'cart has no customs code or country of origin, `details.products` `[{ productId, name }]`: ' +
+        'these products are not sent over the border (a pickup still is).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Only a buyer has a cart.', $ref: 'errorResponseSchema#' },
+    429: {
+      description:
+        'Too many requests in a minute that price the delivery of the cart (RATE_LIMITED), these ' +
+        'and the confirmations together: every request counts, those that were refused too.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while reading the ways of the delivery.',
+      $ref: 'errorResponseSchema#',
+    },
+    503: {
+      description:
+        '`DELIVERY_PROVIDER_UNAVAILABLE`: the delivery provider does not answer and the shop has ' +
+        'no other way to the address; ask again a bit later.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// the parcels of an order of a carrier of the delivery provider
+const orderIdOnlyParams = { $ref: 'ordersGetByIdParamsSchema#' } as const;
+
+const getParcelsDraftSchema = {
+  operationId: 'getParcelsDraft',
+  summary: 'Get what the app puts in the parcels of an order of a carrier',
+  description:
+    'The draft of the parcels of a paid order of a carrier of the delivery provider: one parcel of ' +
+    'one box of every unit no live parcel holds yet, its weight the sum of the weights, its length ' +
+    'and width the biggest of the items, its height the sum of the heights (the items stacked); ' +
+    'and the carrier the buyer picked. The admin sends it as it is, or changes the boxes and the ' +
+    'parcels, with POST /api/orders/{orderId}/parcels. Admin and root only.',
+  params: orderIdOnlyParams,
+  response: {
+    200: { description: 'The draft.', $ref: 'ordersParcelsDraftResponseSchema#' },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    404: { description: '`ORDER_NOT_FOUND`: no order with this id.', $ref: 'errorResponseSchema#' },
+    409: {
+      description:
+        '`ORDER_NOT_BY_CARRIER`: the order goes by another method. `ORDER_STATUS_NOT_ALLOWED`: the order is not paid, `details.status`. ' +
+        '`ORDER_ON_HOLD`: something holds the order from its sending, `details.holds`. ' +
+        '`PARCELS_ALREADY_MADE`: the live parcels hold every unit; void them first (POST /api/orders/{orderId}/parcels/void) to make them again. ' +
+        '`DELIVERY_SENDER_REQUIRED`, `DELIVERY_PROVIDER_NOT_CONFIGURED`: the shop has no address the parcels go from, or no key of the delivery provider.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+const getOrderCarriersSchema = {
+  operationId: 'getOrderCarriers',
+  summary: 'Get the carriers an order of a carrier can go by now',
+  description:
+    'The carriers of the delivery provider for the order to its address now, the cheapest first, ' +
+    'each with what the provider counts for the parcel (the cost of the shop: the price of the ' +
+    'buyer stays the one they paid). The list an admin picks another carrier from when the one ' +
+    'the buyer picked is gone or refuses the address: PATCH /api/orders/{orderId}/delivery takes ' +
+    'one of them as `carrier`. Empty when an item of the order has no weight or sizes. Asked of ' +
+    'the provider at every request. Admin and root only.',
+  params: orderIdOnlyParams,
+  response: {
+    200: { description: 'The carriers.', $ref: 'ordersCarriersResponseSchema#' },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    404: { description: '`ORDER_NOT_FOUND`: no order with this id.', $ref: 'errorResponseSchema#' },
+    409: {
+      description: '`ORDER_NOT_BY_CARRIER`: the order goes by another method, or by none yet.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+    503: {
+      description: '`DELIVERY_PROVIDER_UNAVAILABLE`: the delivery provider does not answer.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const postParcelsSchema = {
+  operationId: 'createParcels',
+  summary: 'Make the parcels of an order of a carrier',
+  description:
+    'Makes the parcels of a paid order of a carrier of the delivery provider when the goods are ' +
+    'packed: each parcel with its label (`labelUrl` of the shipments of the order, to print), the ' +
+    'number and the link of the carrier when it gives them, and what the provider priced it at as ' +
+    'the cost of the send (a line of the money journal; correct it with PATCH ' +
+    '/api/orders/{orderId}/shipments/{shipmentId} when the carrier charged another sum). An empty ' +
+    'body ({}): the draft (GET /api/orders/{orderId}/parcels/draft). A parcel is asked of the provider by the ' +
+    'number of the order and its place, and a repeat finds a parcel the provider made before an ' +
+    'answer got lost; two admins never make them twice (PARCELS_BEING_MADE while one does). When ' +
+    'one of several parcels is not made, the ones made stay and `failed` says which and why; a ' +
+    'new request makes the rest. The order becomes shipped once the carrier took every parcel (its ' +
+    'events), or by hand (PATCH /api/orders/{orderId}/status). Admin and root only.',
+  params: orderIdOnlyParams,
+  body: { $ref: 'ordersParcelsBodySchema#' },
+  response: {
+    200: { description: 'The parcels made.', $ref: 'ordersParcelsResultSchema#' },
+    400: {
+      description:
+        '`VALIDATION_ERROR`: the body breaks its schema. `PARCEL_ITEMS_MISMATCH`: the boxes do not ' +
+        'hold every unit left, no more and no less, `details.items` `[{ orderItemId, units, packed }]`. ' +
+        '`SHIPMENT_BOX_SIZES_INVALID`: a box with some of its sizes. `PARCEL_BOX_SIZES_REQUIRED`: a ' +
+        'box without its weight and sizes (a carrier needs them). `DELIVERY_CUSTOMS_DATA_MISSING`: ' +
+        'the order goes to a country with customs and a product has no customs code or country of ' +
+        'origin, `details.products` `[{ productId, name }]`.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    404: { description: '`ORDER_NOT_FOUND`: no order with this id.', $ref: 'errorResponseSchema#' },
+    409: {
+      description:
+        '`ORDER_NOT_BY_CARRIER`: the order goes by another method. `ORDER_STATUS_NOT_ALLOWED`: the order is not paid, `details.status`. ' +
+        '`ORDER_ON_HOLD`: something holds the order from its sending, `details.holds`. ' +
+        '`PARCELS_ALREADY_MADE`: the live parcels hold every unit; void them first (POST /api/orders/{orderId}/parcels/void) to make them again. ' +
+        '`DELIVERY_SENDER_REQUIRED`, `DELIVERY_PROVIDER_NOT_CONFIGURED`: the shop has no address the parcels go from, or no key of the delivery provider.' +
+        ' ' +
+        '`DELIVERY_PARCEL_REFUSED`: the carrier did not make the first parcel, `details.message` its ' +
+        'reason (a street it does not know, a weight it does not take): nothing is made, correct the ' +
+        'address (PATCH /api/orders/{orderId}/delivery) or the boxes and make them again. ' +
+        '`PARCELS_BEING_MADE`: another request makes them now.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+    503: {
+      description:
+        '`DELIVERY_PROVIDER_UNAVAILABLE`: the provider did not answer the first parcel; a new ' +
+        'request finds it when it was made. `REDIS_UNAVAILABLE`: the lock of the order cannot be taken.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const postParcelsBulkSchema = {
+  operationId: 'createParcelsOfOrders',
+  summary: 'Make the parcels of many orders of a carrier, each by its draft',
+  description:
+    'The parcels of each order by its draft, each order on its own: a refusal of one does not stop ' +
+    'the others; each order gets its answer, in the order of the request (`errorCode` and `message` ' +
+    'of the one that was not made, the codes of POST /api/orders/{orderId}/parcels). Admin and root only.',
+  body: { $ref: 'ordersParcelsBulkBodySchema#' },
+  response: {
+    200: { description: 'The answer of each order.', $ref: 'ordersParcelsBulkResultSchema#' },
+    400: {
+      description: '`VALIDATION_ERROR`: the body breaks its schema.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+    503: {
+      description: '`REDIS_UNAVAILABLE`: the locks of the orders cannot be taken.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const postParcelsVoidSchema = {
+  operationId: 'voidParcels',
+  summary: 'Void the parcels of an order the carrier has not taken',
+  description:
+    'The admin made the parcels wrong and makes them again: every parcel only made (or the one ' +
+    'named by `shipmentId`) waits for its ' +
+    'void; the provider voids at once the ones of a carrier it can ask (voided, their cost taken ' +
+    'back), the others wait (void_pending, the alert parcels_void_pending): cancel them in the ' +
+    'dashboard of the carrier and confirm (POST ' +
+    '/api/orders/{orderId}/shipments/{shipmentId}/void-confirmation). Admin and root only.',
+  params: orderIdOnlyParams,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      shipmentId: {
+        type: 'integer',
+        minimum: 1,
+        description: 'The one parcel to void; without it every parcel only made.',
+      },
+    },
+    examples: [{}, { shipmentId: 17 }],
+  },
+  response: {
+    200: { description: 'The order as the admin sees it.', $ref: 'ordersOrderResponseSchema#' },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    404: { description: '`ORDER_NOT_FOUND`: no order with this id.', $ref: 'errorResponseSchema#' },
+    409: {
+      description:
+        '`PARCELS_NOT_VOIDABLE`: the order has no parcel only made, or the parcel named is not ' +
+        'one of them.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+const postParcelVoidConfirmationSchema = {
+  operationId: 'confirmParcelVoid',
+  summary: 'Confirm a parcel was cancelled in the dashboard of its carrier',
+  description:
+    'A parcel waiting for its void the provider cannot void (its carrier cannot be asked): the ' +
+    'admin cancelled it in the dashboard of the carrier, the app closes it (voided) and takes its ' +
+    'cost back. Admin and root only.',
+  params: { $ref: 'ordersShipmentParamsSchema#' },
+  response: {
+    200: { description: 'The order as the admin sees it.', $ref: 'ordersOrderResponseSchema#' },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    404: {
+      description:
+        '`ORDER_SHIPMENT_NOT_FOUND`: the order has no parcel of the provider of this id.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`PARCEL_STATE_INVALID`: the parcel does not wait for its void, `details.state`.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
   },
 } satisfies FastifySchema;
 
@@ -565,9 +872,9 @@ const patchOrderStatusSchema = {
   summary: 'Update order status',
   description:
     'Takes an order one step: a paid order becomes shipped, a shipped one delivered, and one step back: a delivered order shipped, a shipped one paid. A step over (paid straight to delivered) is not one. ' +
-    'Shipping a manual order records the send (`shipment`: the carrier, the tracking number, the link, what the shop pays the carrier, each only if known; a number and a link each need the carrier, a link may come without a number); a pickup is shipped when it is ready to be collected, delivered when it is collected, and has no send. ' +
+    'Shipping a manual order records its parcels (`shipments`: each with the carrier, the tracking number, the link, what the shop pays the carrier, each only if known, a number and a link each need the carrier, a link may come without a number; and its boxes with the units of each item, every unit in one box; the one parcel given without boxes gets one box of every unit); an order of a carrier of the delivery provider is shipped by hand only with the parcels made for it (`PARCELS_REQUIRED`), which then count as taken, and delivered marks them delivered; a pickup is shipped when it is ready to be collected, delivered when it is collected, and has no send. ' +
     'What the shop pays the carrier is a line of the money journal, written in the same transaction (a cost of 0 writes none). An order something holds (`holds`: a dispute of its payment, a refund made by hand root has not decided on, a warning or a review of the provider) is not sent (`ORDER_ON_HOLD`). ' +
-    'The step back of a manual order takes the send back (it stays as history) and needs `keepShippingCost`: true keeps its cost as owed to the carrier, false makes it 0 (a mistake: a line of the money journal corrects the cost it had to nothing, the admin log keeps it). ' +
+    'The step back of a manual order takes every parcel back (they stay as history) and needs `keepShippingCost`: true keeps its cost as owed to the carrier, false makes it 0 (a mistake: a line of the money journal corrects the cost it had to nothing, the admin log keeps it). ' +
     'Every step is written to the admin log with what it did. The buyer is mailed after each step, unless the account is deleted: a shipped order (a pickup: ready for pickup), a delivered one (a pickup: collected), and a short notice for a step back that says nothing of the reason, the admin explains it in the chat; a mail that fails is only logged and never undoes the status. ' +
     'This operation is restricted to privileged users. A cancel is a statement of return: POST /api/returns with the reason `shop_cancel` for a paid order not sent (or a pickup not collected), `refused` for a parcel the buyer refused.',
 
@@ -592,7 +899,8 @@ const patchOrderStatusSchema = {
       description:
         'Invalid order status update request. `VALIDATION_ERROR`: a field breaks the request schema (a link that is not https, a cost with a fraction of a cent, a text too long). ' +
         '`STATUS_INVALID`: not a status an admin sets (the request schema refuses it first). ' +
-        '`SHIPMENT_NOT_ALLOWED`: a send with any step but shipped, or for a pickup. ' +
+        '`SHIPMENT_NOT_ALLOWED`: parcels with any step but shipped, or for a pickup or an order of a carrier of the delivery provider (its parcels are made by POST /api/orders/{orderId}/parcels). ' +
+        '`PARCEL_ITEMS_MISMATCH`: the boxes of the parcels do not hold every unit that travels, no more and no less (several parcels each need their boxes), `details.items` `[{ orderItemId, units, packed }]`. `SHIPMENT_BOX_SIZES_INVALID`: a box with some of its weight and sizes but not all four. ' +
         '`SHIPMENT_CARRIER_REQUIRED`: a number or a link without the carrier. `SHIPMENT_CARRIER_INVALID`, `SHIPMENT_NUMBER_INVALID`: a text of only spaces. ' +
         '`KEEP_SHIPPING_COST_REQUIRED`: the step back of a manual order that was shipped needs the choice. `KEEP_SHIPPING_COST_NOT_ALLOWED`: the choice with any other step, or for a pickup. ' +
         '`DELIVERED_AT_NOT_ALLOWED`: the moment of the delivery with any other step. `ORDER_DELIVERED_AT_INVALID`: a moment before the order was sent (a pickup: paid) or of the future.',
@@ -613,7 +921,7 @@ const patchOrderStatusSchema = {
     409: {
       description:
         '`ORDER_STATUS_TRANSITION_INVALID`: the order is there, its status does not allow the step, `details: { status, requested }` ' +
-        '(shipped from paid, or back from delivered; delivered from shipped; paid back from shipped). `ORDER_ON_HOLD`: something holds the paid order from its sending, `details: { orderId, holds }` with the reasons (dispute, hand_refund, fraud_warning, payment_review), each once; the order stays paid. `ORDER_HAS_OPEN_REFUSAL`: the buyer refused the parcel and the statement of it is open, the order does not become delivered while the parcel is on its way back. `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
+        '(shipped from paid, or back from delivered; delivered from shipped; paid back from shipped). `PARCELS_REQUIRED`: an order of a carrier sent by hand without parcels of the delivery provider that hold every unit; make them first, or change the method to manual (PATCH /api/orders/{orderId}/delivery). `ORDER_ON_HOLD`: something holds the paid order from its sending, `details: { orderId, holds }` with the reasons (dispute, hand_refund, fraud_warning, payment_review), each once; the order stays paid. `ORDER_HAS_OPEN_REFUSAL`: the buyer refused the parcel and the statement of it is open, the order does not become delivered while the parcel is on its way back. `PARCEL_STATE_INVALID`: the step back of an order of a carrier a parcel of which the carrier moved further than sent (delivered, going back, back, lost), `details: { shipmentId, state }`. `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -629,7 +937,7 @@ const postOrdersStatusSchema = {
   summary: 'Update the status of many orders',
   description:
     'Moves many orders one step: shipped (from paid), delivered (from shipped), or one step back. ' +
-    'Each order comes with its own send (`shipment`) when it is shipped and its own `keepShippingCost` ' +
+    'Each order comes with its own parcels (`shipments`) when it is shipped and its own `keepShippingCost` ' +
     'when it goes back to paid, the way `PATCH /api/orders/{orderId}/status` takes them. Each ' +
     'order goes on its own, in a transaction of its own: the admin log and the mail of each. A mail ' +
     'cannot be taken back, so an order that cannot take the step does not stop the others: each ' +
@@ -641,7 +949,10 @@ const postOrdersStatusSchema = {
       {
         status: 'shipped',
         orders: [
-          { orderId: 41, shipment: { carrier: 'DHL', trackingNumber: 'JD0146000123', cost: 7.5 } },
+          {
+            orderId: 41,
+            shipments: [{ carrier: 'DHL', trackingNumber: 'JD0146000123', cost: 7.5 }],
+          },
           { orderId: 42 },
         ],
       },
@@ -1156,7 +1467,7 @@ const patchOrderDeliverySchema = {
     400: {
       description:
         '`VALIDATION_ERROR`: a field breaks the request schema, nothing is sent. `NO_FIELDS_TO_UPDATE`: only fields the schema does not name. `RECIPIENT_FIRST_NAME_INVALID`, `RECIPIENT_LAST_NAME_INVALID`: a name without a letter or with a digit. `RECIPIENT_PHONE_INVALID`: a phone of another form (the request schema refuses it first, so over HTTP it is `VALIDATION_ERROR`). ' +
-        '`DELIVERY_ADDRESS_NOT_ALLOWED`: an address for a pickup. `DELIVERY_COUNTRY_NOT_ALLOWED`: the shop does not deliver to the country. `DELIVERY_POSTAL_CODE_INVALID`, `DELIVERY_CITY_INVALID`, `DELIVERY_STREET_INVALID`, `DELIVERY_HOUSE_INVALID`: a part of the address that is not one.',
+        '`DELIVERY_ADDRESS_NOT_ALLOWED`: an address for a pickup. `DELIVERY_CARRIER_NOT_ALLOWED`: a carrier or the method for an order that goes by no carrier. `DELIVERY_COUNTRY_NOT_ALLOWED`: the shop does not deliver to the country. `DELIVERY_POSTAL_CODE_INVALID`, `DELIVERY_CITY_INVALID`, `DELIVERY_STREET_INVALID`, `DELIVERY_HOUSE_INVALID`: a part of the address that is not one. `DELIVERY_CUSTOMS_DATA_MISSING`: the new country has customs and a product of the order has no customs code or country of origin, `details.products` `[{ productId, name }]`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -1173,11 +1484,16 @@ const patchOrderDeliverySchema = {
     },
     409: {
       description:
-        '`ORDER_DELIVERY_NOT_EDITABLE`: only a paid order changes, `details.status` is the status it has. `RESOURCE_BUSY`: try again.',
+        '`ORDER_DELIVERY_NOT_EDITABLE`: only a paid order changes, `details.status` is the status it has. `PARCELS_EXIST`: the order of a carrier has a parcel of the provider that is not voided, and its label carries the person, the address and the carrier: only the note changes until the parcels are voided (POST /api/orders/{orderId}/parcels/void). `DELIVERY_SERVICE_UNAVAILABLE`: the carrier is not among the prices of the delivery provider for the order and the address now. `RESOURCE_BUSY`: try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
       description: 'Unexpected server error while correcting the delivery.',
+      $ref: 'errorResponseSchema#',
+    },
+    503: {
+      description:
+        '`DELIVERY_PROVIDER_UNAVAILABLE`: the delivery provider does not answer the price of the carrier picked.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -1320,6 +1636,13 @@ const taggedOrdersSchema = withOpenApiTag(
     patchCurrentItemsSchema,
     deleteCurrentItemsSchema,
     postCurrentConfirmSchema,
+    postDeliveryOptionsSchema,
+    getParcelsDraftSchema,
+    getOrderCarriersSchema,
+    postParcelsSchema,
+    postParcelsBulkSchema,
+    postParcelsVoidSchema,
+    postParcelVoidConfirmationSchema,
     getOrdersSchema,
     getOrderByIdSchema,
     patchOrderStatusSchema,

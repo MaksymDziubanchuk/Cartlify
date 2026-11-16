@@ -6,7 +6,11 @@ import {
   orderResponseSelect,
 } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
 
-import { resetShopSettings, setShopSettings } from '../../../../../../helpers/shopSettings.js';
+import {
+  resetShopSettings,
+  setShopSettings,
+  testZonePrice,
+} from '../../../../../../helpers/shopSettings.js';
 
 afterEach(resetShopSettings);
 
@@ -100,6 +104,9 @@ const send = (patch: Record<string, unknown> = {}) => ({
   expense: true,
   shippedAt: new Date('2026-01-02T08:00:00Z'),
   rolledBackAt: null,
+  state: 'sent',
+  labelUrl: null,
+  boxes: [],
   ...patch,
 });
 
@@ -379,7 +386,7 @@ describe('mapOrderRowToResponse', () => {
       },
       note: 'leave at the door',
       pickup: null,
-      shipment: null,
+      shipments: [],
     });
   });
 
@@ -411,7 +418,7 @@ describe('mapOrderRowToResponse', () => {
 
   // the price is fixed at the confirmation; before it the order shows the price of now
   it('shows the price the confirmation fixed, and before it the price of now', () => {
-    setShopSettings({ deliveryFlatPrice: 5, deliveryFreeFrom: 50 });
+    setShopSettings(testZonePrice(5, 50));
     const fixed = delivery({ price: new Prisma.Decimal('3.50') });
 
     expect(map({ confirmed: true, delivery: fixed }).delivery?.price).toBe(3.5);
@@ -420,7 +427,7 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('adds the delivery of now to the items of an order that is not confirmed', () => {
-    setShopSettings({ deliveryFlatPrice: 5, deliveryFreeFrom: 50 });
+    setShopSettings(testZonePrice(5, 50));
 
     const out = map({ delivery: delivery() });
 
@@ -443,13 +450,17 @@ describe('mapOrderRowToResponse', () => {
   it('gives what each method would cost to an order that is not confirmed, and not to one that is', () => {
     setShopSettings({
       deliveryMethods: ['manual', 'pickup'],
-      deliveryFlatPrice: 5,
-      deliveryFreeFrom: 50,
+      ...testZonePrice(5, 50),
     });
 
-    // 19.98 of items: 30.02 short of the free delivery
-    expect(map().deliveryQuotes).toEqual([
+    // 19.98 of items to the country of the delivery of the cart: 30.02 short of the free delivery
+    expect(map({ delivery: delivery() }).deliveryQuotes).toEqual([
       { method: 'manual', price: 5, freeFrom: 50, remainingToFree: 30.02 },
+      { method: 'pickup', price: 0, freeFrom: null, remainingToFree: null },
+    ]);
+    // a cart that names no country yet has no price of the manual delivery
+    expect(map().deliveryQuotes).toEqual([
+      { method: 'manual', price: null, freeFrom: null, remainingToFree: null },
       { method: 'pickup', price: 0, freeFrom: null, remainingToFree: null },
     ]);
     expect(map({ status: 'waiting', confirmed: true })).not.toHaveProperty('deliveryQuotes');
@@ -467,7 +478,7 @@ describe('mapOrderRowToResponse', () => {
   });
 
   // the buyer is told who carries the order once it is shipped, never what the shop pays for it
-  it('gives the buyer the send on its way once the order is shipped, without its cost', () => {
+  it('gives the buyer the send from the moment a carrier took it, without its cost', () => {
     const shipped = map({
       status: 'shipped',
       confirmed: true,
@@ -481,12 +492,16 @@ describe('mapOrderRowToResponse', () => {
       shipments: [send()],
     });
 
-    expect(shipped.delivery?.shipment).toEqual({
-      carrier: 'DHL',
-      trackingNumber: 'JD0146',
-      trackingUrl: 'https://dhl.example.com/JD0146',
-    });
-    expect(paid.delivery?.shipment).toBeNull();
+    expect(shipped.delivery?.shipments).toEqual([
+      {
+        state: 'sent',
+        carrier: 'DHL',
+        trackingNumber: 'JD0146',
+        trackingUrl: 'https://dhl.example.com/JD0146',
+      },
+    ]);
+    // an order of several parcels shows the ones taken while it waits for the others
+    expect(paid.delivery?.shipments).toEqual(shipped.delivery?.shipments);
     expect(shipped).not.toHaveProperty('shipments');
     expect(JSON.stringify(shipped)).not.toContain('7.35');
   });
@@ -503,7 +518,7 @@ describe('mapOrderRowToResponse', () => {
       ],
     });
 
-    expect(out.delivery?.shipment?.carrier).toBe('DPD');
+    expect(out.delivery?.shipments[0]?.carrier).toBe('DPD');
   });
 
   it('gives a pickup no send', () => {
@@ -514,7 +529,7 @@ describe('mapOrderRowToResponse', () => {
       shipments: [send()],
     });
 
-    expect(out.delivery?.shipment).toBeNull();
+    expect(out.delivery?.shipments).toEqual([]);
   });
 
   it('gives an admin every send with its cost, the weight of the order and whether it is whole', () => {

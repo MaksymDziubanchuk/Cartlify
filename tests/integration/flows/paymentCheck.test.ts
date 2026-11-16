@@ -146,7 +146,7 @@ describe('an early warning of fraud of an order not sent', () => {
     expect(await listedIn(admin, 'paid_orders_waiting', buyer)).toEqual([orderId]);
     const shipped = await j.patch(admin, `/api/orders/${orderId}/status`, {
       status: 'shipped',
-      shipment: { carrier: 'Nova Poshta', trackingNumber: '20450000000031' },
+      shipments: [{ carrier: 'Nova Poshta', trackingNumber: '20450000000031' }],
     });
     expect(shipped.statusCode).toBe(200);
     expect(toBuyer(mails, buyer).map((mail) => mail.subject)).toEqual([

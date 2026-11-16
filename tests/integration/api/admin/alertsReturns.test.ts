@@ -306,6 +306,7 @@ describe('the new kinds in GET /api/admin/alerts', () => {
       'disputes_lost',
       ...NEW_KINDS,
       'worker_stalled',
+      'delivery_provider_down',
       'shop_settings_incomplete',
       'shop_locale_missing',
     ]);
@@ -502,7 +503,7 @@ describe('shipped_without_tracking', () => {
     const orderId = await placeOrder(app, csrf, buyer, product, 'paid');
     const res = await change(admin, 'PATCH', `/api/orders/${orderId}/status`, {
       status: 'shipped',
-      shipment,
+      shipments: [shipment],
     });
     expect(res.statusCode).toBe(200);
     return { orderId, shipmentId: res.json().shipments[0].id as number };
@@ -561,7 +562,7 @@ describe('shipped_without_tracking', () => {
     expect(back.statusCode).toBe(200);
     const resent = await change(admin, 'PATCH', `/api/orders/${again.orderId}/status`, {
       status: 'shipped',
-      shipment: { carrier: 'UPS', trackingNumber: 'C3' },
+      shipments: [{ carrier: 'UPS', trackingNumber: 'C3' }],
     });
     expect(resent.statusCode).toBe(200);
     // sent without a number and taken back, not sent again

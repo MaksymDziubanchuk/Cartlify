@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../helpers/csrf.js';
 import { closeSessions, createUser, uniqueTag, type TestUser } from '../../helpers/factories.js';
-import { deliveryBody, quotedDeliveryPrice } from '../../helpers/orders.js';
+import { deliveryBody } from '../../helpers/orders.js';
 import { createProductForm, formVariant } from '../../helpers/productForm.js';
 import { journeyOf } from '../../helpers/returnJourney.js';
 
@@ -159,7 +159,11 @@ describe('a product with variants, from the directory to the order', () => {
     const confirmed = await j.post(buyer, '/api/orders/current/confirm', {
       orderId: added.json().id,
       delivery: deliveryBody,
-      expectedDeliveryPrice: quotedDeliveryPrice(added.json()),
+      expectedDeliveryPrice: (
+        await j.post(buyer, '/api/orders/current/delivery-options', {
+          address: deliveryBody.address,
+        })
+      ).json().options[0].price,
     });
     expect(confirmed.statusCode).toBe(200);
     expect(confirmed.json()).toMatchObject({ total: 24 });

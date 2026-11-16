@@ -548,6 +548,9 @@ export async function createProduct(
     name?: string;
     // the rule of withdrawal of its own; without one it follows its category
     withdrawal?: WithdrawalRule;
+    // what customs need of it; without them it is not sent to a country with customs
+    hsCode?: string;
+    originCountry?: string;
   } = {},
 ): Promise<TestProduct> {
   const tag = uniqueTag();
@@ -566,6 +569,8 @@ export async function createProduct(
         categoryId: category.id,
         manufacturerId,
         ...(opts.withdrawal ? { withdrawal: opts.withdrawal } : {}),
+        ...(opts.hsCode ? { hsCode: opts.hsCode } : {}),
+        ...(opts.originCountry ? { originCountry: opts.originCountry } : {}),
         images: { create: { url: TEST_IMAGE_URL, position: 0 } },
       },
       select: { id: true, categoryId: true, images: { select: { id: true } } },

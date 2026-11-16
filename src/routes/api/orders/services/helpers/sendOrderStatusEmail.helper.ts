@@ -1,3 +1,4 @@
+import { sendsToAddress } from '@config/deliveryMethods.js';
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
@@ -88,10 +89,15 @@ function loadOrder(orderId: number) {
       select: { email: true, name: true, locale: true, deletedAt: true },
     });
 
-    // the send on its way: the latest that was not rolled back
-    const send = await tx.orderShipment.findFirst({
-      where: { orderId, returnId: null, rolledBackAt: null },
-      orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
+    // the parcels on their way, the first one first: the ones the carrier has, not taken back
+    const sends = await tx.orderShipment.findMany({
+      where: {
+        orderId,
+        returnId: null,
+        rolledBackAt: null,
+        state: { in: ['sent', 'delivered'] },
+      },
+      orderBy: { id: 'asc' },
       select: { carrier: true, trackingNumber: true, trackingUrl: true },
     });
 
@@ -112,7 +118,7 @@ function loadOrder(orderId: number) {
       backOf.set(row.orderItemId, (backOf.get(row.orderItemId) ?? 0) + row.quantity);
     }
 
-    return { ...order, user, endsAt, backOf, shipments: send ? [send] : [] };
+    return { ...order, user, endsAt, backOf, shipments: sends };
   });
 }
 
@@ -151,7 +157,9 @@ export async function sendOrderStatusEmail(
       .map((item) => ({ item, units: item.quantity - (order.backOf.get(item.id) ?? 0) }))
       .filter((line) => line.units > 0);
     const deliveryPrice =
-      order.delivery?.method === 'manual' ? order.delivery.price.toString() : null;
+      order.delivery && sendsToAddress(order.delivery.method)
+        ? order.delivery.price.toString()
+        : null;
     const priceCents = (line: (typeof sent)[number]) =>
       line.units === line.item.quantity
         ? cents(line.item.totalPrice.toString())
@@ -193,13 +201,7 @@ export async function sendOrderStatusEmail(
       currency: shopCurrency(),
       ...(order.user.name ? { userName: order.user.name } : {}),
       ...deliveryMailParts(order.delivery, locale),
-      ...(status === 'shipped' && order.shipments[0]
-        ? {
-            carrier: order.shipments[0].carrier,
-            trackingNumber: order.shipments[0].trackingNumber,
-            trackingUrl: order.shipments[0].trackingUrl,
-          }
-        : {}),
+      ...(status === 'shipped' ? { parcels: order.shipments } : {}),
       // the link of the page of withdrawal, with the code of the order after the #
       withdrawalUrl: withdrawalLinkOf(order.id),
       withdrawalDays: withdrawalPeriodDaysOf(order.withdrawalDays),

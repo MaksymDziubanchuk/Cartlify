@@ -1,6 +1,7 @@
 import { CLOUDINARY_PLACEHOLDERS, isolateEnv, STRIPE_PLACEHOLDER_KEY } from './isolateEnv.js';
 import { assertTestServices } from '../helpers/guard.js';
 import { isRealService } from '../helpers/services.js';
+import { SHIPPYPRO_TEST_WEBHOOK_SECRET } from '../helpers/shippyPro.js';
 
 // cloudinary: a mock unless the run takes it for real (service:cloudinary). Cloudinary has no test
 // mode, for real the uploads go to the account, into its test/ folder (tests/helpers/cloudinary.ts
@@ -42,6 +43,14 @@ const MOCK_SENDGRID = {
   SENDGRID_API_KEY: 'SG.cartlify-tests-mock',
   EMAIL_FROM: 'no-reply@shop.example.com',
 };
+
+// shippypro: a mock unless the run takes it for real (service:shippypro; tests/helpers/shippyPro.ts).
+// ShippyPro has no sandbox: for real the tests take SHIPPYPRO_API_TEST_KEY of .env (a key of its own
+// in the dashboard of the account), never SHIPPYPRO_API_KEY, and make no parcel there. The mock takes
+// the made-up key; the secret of the webhook is the tests' in both modes
+const realShippyPro = isRealService('shippypro');
+const SHIPPYPRO_KEY = 'SHIPPYPRO_API_KEY';
+const SHIPPYPRO_TEST_KEY = 'SHIPPYPRO_API_TEST_KEY';
 
 // docker test stack from docker-compose.test.yml, built by npm run db:test:up
 isolateEnv(
@@ -86,6 +95,8 @@ isolateEnv(
     DOCUMENT_MAX_BYTES: '6000000',
     // a characteristic of a choice holds 5 values at most here, so a test of the limit stays short
     ATTRIBUTE_OPTIONS_MAX: '5',
+    SHIPPYPRO_WEBHOOK_SECRET: SHIPPYPRO_TEST_WEBHOOK_SECRET,
+    ...(realShippyPro ? {} : { [SHIPPYPRO_KEY]: 'cartlify-tests-shippypro-mock' }),
     ...(realSendGrid ? {} : MOCK_SENDGRID),
     ...(realCloudinary ? {} : MOCK_CLOUDINARY),
   },
@@ -95,6 +106,7 @@ isolateEnv(
       ...(realStripe ? [STRIPE_TEST_KEY] : []),
       ...(realSendGrid ? [SENDGRID_TEST_KEY, SENDER_KEY] : []),
       ...(realOpenAi ? [OPENAI_TEST_KEY] : []),
+      ...(realShippyPro ? [SHIPPYPRO_TEST_KEY] : []),
     ],
   },
 );
@@ -139,5 +151,27 @@ if (realCloudinary) {
   }
 }
 
+// the key of the app is set here and not left to the environment: SHIPPYPRO_API_KEY of the shell
+// or of .env is the one of the app, a test does not take it
+if (realShippyPro) {
+  if (!process.env[SHIPPYPRO_TEST_KEY]?.trim()) {
+    throw new Error(`service:shippypro takes ${SHIPPYPRO_TEST_KEY} from .env or the environment`);
+  }
+  process.env[SHIPPYPRO_KEY] = process.env[SHIPPYPRO_TEST_KEY]!.trim();
+}
+
 // stop before any test file imports the app
 assertTestServices();
+
+// the env of the app is the one put in place above: a module imported by this file that imports
+// src/config/env.ts would have made it read .env first, and the tests would reach the database,
+// the redis and the services of dev. Only a test value passes
+const { default: appEnv } = await import('@config/env.js');
+for (const key of ['DATABASE_URL', 'REDIS_URL', 'SHIPPYPRO_API_KEY', 'SENDGRID_API_KEY'] as const) {
+  if (appEnv[key] !== (process.env[key]?.trim() ?? '')) {
+    throw new Error(
+      `the env of the app took ${key} before the setup of the tests: a module this setup imports ` +
+        'imports src/config/env.ts',
+    );
+  }
+}

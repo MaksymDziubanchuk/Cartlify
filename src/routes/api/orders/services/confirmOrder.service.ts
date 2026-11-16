@@ -8,7 +8,9 @@ import {
   assertAcceptedForOrder,
   recordConsents,
 } from '@routes/api/legal/services/helpers/legalDocuments.helper.js';
-import { deliveryPriceOf } from '@helpers/deliveryPrice.js';
+import { sendsToAddress } from '@config/deliveryMethods.js';
+import { customsNeededFor, productsWithoutCustomsData } from '@helpers/customs.js';
+import { carrierPriceFor, deliveryPriceOf, deliveryRuleOf } from '@helpers/deliveryPrice.js';
 import { currentPrice } from '@helpers/productSale.js';
 import { assertRedisReady } from '@redis/client.js';
 import { lowestMinimumTotal, shopCurrency } from '@providers/payments/index.js';
@@ -30,7 +32,15 @@ import {
   readOrderResponse,
   scheduleOrderReservationExpiry,
 } from './helpers/index.js';
+import {
+  cartForDelivery,
+  carrierOptionsFor,
+  linesWithoutShippingData,
+  optionOf,
+} from './helpers/carrierQuotes.helper.js';
 
+import type { FastifyBaseLogger } from 'fastify';
+import type { DeliveryWriteData } from './helpers/confirmOrder.helper.js';
 import type { ConfirmCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 import type { UserId } from 'types/ids.js';
 
@@ -99,6 +109,109 @@ async function changedPricesOf(actorId: UserId, orderId: number) {
   });
 }
 
+// The checks of a delivery to an address made before the transaction, and the price of a carrier:
+// a country with customs needs the customs data of every product (DELIVERY_CUSTOMS_DATA_MISSING); a
+// carrier needs the weight and the sizes of every variant (ORDER_ITEMS_NOT_DELIVERABLE), and its
+// price now from the delivery provider, which is outside the transaction (the five minutes of the
+// prices the page showed, else asked again): the carrier the buyer picked must still be among them
+// (DELIVERY_SERVICE_UNAVAILABLE), a provider that does not answer is 503. Nothing is read of an
+// order that is not a cart of the user: confirm_order says so. The checks see the cart and the
+// delivery of this moment (checked): the confirmation compares them with what it confirmed
+const WRITTEN_DELIVERY_SELECT = {
+  method: true,
+  country: true,
+  postalCode: true,
+  city: true,
+  street: true,
+  house: true,
+  apartment: true,
+  carrierName: true,
+  carrierService: true,
+  carrierConnection: true,
+} as const;
+
+// what the checks of a delivery depend on, as one text: the lines of the cart with what a carrier
+// and the customs read of them (not the name: the confirmation writes the one of the variant), and
+// the delivery the order has when none is sent
+const checkedOf = (cart: { lines: readonly { name: string }[] }, written: unknown): string =>
+  JSON.stringify({ lines: cart.lines.map(({ name: _name, ...line }) => line), written });
+
+async function checkDeliveryOfCart(
+  actorId: UserId,
+  orderId: number,
+  sent: DeliveryWriteData | null,
+  log: FastifyBaseLogger,
+): Promise<{ carrierPrice: number | null; checked: string | null }> {
+  const read = await tx(async (db) => {
+    await setUserContext(db, { userId: actorId, role: 'USER' });
+    const order = await db.order.findFirst({
+      where: { id: orderId, userId: actorId as any, confirmed: false },
+      select: { id: true },
+    });
+    if (!order) return null;
+
+    const written = sent
+      ? null
+      : await db.orderDelivery.findUnique({
+          where: { orderId },
+          select: WRITTEN_DELIVERY_SELECT,
+        });
+    return { cart: await cartForDelivery(db, order.id), written };
+  });
+  if (!read) return { carrierPrice: null, checked: null };
+
+  const checked = checkedOf(read.cart, read.written);
+  const delivery = sent ?? read.written;
+  if (!delivery || !sendsToAddress(delivery.method) || !delivery.country) {
+    return { carrierPrice: null, checked };
+  }
+
+  if (customsNeededFor(delivery.country)) {
+    const products = productsWithoutCustomsData(read.cart.lines);
+    if (products.length) throw new BadRequestError('DELIVERY_CUSTOMS_DATA_MISSING', { products });
+  }
+
+  if (delivery.method !== 'carrier') return { carrierPrice: null, checked };
+
+  const items = linesWithoutShippingData(read.cart);
+  if (items.length) throw new ConflictError('ORDER_ITEMS_NOT_DELIVERABLE', { items });
+  if (!read.cart.box) return { carrierPrice: null, checked };
+
+  const options = await carrierOptionsFor(
+    {
+      address: {
+        country: delivery.country,
+        postalCode: delivery.postalCode,
+        city: delivery.city!,
+        street: delivery.street!,
+        house: delivery.house!,
+        apartment: delivery.apartment,
+      },
+      box: read.cart.box,
+      lines: read.cart.lines,
+      value: read.cart.itemsTotal,
+    },
+    log,
+  );
+  const option = optionOf(options, {
+    carrierName: delivery.carrierName ?? '',
+    carrierService: delivery.carrierService ?? '',
+    connection: delivery.carrierConnection ?? '',
+  });
+  if (!option) throw new ConflictError('DELIVERY_SERVICE_UNAVAILABLE');
+
+  // what the buyer pays for it: free from the free-from sum only when it is the cheapest
+  return {
+    carrierPrice: carrierPriceFor(
+      read.cart.itemsTotal,
+      delivery.country,
+      option.price,
+      Math.min(...options.map((one) => one.price)),
+    ),
+    checked,
+  };
+}
+
 // what the delivery of an unconfirmed order of the user costs now, by the items it has: the price
 // a confirmation that the buyer saw another price for names. The method is the one sent with the
 // confirmation, else the one the order has
@@ -106,13 +219,15 @@ async function deliveryPriceNowOf(
   actorId: UserId,
   orderId: number,
   method: DeliveryMethodName | undefined,
+  country: string | null | undefined,
+  carrierPrice: number | null,
 ): Promise<number> {
   return prisma.$transaction(async (db) => {
     await setUserContext(db, { userId: actorId, role: 'USER' });
     const order = await db.order.findFirst({
       where: { id: orderId, userId: actorId as any, confirmed: false },
       select: {
-        delivery: { select: { method: true } },
+        delivery: { select: { method: true, country: true } },
         items: { select: { totalPrice: true } },
       },
     });
@@ -124,7 +239,12 @@ async function deliveryPriceNowOf(
       (sum, item) => sum + Math.round(Number(item.totalPrice) * 100),
       0,
     );
-    return deliveryPriceOf(chosen, itemsCents / 100);
+    return deliveryPriceOf(
+      chosen,
+      itemsCents / 100,
+      country ?? order.delivery?.country ?? null,
+      carrierPrice,
+    );
   });
 }
 
@@ -134,6 +254,7 @@ export async function confirmOrder({
   orderId,
   delivery,
   expectedDeliveryPrice,
+  log,
 }: ConfirmCurrentOrderDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
 
@@ -143,6 +264,13 @@ export async function confirmOrder({
 
   // refuse early so nothing is confirmed in db while redis is down
   assertRedisReady();
+
+  const { carrierPrice, checked } = await checkDeliveryOfCart(
+    actorId,
+    Number(orderId),
+    deliveryData,
+    log,
+  );
 
   try {
     const result = await tx(
@@ -222,16 +350,16 @@ export async function confirmOrder({
           (sum, item) => sum + Math.round(currentPrice(item.variant) * 100) * item.quantity,
           0,
         );
-        const method =
-          deliveryData?.method ??
-          (
-            await db.orderDelivery.findUnique({
+        const written = deliveryData
+          ? null
+          : await db.orderDelivery.findUnique({
               where: { orderId: Number(orderId) },
-              select: { method: true },
-            })
-          )?.method;
+              select: { method: true, country: true },
+            });
+        const method = deliveryData?.method ?? written?.method;
+        const country = deliveryData ? deliveryData.country : (written?.country ?? null);
         const deliveryCents = method
-          ? Math.round(deliveryPriceOf(method, itemsCents / 100) * 100)
+          ? Math.round(deliveryPriceOf(method, itemsCents / 100, country, carrierPrice) * 100)
           : 0;
         if (items.length > 0 && itemsCents + deliveryCents < Math.round(minimum * 100)) {
           throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
@@ -241,15 +369,36 @@ export async function confirmOrder({
         }
 
         // confirm in db; the order holds its units reservationMinutes (15 unless root set one)
-        // and its delivery is priced by the rule of the shop
+        // and its delivery is priced by the rule of the zone of its country
         const settings = shopSettings();
+        const rule = method
+          ? deliveryRuleOf(method, country, carrierPrice)
+          : { price: null, freeFrom: null };
         await db.$executeRaw`select cartlify.confirm_order(
           ${Number(orderId)}::int,
           ${`${settings.reservationMinutes} minutes`}::interval,
-          ${settings.deliveryFlatPrice}::numeric,
-          ${settings.deliveryFreeFrom}::numeric,
+          ${rule.price}::numeric,
+          ${rule.freeFrom}::numeric,
           ${expectedDeliveryPrice}::numeric
         )`;
+
+        // the price of the carrier and the checks of the delivery were made before this
+        // transaction, outside it (the provider is asked there): a cart or a delivery that changed
+        // meanwhile was confirmed with what the other one cost and allowed. The confirmation holds
+        // the order now, so what it confirmed is compared with what was checked; another one is
+        // not confirmed, the buyer confirms again and the checks see it
+        if (checked !== null) {
+          const now = checkedOf(
+            await cartForDelivery(db, Number(orderId)),
+            deliveryData
+              ? null
+              : await db.orderDelivery.findUnique({
+                  where: { orderId: Number(orderId) },
+                  select: WRITTEN_DELIVERY_SELECT,
+                }),
+          );
+          if (now !== checked) throw new ResourceBusyError({ reason: 'CART_CHANGED_AT_CONFIRM' });
+        }
 
         const order = await readOrderResponse(db, orderId);
 
@@ -297,11 +446,23 @@ export async function confirmOrder({
       // the order has no delivery and the request did not bring one
       if (msg.includes('ORDER_DELIVERY_REQUIRED')) throw new BadRequestError('DELIVERY_REQUIRED');
 
+      // a carrier with no price: the cart got its items while the delivery was checked, so the
+      // provider was never asked; the buyer confirms again
+      if (msg.includes('ORDER_DELIVERY_PRICE_REQUIRED')) {
+        throw new ResourceBusyError({ reason: 'CARRIER_PRICE_MISSING_AT_CONFIRM' });
+      }
+
       // the price of the delivery the buyer saw is not the one the shop asks now: the buyer sees
       // the new one and confirms again
       if (msg.includes('ORDER_DELIVERY_PRICE_CHANGED')) {
         throw new ConflictError('DELIVERY_PRICE_CHANGED', {
-          price: await deliveryPriceNowOf(actorId, Number(orderId), delivery?.method),
+          price: await deliveryPriceNowOf(
+            actorId,
+            Number(orderId),
+            delivery?.method,
+            delivery?.address?.country,
+            carrierPrice,
+          ),
         });
       }
 

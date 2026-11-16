@@ -21,6 +21,8 @@ import { asAdmin } from '../../../helpers/db.js';
 import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 import { takeLogs } from '../../../helpers/logs.js';
+import { deliveryHarness } from '../../../helpers/providers.js';
+import { deliveryProvider } from '@providers/delivery/index.js';
 
 // PUT /api/root/shop-settings, PUT /api/root/shop-settings/:key and GET
 // /api/root/shop-settings/history: root sets every setting or one, a row for each that changes,
@@ -49,6 +51,27 @@ afterAll(async () => {
     await stopApp();
   }
 });
+
+// a zone of the delivery and the address the parcels go from, as root writes them
+const zone = (over: Record<string, unknown>) => ({
+  name: 'Spain',
+  countries: ['ES'],
+  manualPrice: 5,
+  freeFrom: null,
+  ...over,
+});
+
+const SENDER = {
+  name: 'Cartlify Shop',
+  street: 'Calle de la Paz',
+  house: '1',
+  apartment: null,
+  city: 'Valencia',
+  postalCode: '46003',
+  country: 'ES',
+  phone: '+34960000000',
+  email: 'shop@example.com',
+};
 
 const currentValues = async () =>
   (
@@ -166,19 +189,66 @@ describe('PUT /api/root/shop-settings', () => {
   // with a code naming it, and nothing is written. Every row has its details (null for none): a
   // test function with more parameters than its row is taken by jest for one that waits for done()
   it.each<[string, Record<string, unknown>, string, Record<string, unknown> | null]>([
-    ['a price of zero', { deliveryFlatPrice: 0 }, 'VALIDATION_ERROR', null],
-    ['a price over the most an amount holds', { deliveryFlatPrice: 1e9 }, 'VALIDATION_ERROR', null],
-    ['a price below the cent', { deliveryFlatPrice: 4.995 }, 'VALIDATION_ERROR', null],
     [
-      'a free-from below the cent',
-      { deliveryFlatPrice: 5, deliveryFreeFrom: 100.001 },
+      'a zone price below zero',
+      { deliveryZones: [zone({ manualPrice: -1 })] },
       'VALIDATION_ERROR',
       null,
     ],
     [
-      'a free-from with no price',
-      { deliveryFlatPrice: null, deliveryFreeFrom: 100 },
-      'DELIVERY_FREE_FROM_WITHOUT_PRICE',
+      'a zone price over the most an amount holds',
+      { deliveryZones: [zone({ manualPrice: 1e9 })] },
+      'VALIDATION_ERROR',
+      null,
+    ],
+    [
+      'a zone price below the cent',
+      { deliveryZones: [zone({ manualPrice: 4.995 })] },
+      'VALIDATION_ERROR',
+      null,
+    ],
+    [
+      'a free-from below the cent',
+      { deliveryZones: [zone({ freeFrom: 100.001 })] },
+      'VALIDATION_ERROR',
+      null,
+    ],
+    [
+      'a zone with no country',
+      { deliveryZones: [zone({ countries: [] })] },
+      'VALIDATION_ERROR',
+      null,
+    ],
+    [
+      'a country in two zones',
+      { deliveryZones: [zone({}), zone({ name: 'Iberia', countries: ['PT', 'ES'] })] },
+      'DELIVERY_ZONE_COUNTRY_REPEATED',
+      { countries: ['ES'] },
+    ],
+    [
+      'two zones of the rest',
+      {
+        deliveryZones: [zone({ countries: 'rest' }), zone({ name: 'Other', countries: 'rest' })],
+      },
+      'DELIVERY_ZONE_REST_REPEATED',
+      null,
+    ],
+    [
+      'two zones of one name',
+      { deliveryZones: [zone({}), zone({ countries: ['FR'] })] },
+      'DELIVERY_ZONE_NAME_REPEATED',
+      { names: ['Spain'] },
+    ],
+    [
+      'a carrier without the address the parcels go from',
+      { deliveryMethods: ['manual', 'carrier'], deliverySender: null },
+      'DELIVERY_SENDER_REQUIRED',
+      null,
+    ],
+    [
+      'a sender with a phone not in the international form',
+      { deliverySender: { ...SENDER, phone: '0960000000' } },
+      'VALIDATION_ERROR',
       null,
     ],
     [
@@ -211,10 +281,21 @@ describe('PUT /api/root/shop-settings', () => {
       null,
     ],
     ['a method named twice', { deliveryMethods: ['manual', 'manual'] }, 'VALIDATION_ERROR', null],
-    ['a country named twice', { deliveryCountries: ['UA', 'UA'] }, 'VALIDATION_ERROR', null],
+    [
+      'a country named twice in a zone',
+      { deliveryZones: [zone({ countries: ['UA', 'UA'] })] },
+      'VALIDATION_ERROR',
+      null,
+    ],
     [
       'a country the app does not know how to take a postal code of',
-      { deliveryCountries: ['UA', 'ZZ'] },
+      { deliveryZones: [zone({ countries: ['UA', 'ZZ'] })] },
+      'DELIVERY_COUNTRY_NOT_SUPPORTED',
+      { countries: ['ZZ'] },
+    ],
+    [
+      'a country free of customs the app does not know',
+      { customsFreeCountries: ['ES', 'ZZ'] },
       'DELIVERY_COUNTRY_NOT_SUPPORTED',
       { countries: ['ZZ'] },
     ],
@@ -274,6 +355,40 @@ describe('PUT /api/root/shop-settings', () => {
     expect(res.json()).toMatchObject({ errorCode, ...(details ? { details } : {}) });
     // the refusal wrote nothing
     expect(await rowCount()).toBe(total);
+  });
+
+  it('refuses a carrier while the server has no key of the delivery provider, and takes it with one', async () => {
+    const values = await writableValues();
+    const carrier = {
+      ...values,
+      deliveryMethods: ['manual', 'carrier'],
+      deliverySender: SENDER,
+      deliveryZones: [zone({})],
+    };
+
+    const refused = await deliveryHarness[deliveryProvider.name].withoutKey(() =>
+      put(root, carrier),
+    );
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({ errorCode: 'DELIVERY_PROVIDER_NOT_CONFIGURED' });
+
+    const taken = await put(root, carrier);
+    expect(taken.statusCode).toBe(200);
+    expect(taken.json()).toMatchObject({
+      deliveryMethods: ['manual', 'carrier'],
+      deliverySender: SENDER,
+      deliveryZones: [zone({})],
+    });
+
+    // the key taken away later: root still changes the other settings, the carriers stay on
+    const renamed = await deliveryHarness[deliveryProvider.name].withoutKey(() =>
+      put(root, { ...carrier, shopName: 'Cartlify carriers' }),
+    );
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ shopName: 'Cartlify carriers' });
+
+    // as the file found it
+    expect((await put(root, values)).statusCode).toBe(200);
   });
 });
 

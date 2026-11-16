@@ -1,3 +1,4 @@
+import { sendsToAddress } from '@config/deliveryMethods.js';
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
@@ -142,7 +143,10 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       ...(order.user.name ? { userName: order.user.name } : {}),
       ...deliveryMailParts(order.delivery, locale),
       // what the buyer pays for the delivery, none for a pickup
-      deliveryPrice: order.delivery?.method === 'manual' ? order.delivery.price.toString() : null,
+      deliveryPrice:
+        order.delivery && sendsToAddress(order.delivery.method)
+          ? order.delivery.price.toString()
+          : null,
       attachedDocuments: documents.map((doc) => doc.kind),
       // the link of the page of withdrawal, with the code of the order after the #
       withdrawalUrl: withdrawalLinkOf(order.id),

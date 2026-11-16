@@ -351,7 +351,9 @@ describe('the events of the lines of an order', () => {
   it('names the steps of shipping and the steps back, one at a time', async () => {
     const orderId = await paid();
 
-    expect((await step(orderId, 'shipped', { shipment: { carrier: 'DHL' } })).statusCode).toBe(200);
+    expect((await step(orderId, 'shipped', { shipments: [{ carrier: 'DHL' }] })).statusCode).toBe(
+      200,
+    );
     expect((await step(orderId, 'delivered')).statusCode).toBe(200);
     expect((await step(orderId, 'shipped')).statusCode).toBe(200);
     expect((await step(orderId, 'paid', { keepShippingCost: false })).statusCode).toBe(200);
@@ -415,7 +417,7 @@ describe('the events of the lines of an order', () => {
   // both is a line of each
   it('names the change of the details of a send, of its cost and of the delivery data', async () => {
     const orderId = await paid();
-    await step(orderId, 'shipped', { shipment: { carrier: 'DHL' } });
+    await step(orderId, 'shipped', { shipments: [{ carrier: 'DHL' }] });
     const [shipment] = await asAdmin((tx) => tx.orderShipment.findMany({ where: { orderId } }));
     const second = await paid();
     const url = `/api/orders/${orderId}/shipments/${shipment!.id}`;

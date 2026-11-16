@@ -335,7 +335,7 @@ describe('part of the payment of an order not sent, given back in the dashboard 
     // the admin sends the order, the buyer is told it is on its way
     const shipped = await j.patch(admin, `/api/orders/${orderId}/status`, {
       status: 'shipped',
-      shipment: { carrier: 'Nova Poshta', trackingNumber: '20450000000011' },
+      shipments: [{ carrier: 'Nova Poshta', trackingNumber: '20450000000011' }],
     });
     expect(shipped.statusCode).toBe(200);
     expect(mailTo(mails, buyer.email, `Order #${orderId} is shipped`).text).toContain(

@@ -1,7 +1,8 @@
 import { shopSettings } from '@config/shopSettings.js';
+import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import type { AiMessageDto } from '@providers/ai/index.js';
-import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
-import type { ReturnStatus } from '@prisma/client';
+import type { GetDeliveryMethodsResponseDto } from 'types/dto/delivery.dto.js';
+import type { ParcelState, ReturnStatus } from '@prisma/client';
 import type { BuyerReturnDto, BuyerReturnStep } from 'types/dto/returns.dto.js';
 
 export type ChatBotActorRole = 'GUEST' | 'USER';
@@ -87,13 +88,15 @@ export interface ChatBotOrderContextItemDto {
   withdrawal: ChatBotWithdrawalContextDto | null;
   returns: ChatBotReturnContextItemDto[];
   // how it goes to the customer, without the address and the phone; none before the confirmation
-  delivery: { method: 'manual' | 'pickup'; price: number; country: string | null } | null;
-  // the send on its way, what the admin wrote of it
-  shipment: {
+  delivery: { method: DeliveryMethodName; price: number; country: string | null } | null;
+  // the parcels on their way as the buyer sees them, the first one first: who carries each, how to
+  // follow it, where it stands
+  shipments: {
     carrier: string | null;
     trackingNumber: string | null;
     trackingUrl: string | null;
-  } | null;
+    state: ParcelState;
+  }[];
 }
 
 export interface BuildChatBotPromptDto {
@@ -109,8 +112,9 @@ export interface BuildChatBotPromptDto {
   currency: string;
   // how the payment providers the customer may pay with are named (their labels)
   paymentProviders: string[];
-  // the ways the shop delivers an order, as the list of the delivery methods gives them
-  delivery: DeliveryMethodInfoDto[];
+  // the ways the shop delivers an order and the zones it delivers to, as the list of the delivery
+  // methods gives them
+  delivery: Pick<GetDeliveryMethodsResponseDto, 'methods' | 'zones'>;
 }
 
 export interface BuildChatBotPromptResultDto {
@@ -198,25 +202,49 @@ const describePaymentPage = (paymentProviders: string[]): string =>
 const listWithOr = (words: string[]): string =>
   words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} or ${words.at(-1)}`;
 
-// the ways the shop delivers an order, the only facts of the delivery the model may name
-const describeDelivery = (methods: DeliveryMethodInfoDto[], currency: string): string[] => {
+// what the items must cost for a delivery to a zone to be free
+const freeFromText = (freeFrom: number | null, currency: string): string =>
+  freeFrom !== null ? `, and nothing when the items cost ${freeFrom} ${currency} or more` : '';
+
+// the ways the shop delivers an order and the zones, the only facts of the delivery the model may
+// name
+const describeDelivery = (
+  { methods, zones }: Pick<GetDeliveryMethodsResponseDto, 'methods' | 'zones'>,
+  currency: string,
+): string[] => {
   if (methods.length === 0) return [];
 
-  const lines = methods.map((method) => {
+  const lines = methods.flatMap((method) => {
     if (method.method === 'pickup') {
       const hours = method.hours ? ` (${method.hours})` : '';
-      return `- pickup: the customer collects the order at ${method.address ?? 'the shop'}${hours}; it costs nothing.`;
+      return [
+        `- pickup: the customer collects the order at ${method.address ?? 'the shop'}${hours}; it costs nothing.`,
+      ];
     }
 
-    const price =
-      method.price > 0
-        ? `the delivery costs ${method.price} ${currency}${
-            method.freeFrom !== null
-              ? `, and nothing when the items cost ${method.freeFrom} ${currency} or more`
-              : ''
-          }.`
-        : 'the delivery costs nothing.';
-    return `- by hand: the shop sends the order to an address in ${listWithOr(method.countries)}; ${price}`;
+    if (method.method === 'carrier') {
+      const countries = zones.flatMap((zone) => zone.countries);
+      return [
+        `- by a carrier: the shop sends the order to an address in ${listWithOr(countries)} with a carrier the customer picks when confirming the order, from a list of carriers with their prices and delivery times for the address.` +
+          zones
+            .filter((zone) => zone.freeFrom !== null)
+            .map(
+              (zone) =>
+                ` To ${listWithOr(zone.countries)} it costs nothing when the items cost ${zone.freeFrom} ${currency} or more.`,
+            )
+            .join(''),
+      ];
+    }
+
+    return zones
+      .filter((zone) => zone.manualPrice !== null)
+      .map((zone) => {
+        const price =
+          zone.manualPrice! > 0
+            ? `the delivery costs ${zone.manualPrice} ${currency}${freeFromText(zone.freeFrom, currency)}.`
+            : 'the delivery costs nothing.';
+        return `- by hand: the shop sends the order to an address in ${listWithOr(zone.countries)}; ${price}`;
+      });
   });
 
   return [
@@ -236,7 +264,7 @@ const buildSystemInstructions = (
   orders: ChatBotOrderContextItemDto[],
   currency: string,
   paymentProviders: string[],
-  delivery: DeliveryMethodInfoDto[],
+  delivery: Pick<GetDeliveryMethodsResponseDto, 'methods' | 'zones'>,
 ): string => {
   return [
     `You are ${shopSettings().shopName} assistant, a support and shopping helper inside the ${shopSettings().shopName} online shop.`,
@@ -425,7 +453,9 @@ const formatOrderContextItem = (order: ChatBotOrderContextItemDto, currency: str
     `placed ${order.createdAt} (UTC)`,
     ...(order.paidAt ? [`paid ${order.paidAt} (UTC)`] : []),
     ...(order.delivery ? [describeOrderDelivery(order.delivery, currency)] : []),
-    ...(order.shipment ? [describeShipment(order.shipment)] : []),
+    ...order.shipments.map((shipment, i, all) =>
+      describeShipment(shipment, all.length > 1 ? `parcel ${i + 1}` : 'send'),
+    ),
     `items: ${items}`,
     ...describeOrderReturns(order, currency),
   ].join('; ');
@@ -438,19 +468,30 @@ const describeOrderDelivery = (
 ): string =>
   delivery.method === 'pickup'
     ? 'delivery: pickup at the shop'
-    : `delivery: by hand to ${delivery.country ?? 'the address given'} for ${delivery.price} ${currency}`;
+    : `delivery: ${delivery.method === 'carrier' ? 'by a carrier' : 'by hand'} to ${delivery.country ?? 'the address given'} for ${delivery.price} ${currency}`;
 
-// what the admin wrote of the send: the carrier, the number, the link
+// where a parcel stands, in the words of the bot
+const PARCEL_STATE_MEANINGS: Partial<Record<ParcelState, string>> = {
+  delivered: 'delivered',
+  returning: 'going back to the shop',
+  returned: 'back at the shop',
+  lost: 'lost by the carrier',
+};
+
+// a parcel on its way: the carrier, the number, the link, and where it stands when it is no longer
+// simply on its way
 const describeShipment = (
-  shipment: NonNullable<ChatBotOrderContextItemDto['shipment']>,
+  shipment: ChatBotOrderContextItemDto['shipments'][number],
+  label: string,
 ): string => {
   const parts = [
     ...(shipment.carrier ? [`carrier ${shipment.carrier}`] : []),
     ...(shipment.trackingNumber ? [`tracking number ${shipment.trackingNumber}`] : []),
     ...(shipment.trackingUrl ? [`tracking link ${shipment.trackingUrl}`] : []),
   ];
+  const where = PARCEL_STATE_MEANINGS[shipment.state];
 
-  return `send: ${parts.length ? parts.join(', ') : 'no carrier or tracking number was given'}`;
+  return `${label}: ${parts.length ? parts.join(', ') : 'no carrier or tracking number was given'}${where ? ` (${where})` : ''}`;
 };
 
 // the money of the units of a statement, one part per state: refunded (with the day), on its way,

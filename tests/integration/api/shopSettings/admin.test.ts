@@ -31,9 +31,9 @@ afterAll(async () => {
 
 const VALUE_KEYS = [
   'deliveryMethods',
-  'deliveryFlatPrice',
-  'deliveryFreeFrom',
-  'deliveryCountries',
+  'deliveryZones',
+  'customsFreeCountries',
+  'deliverySender',
   'pickupAddress',
   'pickupHours',
   'shopName',
@@ -83,7 +83,7 @@ describe('GET /api/admin/shop-settings', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(Object.keys(body).sort()).toEqual(VALUE_KEYS);
-      expect(body).toHaveProperty('deliveryCountries');
+      expect(body).toHaveProperty('deliveryZones');
       expect(body).toHaveProperty('emailReplyTo');
     }
   });

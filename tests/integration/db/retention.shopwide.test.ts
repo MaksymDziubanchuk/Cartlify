@@ -1680,6 +1680,92 @@ describe('cartlify.cleanup_deleted_accounts_recipients', () => {
     });
   });
 
+  it('takes the label of a parcel and the labels and the numbers of its boxes away with the recipient, of no other order', async () => {
+    const BY_CARRIER: Partial<DeliveryData> = {
+      ...MANUAL,
+      method: 'carrier',
+      carrierName: 'MockExpress',
+      carrierService: 'Express',
+      carrierConnection: '7001',
+    };
+    const byCarrier = (db: DbSession) =>
+      paidOrderOf(db, leaver.id, admin.id, [[product.variantId, 1]], { flat: 6.5 }, BY_CARRIER);
+    // a parcel of the delivery provider with its label, and its box with a label and a number
+    const labelled = async (db: DbSession, orderId: number) => {
+      await db.as(rootActor());
+      const [parcel] = await db.rows<{ id: number }>(
+        `insert into cartlify.order_shipments
+           ("orderId", carrier, "trackingNumber", "providerParcelId", "labelUrl", state,
+            "shippedAt")
+         values ($1, 'MockExpress', $2, $2, 'https://cdn.example.com/labels/parcel.pdf',
+           'created'::cartlify."ParcelState", null)
+         returning id`,
+        orderId,
+        `MX${orderId}`,
+      );
+      const [item] = await db.rows<{ id: number }>(
+        'select id from cartlify.order_items where "orderId" = $1 order by id limit 1',
+        orderId,
+      );
+      await db.rows(
+        `insert into cartlify.shipment_boxes
+           ("shipmentId", number, "weightGrams", "lengthMm", "widthMm", "heightMm", items,
+            "labelUrl", "trackingNumber")
+         values ($1, 1, 1200, 300, 200, 100, $2::jsonb, 'https://cdn.example.com/labels/box.pdf',
+           $3)`,
+        parcel!.id,
+        JSON.stringify([{ orderItemId: item!.id, quantity: 1 }]),
+        `MXB${orderId}`,
+      );
+      return parcel!.id;
+    };
+    const labelsOf = async (db: DbSession, parcelId: number) => {
+      await db.as(rootActor());
+      const [row] = await db.rows<Record<'label' | 'number' | 'boxLabel' | 'boxNumber', unknown>>(
+        `select s."labelUrl" as label, s."trackingNumber" as number, b."labelUrl" as "boxLabel",
+           b."trackingNumber" as "boxNumber"
+         from cartlify.order_shipments as s
+         join cartlify.shipment_boxes as b on b."shipmentId" = s.id
+         where s.id = $1`,
+        parcelId,
+      );
+      return row!;
+    };
+
+    const result = await inRolledBackTx(async (db) => {
+      await publishPolicy(db, { recipient: 30 });
+      const gone = await byCarrier(db);
+      const goneParcel = await labelled(db, gone);
+      await cancelAndRefundIn(db, admin.id, gone);
+      const kept = await byCarrier(db);
+      const keptParcel = await labelled(db, kept);
+      await markDeleted(db, leaver, daysAgo(40));
+
+      await cleanup(db, 'cleanup_deleted_accounts_recipients');
+      return {
+        gone,
+        kept,
+        goneLabels: await labelsOf(db, goneParcel),
+        keptLabels: await labelsOf(db, keptParcel),
+      };
+    });
+
+    // the number of the parcel itself stays, as the one of a send by hand
+    expect(result.goneLabels).toEqual({
+      label: null,
+      number: `MX${result.gone}`,
+      boxLabel: null,
+      boxNumber: null,
+    });
+    // an order that is still worked keeps its recipient, and so its labels
+    expect(result.keptLabels).toEqual({
+      label: 'https://cdn.example.com/labels/parcel.pdf',
+      number: `MX${result.kept}`,
+      boxLabel: 'https://cdn.example.com/labels/box.pdf',
+      boxNumber: `MXB${result.kept}`,
+    });
+  });
+
   it('keeps the recipient of an order that is paid or on its way, and of one with an open statement of return', async () => {
     const result = await inRolledBackTx(async (db) => {
       await publishPolicy(db, { recipient: 30 });

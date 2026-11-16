@@ -284,7 +284,7 @@ describeMock('a dispute of an order not sent', () => {
     expect(await listedIn('disputes_lost', { orderId })).toEqual([]);
     const shipped = await j.patch(admin, `/api/orders/${orderId}/status`, {
       status: 'shipped',
-      shipment: { carrier: 'Nova Poshta', trackingNumber: '20450000000021' },
+      shipments: [{ carrier: 'Nova Poshta', trackingNumber: '20450000000021' }],
     });
     expect(shipped.statusCode).toBe(200);
     expect(toBuyer(mails, buyer).map((mail) => mail.subject)).toEqual([

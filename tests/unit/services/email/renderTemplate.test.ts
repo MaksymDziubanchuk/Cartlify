@@ -172,6 +172,18 @@ describe('renderTemplate', () => {
     carrier: 'DHL',
     trackingNumber: 'JD0146',
     trackingUrl: 'https://track.example.com/JD0146',
+    // the parcels of a sent order, each with who carries it and how to follow it
+    parcels: [
+      {
+        heading: 'Parcel 1',
+        carrier: 'DHL',
+        trackingNumber: 'JD0146',
+        trackingUrl: 'https://track.example.com/JD0146',
+        carrierLabel: 'Carrier',
+        trackingNumberLabel: 'Tracking number',
+        followParcelLabel: 'Follow your parcel',
+      },
+    ],
     // how the mail of a delivered order says the order came to the buyer
     statement: 'is delivered',
     heading: 'Order delivered',

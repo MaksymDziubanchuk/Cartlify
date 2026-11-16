@@ -408,6 +408,11 @@ model Product {
   euResponsible   Party?  @relation("ProductEuResponsible", fields: [euResponsibleId], references: [id], onDelete: Restrict)
   // the warnings of the product, plain text, optional (db/06 holds the length)
   warnings        String?
+  // what customs need for a parcel that crosses a border: the code of the goods (HS, 6 to 10
+  // digits) and the country they were made in (two capital letters); optional, a cart with a
+  // product without them is not sent to a country with customs (db/06)
+  hsCode          String? @db.VarChar(10)
+  originCountry   String? @db.VarChar(2)
 
   // the rule of withdrawal of its own; empty follows its category, and the nearest category above
   // it that has one, and by default allowed (product_withdrawals, db/05)
@@ -834,9 +839,29 @@ enum PaymentProvider {
 // How an order gets to its buyer. manual: the shop sends it to an address itself, with a carrier it
 // picks and works with outside the app. pickup: the buyer collects it at the shop. A carrier
 // connected to the app would be another value.
+// manual: the shop sends the order itself, with a carrier outside the app, at the price of the zone of
+// the country; pickup: the buyer collects it at the shop; carrier: a carrier of the delivery
+// provider (src/providers/delivery) the buyer picked from its prices, the parcel made by the app
 enum DeliveryMethod {
   manual
   pickup
+  carrier
+}
+
+// Where a parcel of the delivery provider stands: made with its label (created), waiting for its
+// void after the order was cancelled or the admin made it wrong (void_pending), voided at the
+// carrier or by hand (voided), taken by the carrier (sent), delivered, going back to the shop
+// (returning), back at the shop (returned), lost by the carrier. A send of a manual order and a
+// parcel of a statement are sent from the start and stay so
+enum ParcelState {
+  created
+  void_pending
+  voided
+  sent
+  delivered
+  returning
+  returned
+  lost
 }
 
 // A cart or an order of a buyer: one row goes through the whole life (see OrderStatus). The status,
@@ -947,6 +972,14 @@ model OrderDelivery {
   // a word for the courier
   note String? @db.VarChar(500)
 
+  // the carrier the buyer picked for the method carrier, the line of the prices as the delivery
+  // provider gave it: the carrier, its service and its connection at the provider. All three for the
+  // method carrier, none for the others (db/06); the buyer writes them with the address, an admin
+  // changes them to another carrier of the provider before the parcels are made
+  carrierName       String? @db.VarChar(100)
+  carrierService    String? @db.VarChar(100)
+  carrierConnection String? @db.VarChar(100)
+
   // what the buyer pays for the delivery, in the currency of the shop; part of Order.total from the
   // confirmation on (while the order is a cart again the price stays on the row and the total holds
   // the items only).
@@ -1009,8 +1042,16 @@ model OrderShipment {
   // money journal is then corrected to nothing and not written again
   expense Boolean @default(true)
 
-  // when the parcel was sent (a parcel refused at the door: the moment of the refusal)
-  shippedAt    DateTime  @default(now())
+  // a parcel of the delivery provider: its id there (the events name it by it), the label to print (a
+  // pdf with the address and the phone of the recipient) and where it stands; empty and sent for
+  // a send of a manual order and for a parcel of a statement (db/06)
+  providerParcelId String?     @unique @db.VarChar(100)
+  labelUrl         String?     @db.VarChar(500)
+  state            ParcelState @default(sent)
+
+  // when the parcel was sent (a parcel refused at the door: the moment of the refusal); empty while
+  // the carrier has not taken a parcel of the provider (created, void_pending, voided)
+  shippedAt    DateTime? @default(now())
   // when the status went back from shipped (a send of the order only)
   rolledBackAt DateTime?
   createdAt    DateTime  @default(now())
@@ -1020,11 +1061,45 @@ model OrderShipment {
   moneyLogs     MoneyLog[]
   // the rows of a statement a parcel to the buyer carried back
   itemsSentBack OrderReturnItem[] @relation("ReturnItemSentBack")
+  // the boxes of a parcel to the buyer
+  boxes         ShipmentBox[]
 
   @@index([orderId, shippedAt])
   @@index([returnId])
   @@index([shippedAt])
+  @@index([state])
   @@map("order_shipments")
+}
+
+// A box of a parcel to the buyer, with what is in it: its weight and its sides (all four, or none
+// for a manual send without them), the number and the label of the carrier when it gives one a box,
+// and its items, a list of { orderItemId, quantity } of the order of the parcel (db/05, db/06). The
+// live parcels of an order never hold more units of an item than were bought. Written once with
+// its parcel: a parcel made wrong is voided and made again, a send taken back keeps its boxes as
+// history
+model ShipmentBox {
+  id Int @id @default(autoincrement())
+
+  shipmentId Int
+  shipment   OrderShipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  // 1, 2, ... within its parcel
+  number Int
+
+  weightGrams Int?
+  lengthMm    Int?
+  widthMm     Int?
+  heightMm    Int?
+
+  trackingNumber String? @db.VarChar(100)
+  labelUrl       String? @db.VarChar(500)
+
+  items Json
+
+  createdAt DateTime @default(now())
+
+  @@unique([shipmentId, number], map: "shipment_boxes_number_uidx")
+  @@map("shipment_boxes")
 }
 
 // A line of an order: a variant of a product and a quantity. The database sets unitPrice and

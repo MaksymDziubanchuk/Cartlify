@@ -522,7 +522,7 @@ describe('GET /api/orders/:orderId: what holds the order and its money (admin an
       method: 'PATCH',
       url: `/api/orders/${orderId}/status`,
       headers: withCsrf(csrf, accessCookie(admin)),
-      payload: { status: 'shipped', shipment: { carrier: 'DHL', cost: 7 } },
+      payload: { status: 'shipped', shipments: [{ carrier: 'DHL', cost: 7 }] },
     });
     expect(shipped.statusCode).toBe(200);
 

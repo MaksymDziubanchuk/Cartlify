@@ -225,6 +225,7 @@ describe('the product routes', () => {
       'euResponsible.email',
       'euResponsible.name',
       'euResponsibleId',
+      'hsCode',
       'images',
       'manufacturer.address',
       'manufacturer.country',
@@ -232,6 +233,7 @@ describe('the product routes', () => {
       'manufacturer.name',
       'manufacturerId',
       'name',
+      'originCountry',
       'stock',
       'variants',
       'warnings',
@@ -492,9 +494,11 @@ describe('the product routes', () => {
       'createdAt',
       'documents',
       'euResponsible',
+      'hsCode',
       'id',
       'manufacturer',
       'name',
+      'originCountry',
       'reviewsCount',
       'warnings',
       'withdrawal',
@@ -707,13 +711,14 @@ describe('the refusals every route shares', () => {
     ]);
   });
 
-  // the health checks and the events of the payment and mail providers are outside the limit
+  // the health checks and the events of the payment, mail and delivery providers are outside the limit
   it('names RATE_LIMITED for every route the rate limit counts', () => {
     const free = [
       '/health/',
       '/ready/',
       '/api/payments/stripe/webhook',
       '/api/newsletters/sendgrid/webhook',
+      '/api/delivery/shippypro/webhook',
     ];
     const counted = operations().filter(({ path }) => !free.includes(path));
 

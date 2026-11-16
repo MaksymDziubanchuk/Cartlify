@@ -1,5 +1,6 @@
 import { shopSettings } from '@config/shopSettings.js';
 import { normalizePostalCode } from '@config/deliveryCountries.js';
+import { methodGoesTo, shopZoneOf } from '@helpers/deliveryPrice.js';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import { freeUnits } from '@db/expiredStock.helper.js';
 import { isPhone } from '@helpers/profileText.js';
@@ -81,25 +82,31 @@ export type DeliveryWriteData = {
   house: string | null;
   apartment: string | null;
   note: string | null;
+  // the carrier of the delivery provider of the method carrier, none for the others
+  carrierName: string | null;
+  carrierService: string | null;
+  carrierConnection: string | null;
 };
 
 // the delivery an order already has must still be one the shop offers: the owner may have changed
-// the methods or the countries since the buyer wrote it
+// the methods or the zones since the buyer wrote it. A delivery to an address goes to a country of a
+// zone, the manual one to a zone with a price of it (methodGoesTo)
 export function assertDeliveryOfShop(method: DeliveryMethodName, country: string | null): void {
   const settings = shopSettings();
   if (!settings.deliveryMethods.includes(method)) {
     throw new BadRequestError('DELIVERY_METHOD_NOT_AVAILABLE', { method });
   }
 
-  if (method === 'manual' && (!country || !settings.deliveryCountries.includes(country))) {
+  if (!methodGoesTo(method, country)) {
     throw new BadRequestError('DELIVERY_COUNTRY_NOT_ALLOWED', { country });
   }
 }
 
-// the address of a manual delivery in the form it is written in: the shop delivers to the country,
-// the postal code is one of that country in its own form, the parts are what they should be
+// the address of a delivery to an address in the form it is written in: the shop delivers to the
+// country (it is in a zone), the postal code is one of that country in its own form, the parts are
+// what they should be
 export function buildAddressData(address: NonNullable<ConfirmDeliveryBodyDto['address']>) {
-  if (!shopSettings().deliveryCountries.includes(address.country)) {
+  if (!shopZoneOf(address.country)) {
     throw new BadRequestError('DELIVERY_COUNTRY_NOT_ALLOWED', { country: address.country });
   }
 
@@ -144,12 +151,26 @@ export function buildDeliveryData(input: ConfirmDeliveryBodyDto): DeliveryWriteD
   // the phone is taken as it is sent, the same as the profile phone
   if (!isPhone(input.recipientPhone)) throw new BadRequestError('RECIPIENT_PHONE_INVALID');
 
+  // the carrier the buyer picked goes with the method carrier only
+  if (input.method === 'carrier' && !input.carrier) {
+    throw new BadRequestError('DELIVERY_CARRIER_REQUIRED');
+  }
+  if (input.method !== 'carrier' && input.carrier !== undefined) {
+    throw new BadRequestError('DELIVERY_CARRIER_NOT_ALLOWED');
+  }
+  const carrier = {
+    carrierName: input.carrier?.name.trim() || null,
+    carrierService: input.carrier?.service.trim() || null,
+    carrierConnection: input.carrier?.connection.trim() || null,
+  };
+
   const person = {
     method: input.method,
     recipientFirstName: firstName,
     recipientLastName: lastName,
     recipientPhone: input.recipientPhone,
     note: input.note?.trim() || null,
+    ...carrier,
   };
 
   if (input.method === 'pickup') {
@@ -168,5 +189,11 @@ export function buildDeliveryData(input: ConfirmDeliveryBodyDto): DeliveryWriteD
 
   if (!input.address) throw new BadRequestError('DELIVERY_ADDRESS_REQUIRED');
 
-  return { ...person, ...buildAddressData(input.address) };
+  const address = buildAddressData(input.address);
+  // the manual delivery goes to a zone that has a price of it
+  if (!methodGoesTo(input.method, address.country)) {
+    throw new BadRequestError('DELIVERY_COUNTRY_NOT_ALLOWED', { country: address.country });
+  }
+
+  return { ...person, ...address };
 }

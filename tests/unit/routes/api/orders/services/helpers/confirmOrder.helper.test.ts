@@ -9,7 +9,11 @@ import {
 import { BadRequestError } from '@utils/errors.js';
 import type { ConfirmDeliveryBodyDto } from 'types/dto/orders.dto.js';
 
-import { resetShopSettings, setShopSettings } from '../../../../../../helpers/shopSettings.js';
+import {
+  resetShopSettings,
+  setShopSettings,
+  TEST_ZONE,
+} from '../../../../../../helpers/shopSettings.js';
 import { thrownBy } from '../../../../../../helpers/errors.js';
 
 afterEach(resetShopSettings);
@@ -60,7 +64,7 @@ describe('isRecipientName', () => {
 
 describe('buildAddressData', () => {
   it('cuts the spaces around the parts and gives the postal code in the form of its country', () => {
-    setShopSettings({ deliveryCountries: ['PL'] });
+    setShopSettings({ deliveryZones: [{ ...TEST_ZONE, countries: ['PL'] }] });
 
     expect(
       buildAddressData({
@@ -143,6 +147,9 @@ describe('buildDeliveryData', () => {
       }),
     ).toEqual({
       method: 'manual',
+      carrierName: null,
+      carrierService: null,
+      carrierConnection: null,
       recipientFirstName: 'Anna',
       recipientLastName: 'Koval',
       recipientPhone: '+380501234567',
@@ -162,6 +169,9 @@ describe('buildDeliveryData', () => {
 
     expect(buildDeliveryData({ ...person, method: 'pickup' })).toEqual({
       method: 'pickup',
+      carrierName: null,
+      carrierService: null,
+      carrierConnection: null,
       recipientFirstName: 'Anna',
       recipientLastName: 'Koval',
       recipientPhone: '+380501234567',

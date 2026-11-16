@@ -4,6 +4,7 @@ import { loadShopSettings, shopSettings } from '@config/shopSettings.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { startOrderTimeoutWorker, stopOrderTimeoutWorker } from './workers/orderTimeout.worker.js';
 import { startMoneyRefundWorker, stopMoneyRefundWorker } from './workers/moneyRefund.worker.js';
+import { startParcelVoidWorker, stopParcelVoidWorker } from './workers/parcelVoid.worker.js';
 import { aiProvider } from '@providers/ai/index.js';
 import { fileStorage } from '@providers/files/index.js';
 import { startupWarnings } from '@config/startupWarnings.js';
@@ -58,6 +59,10 @@ async function bootstrap() {
   startMoneyRefundWorker(app.log);
   app.log.info('money refund worker started');
 
+  // the parcels of the delivery provider that wait for their void are voided at the provider
+  startParcelVoidWorker(app.log);
+  app.log.info('parcel void worker started');
+
   // what the file storage draws the avatars of letters with; the start does not wait for it, a
   // failure goes to the log and the next start tries again
   void fileStorage.prepareLetterAvatars(app.log);
@@ -81,6 +86,7 @@ const shutdown = createShutdown({
     // stop background jobs first so they do not start new work during shutdown
     () => stopOrderTimeoutWorker(),
     () => stopMoneyRefundWorker(),
+    () => stopParcelVoidWorker(),
     // stop accepting requests and wait for active ones to finish
     async () => {
       await app.close();

@@ -33,6 +33,9 @@ export const productResponseSelect = {
   manufacturerId: true,
   euResponsibleId: true,
   warnings: true,
+  // what customs need of it
+  hsCode: true,
+  originCountry: true,
   // the rule of its own; the rule it has is read apart (readProductWithdrawals)
   withdrawal: true,
   views: true,
@@ -54,6 +57,8 @@ export type ProductResponseRow = {
   manufacturerId: number;
   euResponsibleId: number | null;
   warnings: string | null;
+  hsCode: string | null;
+  originCountry: string | null;
   withdrawal: WithdrawalRuleName | null;
   views: number;
   popularity: number;
@@ -166,6 +171,9 @@ export function mapProductCard(args: {
     manufacturer: extras.manufacturer,
     euResponsible: extras.euResponsible,
     warnings: product.warnings,
+    // what customs need for a parcel that crosses a border
+    hsCode: product.hsCode,
+    originCountry: product.originCountry,
     // the instructions and certificates, in the order an admin gave them
     documents: extras.documents,
     // what the law lets a buyer do with the goods; an admin sees where the rule comes from too

@@ -1,11 +1,12 @@
 import { t } from '@config/i18n.js';
 import { shopSettings } from '@config/shopSettings.js';
+import { sendsToAddress, type DeliveryMethodName } from '@config/deliveryMethods.js';
 import { pickupHoursText } from '@helpers/pickupHours.js';
 
 // where and to whom an order goes, as the mails, the lists and the files of the shop print it
 
 export type DeliveryTextParts = {
-  method: 'manual' | 'pickup';
+  method: DeliveryMethodName;
   recipientFirstName: string;
   recipientLastName: string;
   recipientPhone: string;
@@ -17,10 +18,11 @@ export type DeliveryTextParts = {
   apartment: string | null;
 };
 
-// the address of a manual delivery in one line: the street and the house, the apartment (named in
-// the language of the mail), the postal code and the city, the country; empty for a pickup
+// the address of a delivery to an address (manual, carrier) in one line: the street and the house,
+// the apartment (named in the language of the mail), the postal code and the city, the country;
+// empty for a pickup
 export function addressLineOf(d: DeliveryTextParts, locale: string): string {
-  if (d.method !== 'manual') return '';
+  if (!sendsToAddress(d.method)) return '';
 
   return [
     [d.street, d.house].filter(Boolean).join(' '),

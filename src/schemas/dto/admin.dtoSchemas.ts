@@ -2710,6 +2710,11 @@ const ALERT_KINDS = [
   'pickup_not_collected',
   'shipped_without_cost',
   'shipped_without_tracking',
+  'parcels_not_collected',
+  'parcels_void_pending',
+  'parcels_coming_back',
+  'parcels_lost',
+  'parcels_ahead_of_order',
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
@@ -2740,6 +2745,7 @@ const ALERT_KINDS = [
   'returns_money_short',
   'returns_money_overpaid',
   'worker_stalled',
+  'delivery_provider_down',
   'shop_settings_incomplete',
   'shop_locale_missing',
   'newsletter_undelivered',
@@ -2827,7 +2833,7 @@ const adminAlertsResponseSchema = {
               'The request to the list of the app with the cases of the kind, the most urgent ' +
               'first: the path and its query; the frontend adds a limit, a sort of that list or ' +
               'a filter. Its rows are the cases the kind counts, the ones put aside too. null ' +
-              'for the worker and for the stop of the sending worker.',
+              'for the worker, the delivery provider and the stop of the sending worker.',
           },
           occurredAt: {
             anyOf: [dateTimeSchema, { type: 'null' }],
@@ -2835,7 +2841,8 @@ const adminAlertsResponseSchema = {
               'When the thing the alert tells of last happened, for a kind that is an event: ' +
               'the time of the last stop of the sending worker of the newsletters (it stops ' +
               'when the whole stream has a problem, and the alert goes out when a pass goes ' +
-              'through). null for every other kind, and for this one while it has not stopped.',
+              'through), the time the delivery provider stopped answering (while the alert ' +
+              'counts it). null for every other kind, and for these while nothing happened.',
           },
         },
         required: ['kind', 'subscribed', 'count', 'dismissed', 'threshold', 'list', 'occurredAt'],

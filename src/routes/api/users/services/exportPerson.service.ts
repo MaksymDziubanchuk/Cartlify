@@ -68,7 +68,8 @@ export type ExportPersonResponseDto = {
 function proofOf(
   parcel:
     | {
-        shippedAt: Date;
+        // a parcel of a statement is sent from the start (order_shipments_state_chk), never empty
+        shippedAt: Date | null;
         carrier: string | null;
         trackingNumber: string | null;
         trackingUrl: string | null;

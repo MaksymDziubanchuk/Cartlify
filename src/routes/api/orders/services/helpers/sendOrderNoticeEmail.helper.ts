@@ -50,14 +50,20 @@ function loadOrder(orderId: number) {
       select: { email: true, name: true, locale: true, deletedAt: true },
     });
 
-    // the send on its way: the latest that was not rolled back
-    const send = await tx.orderShipment.findFirst({
-      where: { orderId, returnId: null, rolledBackAt: null },
-      orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
+    // the parcels on their way, as the mail of the sending names them: the ones a carrier has or
+    // had, not rolled back; a parcel only made, or voided, is none of them
+    const shipments = await tx.orderShipment.findMany({
+      where: {
+        orderId,
+        returnId: null,
+        rolledBackAt: null,
+        state: { notIn: ['created', 'void_pending', 'voided'] },
+      },
+      orderBy: { id: 'asc' },
       select: { carrier: true, trackingNumber: true, trackingUrl: true },
     });
 
-    return { ...order, user, shipments: send ? [send] : [] };
+    return { ...order, user, shipments };
   });
 }
 

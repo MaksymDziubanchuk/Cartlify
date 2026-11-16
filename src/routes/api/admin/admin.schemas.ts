@@ -945,7 +945,15 @@ const getAlertsSchema = {
     'by hand and not delivered for some days (`shipped_orders_waiting`), pickups ready and not ' +
     'collected for some days (`pickup_not_collected`), sends whose cost the shop has not ' +
     'written for some days (`shipped_without_cost`), orders shipped by hand whose send has no ' +
-    'tracking number for some days (`shipped_without_tracking`), the money of the payments, ' +
+    'tracking number for some days (`shipped_without_tracking`; orders sent by a carrier are ' +
+    'in `shipped_orders_waiting` too), the parcels of the delivery provider (the list of orders ' +
+    'with its filter `parcels`): made some days ago and not taken by the carrier ' +
+    '(`parcels_not_collected`), waiting for their void (`parcels_void_pending`: cancel it in the ' +
+    'dashboard of the carrier and confirm), going back to the shop or back at it with units no ' +
+    'statement holds (`parcels_coming_back`), lost by the carrier with units no statement holds ' +
+    '(`parcels_lost`), ahead of their order (`parcels_ahead_of_order`: a cancelled order a parcel ' +
+    'of went after the cancel, a paid order something holds the carrier took a parcel of, a paid ' +
+    'order the carrier has every live parcel of and that is not shipped), the money of the payments, ' +
     'each kind of refund apart (the list GET /api/payments/refunds with its purpose): the ' +
     'refunds of late payments that came to their state in some last days (`late_refunds`), ' +
     'then for each kind, the refunds of late payments (`late_refunds_in_transit`, ' +
@@ -975,7 +983,9 @@ const getAlertsSchema = {
     'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
     'chats with a message no admin has read (`chats_waiting`), a reservation worker that has not ' +
     'run for some ' +
-    'seconds (`worker_stalled`), the fields of the data of the shop root has not set yet ' +
+    'seconds (`worker_stalled`), a delivery provider that has not answered for some seconds ' +
+    '(`delivery_provider_down`: 1 while it does not, `occurredAt` the time it stopped; no list), ' +
+    'the fields of the data of the shop root has not set yet ' +
     '(`shop_settings_incomplete`; how many, the ones GET /api/admin/shop-settings/missing ' +
     'names), the language of the shop with no dictionary any more ' +
     '(`shop_locale_missing`; 1 while it is gone, 0 once it is set to one that has one). Root, ' +
@@ -1233,12 +1243,14 @@ const alertDismissalSchema = (on: boolean) =>
       404: {
         description: on
           ? 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled, ' +
-            'shop_settings_incomplete and shop_locale_missing have no cases, admin_actions is a ' +
+            'delivery_provider_down, shop_settings_incomplete and shop_locale_missing have no ' +
+            'cases, admin_actions is a ' +
             'kind of root, the newsletter_* kinds are for root and for an admin root allowed to ' +
             'run the newsletters, the kinds of the decisions on the money for root and for an admin ' +
             'root allowed to handle the money; no case of the kind waits with the id (ALERT_ITEM_NOT_FOUND).'
           : 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled, ' +
-            'shop_settings_incomplete and shop_locale_missing have no cases, admin_actions is a ' +
+            'delivery_provider_down, shop_settings_incomplete and shop_locale_missing have no ' +
+            'cases, admin_actions is a ' +
             'kind of root, the newsletter_* kinds are for root and for an admin root allowed to ' +
             'run the newsletters, the kinds of the decisions on the money for root and for an admin ' +
             'root allowed to handle the money.',

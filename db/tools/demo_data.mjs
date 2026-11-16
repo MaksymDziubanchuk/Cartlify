@@ -890,13 +890,16 @@ const SAMPLE_POSTAL_CODES = {
   CH: '8001',
 };
 
-// how the demo orders are delivered, as the shop offers it now: to an address of the first country
-// of the manual method, else a pickup
+// how the demo orders are delivered, as the shop offers it now: by hand to an address of the first
+// country of a zone with a price of the manual delivery, else a pickup
 async function deliveryOfDemo(base) {
   const res = await new Session(base).send('GET', '/api/delivery/methods');
   expectStatus(res, [200], 'the delivery methods of the shop');
   const manual = res.body.methods.find((method) => method.method === 'manual');
-  const country = manual?.countries.find((code) => SAMPLE_POSTAL_CODES[code]);
+  const country = res.body.zones
+    .filter((zone) => zone.manualPrice !== null)
+    .flatMap((zone) => zone.countries)
+    .find((code) => SAMPLE_POSTAL_CODES[code]);
   if (manual && country) {
     return {
       method: 'manual',
@@ -912,28 +915,32 @@ async function deliveryOfDemo(base) {
   if (res.body.methods.some((method) => method.method === 'pickup')) return { method: 'pickup' };
 
   return stop(
-    'the shop offers no delivery the demo orders can use: set DELIVERY_COUNTRIES or DELIVERY_METHODS',
+    'the shop offers no delivery the demo orders can use: set the zones (deliveryZones) or the methods (deliveryMethods) of the data of the shop',
   );
 }
 
 async function placeOrders(session, index, buyer, variantIds, delivery) {
   let placed = 0;
   for (const order of buyer.orders) {
-    // the cart the items went into, the answer of each item names it with the price of each
-    // delivery for what it holds now
+    // the cart the items went into, the answer of each item names it
     let orderId;
-    let quotes = [];
     for (const [sku, quantity] of order.items) {
       const res = await session.send('POST', '/api/orders/current/items', {
         json: { variantId: variantIds.get(sku), quantity },
       });
       expectStatus(res, [200, 201], `the cart of buyer ${index + 1}`);
       orderId = res.body.id;
-      quotes = res.body.deliveryQuotes ?? [];
     }
     if (order.confirm) {
-      // the price of the delivery the page shows, as a buyer confirms it
-      const quote = quotes.find((one) => one.method === delivery.method);
+      // the price of the delivery the page shows for the address, as a buyer confirms it
+      let quote = null;
+      if (delivery.address) {
+        const options = await session.send('POST', '/api/orders/current/delivery-options', {
+          json: { address: delivery.address },
+        });
+        expectStatus(options, [200], `the delivery of buyer ${index + 1}`);
+        quote = options.body.options.find((one) => one.method === delivery.method) ?? null;
+      }
       const res = await session.send('POST', '/api/orders/current/confirm', {
         json: {
           orderId,

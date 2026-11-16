@@ -1,12 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
+import { DELIVERY_WEBHOOK_PATH, deliveryProvider } from '@providers/delivery/index.js';
 import appStripe from '@providers/payments/stripe/stripeClient.js';
+import { followDisputes } from '@routes/api/payments/services/followDisputes.service.js';
 import { settleRefundsInTransit } from '@routes/api/payments/services/settleRefundsInTransit.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { CARRIER_SHOP, SIZED, carrierOrder } from '../../../helpers/carrierOrders.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
@@ -22,6 +25,8 @@ import { takeLogs } from '../../../helpers/logs.js';
 import { watchMail, type SentMail } from '../../../helpers/mail.js';
 import { inOwnerTx } from '../../../helpers/ownerDb.js';
 import { placePaidOrder } from '../../../helpers/payments.js';
+import { deliveryHarness } from '../../../helpers/providers.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import { returnFlows } from '../../../helpers/returnFlows.js';
 import {
   closeOpenSessions,
@@ -866,5 +871,87 @@ describeMock('GET /api/payments/disputes/:disputeId', () => {
     expect(none.statusCode).toBe(404);
     expect(none.json()).toMatchObject({ errorCode: 'DISPUTE_NOT_FOUND' });
     expect(buyer.statusCode).toBe(403);
+  });
+});
+
+// a paid order a carrier took a parcel of is a sent one (decision 1 of the check of the delivery):
+// the goods are with the carrier, so a lost dispute does not cancel it
+// the disputes are made by the Stripe mock: the sandbox makes no chargeback of a card of ours
+describeMock('a dispute of an order a carrier took a parcel of', () => {
+  const harness = deliveryHarness[deliveryProvider.name];
+
+  afterEach(resetShopSettings);
+
+  // the parcel is made, the bank opens the dispute, and the carrier takes the parcel while the
+  // dispute holds the order: the order stays paid
+  async function takenWhileDisputed(amount: number) {
+    setShopSettings(CARRIER_SHOP);
+    const lamp = await createProduct({ price: 10, stock: 5, ...SIZED });
+    products.push(lamp);
+    const { buyer, orderId } = await carrierOrder(
+      app,
+      csrf,
+      [{ variantId: lamp.variantId, quantity: 2 }],
+      { stage: 'waiting' },
+    );
+    userIds.push(buyer.id);
+    const { total } = await asAdmin((tx) =>
+      tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { total: true } }),
+    );
+    const paymentId = await payByCard(Math.round(Number(total) * 100));
+    const paid = await asAdmin(
+      (tx) => tx.$queryRaw<{ result: string }[]>`
+        select cartlify.pay_order(${orderId}::int, 'stripe'::cartlify."PaymentProvider", ${paymentId}, ${total}::numeric) as result
+      `,
+    );
+    expect(paid[0]?.result).toBe('PAID');
+    expect((await flows.post(`/api/orders/${orderId}/parcels`, {})).statusCode).toBe(200);
+    const disputeId = await disputed(paymentId, { amount });
+
+    const [parcel] = await asAdmin((tx) =>
+      tx.orderShipment.findMany({
+        where: { orderId },
+        select: { providerParcelId: true, trackingNumber: true },
+      }),
+    );
+    const taken = await app.inject({
+      method: 'POST',
+      url: DELIVERY_WEBHOOK_PATH,
+      headers: harness.webhookHeaders(),
+      payload: JSON.stringify(
+        harness.eventBody('collected', {
+          parcelId: parcel!.providerParcelId!,
+          reference: 'x',
+          trackingNumber: parcel!.trackingNumber,
+        }),
+      ),
+    });
+    expect(taken.statusCode).toBe(200);
+    expect((await orderOf(orderId)).status).toBe('paid');
+    return { orderId, paymentId, disputeId };
+  }
+
+  it('keeps it once the dispute is lost: no cancel of the system, the hold goes, what the bank took waits for root', async () => {
+    const order = await takenWhileDisputed(1200);
+    const mails = watchMail();
+
+    await ended(order.disputeId, 'lost');
+
+    // the order goes on as a sent one: the admin sends it by hand (the alert parcels_ahead_of_order)
+    expect(await orderOf(order.orderId)).toEqual({ status: 'paid', holds: [] });
+    expect(await statementsOf(order.orderId)).toEqual([]);
+    const [line] = await disputeLinesOf(order.paymentId);
+    expect(line).toMatchObject({ amount: '-12.00', returnId: null, moneyUse: null });
+    expect(mails).toEqual([]);
+
+    // the worker that cancels the orders of the lost disputes leaves it alone too
+    const log = {
+      info: jest.fn<(obj: unknown, msg?: string) => void>(),
+      warn: jest.fn<(obj: unknown, msg?: string) => void>(),
+      error: jest.fn<(obj: unknown, msg?: string) => void>(),
+    };
+    await followDisputes(log, { paymentId: order.paymentId });
+    expect(await statementsOf(order.orderId)).toEqual([]);
+    expect((await orderOf(order.orderId)).status).toBe('paid');
   });
 });

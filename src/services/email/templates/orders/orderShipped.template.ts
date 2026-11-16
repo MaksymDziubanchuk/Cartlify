@@ -36,10 +36,13 @@ export type OrderShippedTemplateArgs = WithdrawalOfferArgs & {
   shippingAddress?: string | null;
   recipientName?: string | null;
   recipientPhone?: string | null;
-  // who carries the order and how to follow it, as the shop wrote them; each one only if it has it
-  carrier?: string | null;
-  trackingNumber?: string | null;
-  trackingUrl?: string | null;
+  // the parcels: who carries each and how to follow it, as the shop wrote them or the carrier gave
+  // them; each part only if it has it
+  parcels?: {
+    carrier?: string | null;
+    trackingNumber?: string | null;
+    trackingUrl?: string | null;
+  }[];
   appName?: string;
   logoUrl?: string | null;
   locale?: string;
@@ -82,9 +85,17 @@ export function buildOrderShippedTemplate(args: OrderShippedTemplateArgs): {
     noRightLine: noRight.length ? t('common.noRightLine', locale) : '',
     noRightItems: noRight,
     shippingAddress: args.shippingAddress?.trim() || '',
-    carrier: args.carrier?.trim() || '',
-    trackingNumber: args.trackingNumber?.trim() || '',
-    trackingUrl: args.trackingUrl?.trim() || '',
+    parcels: (args.parcels ?? []).map((parcel, i, all) => ({
+      // several parcels: each one named by its number
+      heading:
+        all.length > 1 ? t('orderShipped.parcelHeading', locale, { number: String(i + 1) }) : '',
+      carrier: parcel.carrier?.trim() || '',
+      trackingNumber: parcel.trackingNumber?.trim() || '',
+      trackingUrl: parcel.trackingUrl?.trim() || '',
+      carrierLabel: t('orderNotice.carrierLabel', locale),
+      trackingNumberLabel: t('orderNotice.trackingNumberLabel', locale),
+      followParcelLabel: t('orderNotice.followParcelLabel', locale),
+    })),
     // the name and the phone in one line
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',

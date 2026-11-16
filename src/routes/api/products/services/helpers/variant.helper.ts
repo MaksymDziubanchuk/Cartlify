@@ -1,3 +1,4 @@
+import { hasShippingData, sellsWithoutShippingData } from '@helpers/parcelBox.js';
 import type { Prisma, PrismaClient } from '@prisma/client';
 
 import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
@@ -121,7 +122,12 @@ export function variantShortOf(
     values: named.values,
     price: decimalToNumber(row.price),
     ...(view === 'admin' ? rawSaleOf(row) : saleFieldsOf(row)),
-    stock: freeUnits(row.stock, row.reservedStock, context.expired.get(row.id) ?? 0),
+    // a variant the shop has nothing to send with is not for sale for a buyer: no free units
+    // (sellsWithoutShippingData)
+    stock:
+      view !== 'admin' && !hasShippingData(row) && !sellsWithoutShippingData()
+        ? 0
+        : freeUnits(row.stock, row.reservedStock, context.expired.get(row.id) ?? 0),
     image: first ? fileStorage.imageUrls(first.image.url, 'product') : null,
     ...(view === 'admin'
       ? { visible: isVariantVisible(row), deletedAt: row.deletedAt?.toISOString() ?? null }
