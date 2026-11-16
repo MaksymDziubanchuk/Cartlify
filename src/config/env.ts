@@ -44,6 +44,7 @@ declare global {
       LIMIT_MAIL_PER_ADDRESS?: string;
       LIMIT_MAIL_PER_EMAIL?: string;
       LIMIT_CHECKOUT_PER_USER?: string;
+      LIMIT_DELIVERY_PRICES_PER_USER?: string;
       LIMIT_PASSWORD_CHANGE_PER_USER?: string;
       LIMIT_EXPORT_PER_USER?: string;
       LIMIT_REVIEW_PER_USER?: string;
@@ -103,6 +104,10 @@ declare global {
       FILE_STORAGE_PROVIDER?: string;
       AI_PROVIDER?: string;
       CAPTCHA_PROVIDER?: string;
+      DELIVERY_PROVIDER?: string;
+
+      SHIPPYPRO_API_KEY: string;
+      SHIPPYPRO_WEBHOOK_SECRET: string;
 
       SENDGRID_API_KEY: string;
 
@@ -363,6 +368,26 @@ function providerName(name: string, fallback: string): string {
   return process.env[name]?.trim().toLowerCase() || fallback;
 }
 
+// the key of shippypro is optional (no key: no delivery by carriers); a server with the key cannot go
+// without the secret of the webhook, outside the tests. The secret alone tells an event of the
+// provider from a forged one, and the webhook is outside the request rate limit (the provider posts
+// many at once): a short one could be found by trying, so a secret is at least this long
+const SHIPPYPRO_WEBHOOK_SECRET_MIN = 32;
+function shippyProSettings(nodeEnv: string) {
+  const SHIPPYPRO_API_KEY = process.env.SHIPPYPRO_API_KEY?.trim() || '';
+  const SHIPPYPRO_WEBHOOK_SECRET =
+    nodeEnv === 'test' || !SHIPPYPRO_API_KEY
+      ? process.env.SHIPPYPRO_WEBHOOK_SECRET?.trim() || ''
+      : required('SHIPPYPRO_WEBHOOK_SECRET').trim();
+
+  if (SHIPPYPRO_WEBHOOK_SECRET && SHIPPYPRO_WEBHOOK_SECRET.length < SHIPPYPRO_WEBHOOK_SECRET_MIN) {
+    throw new Error(
+      `Invalid env variable: SHIPPYPRO_WEBHOOK_SECRET must be at least ${SHIPPYPRO_WEBHOOK_SECRET_MIN} characters`,
+    );
+  }
+  return { SHIPPYPRO_API_KEY, SHIPPYPRO_WEBHOOK_SECRET };
+}
+
 // fail fast on a currency of the shop that is not a code with cents: such a currency would be
 // charged a hundred times off; read in lower case, the way the payment providers name it
 function currencyWithCents(name: string, fallback: string): string {
@@ -562,6 +587,7 @@ export default {
   LIMIT_MAIL_PER_ADDRESS: positiveInt('LIMIT_MAIL_PER_ADDRESS', 10),
   LIMIT_MAIL_PER_EMAIL: positiveInt('LIMIT_MAIL_PER_EMAIL', 1),
   LIMIT_CHECKOUT_PER_USER: positiveInt('LIMIT_CHECKOUT_PER_USER', 10),
+  LIMIT_DELIVERY_PRICES_PER_USER: positiveInt('LIMIT_DELIVERY_PRICES_PER_USER', 30),
   LIMIT_PASSWORD_CHANGE_PER_USER: positiveInt('LIMIT_PASSWORD_CHANGE_PER_USER', 10),
   LIMIT_EXPORT_PER_USER: positiveInt('LIMIT_EXPORT_PER_USER', 1),
   LIMIT_REVIEW_PER_USER: positiveInt('LIMIT_REVIEW_PER_USER', 30),
@@ -662,6 +688,11 @@ export default {
   FILE_STORAGE_PROVIDER: providerName('FILE_STORAGE_PROVIDER', 'cloudinary'),
   AI_PROVIDER: providerName('AI_PROVIDER', 'openai'),
   CAPTCHA_PROVIDER: providerName('CAPTCHA_PROVIDER', 'turnstile'),
+  DELIVERY_PROVIDER: providerName('DELIVERY_PROVIDER', 'shippypro'),
+
+  // shippypro, the delivery provider: without the key the method carrier cannot be switched on;
+  // with it, the secret of its webhook is required outside the tests (every event would be refused)
+  ...shippyProSettings(NODE_ENV),
 
   // sendgrid variables
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',

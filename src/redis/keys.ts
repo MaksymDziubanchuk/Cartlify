@@ -15,4 +15,12 @@ export const redisKeys = {
   // the last time a pass of the newsletters stopped on a problem of the whole stream, until a pass
   // goes through (src/routes/api/newsletters/services/helpers/sendingHalt.helper.ts)
   newsletterSendingHalt: 'newsletters:sending-halt',
+  // the prices of the carriers of the delivery provider for a parcel to an address, five minutes:
+  // <prefix><hash of the address, the box and the value>
+  deliveryQuotePrefix: 'delivery:quote:',
+  // when the delivery provider first failed to answer after its last answer (the alert
+  // delivery_provider_down)
+  deliveryProviderDownSince: 'delivery:provider-down-since',
+  // when it last failed to answer: an hour with no call after it and the alert says nothing
+  deliveryProviderDownLast: 'delivery:provider-down-last',
 } as const;
