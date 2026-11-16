@@ -12,6 +12,7 @@ import { BadRequestError, InternalError, NotFoundError } from '@utils/errors.js'
 import { readReturnCard } from './helpers/returnCard.helper.js';
 import { returnErrorOf } from './helpers/returnErrors.helper.js';
 import { sendReturnByShopEmail } from './helpers/sendReturnByShopEmail.helper.js';
+import { settleOrderByParcels } from '../../delivery/services/deliveryEvents.service.js';
 import { refundReturn } from './refundReturn.service.js';
 
 import type { CreateReturnDto, ReturnDto } from 'types/dto/returns.dto.js';
@@ -113,6 +114,14 @@ export async function createReturn({
 
   // after the commit: a mail that fails is only logged, the statement stands
   await sendReturnByShopEmail(card.id, log);
+
+  // a statement that holds the units of a parcel lost or back at the shop lets the order of a
+  // carrier be delivered by the parcels that reached the buyer: no event of the carrier comes for it
+  try {
+    await settleOrderByParcels(orderId, log);
+  } catch (err) {
+    log.error({ ...failureOf(err), orderId }, 'the order was not looked at after the statement');
+  }
 
   // the cancel of a paid order gives the money back at once
   if (reason === 'shop_cancel') {

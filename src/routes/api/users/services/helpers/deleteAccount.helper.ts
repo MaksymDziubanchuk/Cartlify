@@ -52,7 +52,7 @@ type OpenOrder = {
   status: 'waiting' | 'paid' | 'shipped';
   total: Prisma.Decimal;
   // how it goes to the buyer
-  delivery: { method: 'manual' | 'pickup' } | null;
+  delivery: { method: 'manual' | 'pickup' | 'carrier' } | null;
   items: {
     quantity: number;
     productName: string | null;

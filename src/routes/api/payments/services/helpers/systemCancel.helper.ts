@@ -55,6 +55,18 @@ export async function cancelBySystem(
   `);
   if (!order || order.status !== 'paid') return null;
 
+  // a paid order a carrier took a parcel of is a sent one (decision 16 of the delivery): its goods
+  // are on their way, the system cancels only an order that never left
+  const taken = await db.orderShipment.count({
+    where: {
+      orderId,
+      returnId: null,
+      rolledBackAt: null,
+      state: { notIn: ['created', 'void_pending', 'voided'] },
+    },
+  });
+  if (taken > 0) return null;
+
   if (reason === 'provider_refund') {
     const open = await db.orderReturn.count({ where: { orderId, closedAt: null } });
     if (open > 0) return null;

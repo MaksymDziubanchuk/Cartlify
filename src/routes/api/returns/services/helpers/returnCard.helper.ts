@@ -338,7 +338,8 @@ export async function readReturnCard(
       carrier: parcel.carrier,
       trackingNumber: parcel.trackingNumber,
       trackingUrl: parcel.trackingUrl,
-      shippedAt: parcel.shippedAt.toISOString(),
+      // a parcel of a statement is sent from the start (order_shipments_state_chk)
+      shippedAt: parcel.shippedAt!.toISOString(),
       recordedBy: personOf(parcel.recordedById),
       confirmedAt: iso(parcel.confirmedAt),
       confirmedBy: personOf(parcel.confirmedById),
