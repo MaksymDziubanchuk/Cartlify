@@ -39,14 +39,42 @@ export const deliveryBody = {
 // that sets one sends the price it expects
 export const shippingData = { delivery: deliveryBody, expectedDeliveryPrice: 0 };
 
-// the price of a delivery method the page shows for an order that is not confirmed: the quote in
-// the answer the order came with (the cart after an item went in, the order read). A method the
-// shop has not enabled has no quote, 0 then: the confirmation refuses it for the method anyway
-export function quotedDeliveryPrice(
-  order: { deliveryQuotes?: { method: string; price: number }[] },
-  method = 'manual',
-): number {
-  return order.deliveryQuotes?.find((quote) => quote.method === method)?.price ?? 0;
+// the price of the delivery the page shows the buyer for the cart before the confirmation: a
+// pickup costs nothing, a delivery to an address costs what POST /api/orders/current/delivery-options
+// says for the address (the method, and for a carrier the one of the delivery). A way the list does
+// not have is 0: the confirmation refuses it anyway
+export async function quotedDeliveryPrice(
+  app: FastifyInstance,
+  headers: Record<string, string>,
+  delivery: Record<string, unknown>,
+): Promise<number> {
+  if (delivery.method === 'pickup' || !delivery.address) return 0;
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/orders/current/delivery-options',
+    headers,
+    payload: { address: delivery.address },
+  });
+  if (res.statusCode !== 200) return 0;
+
+  const carrier = delivery.carrier as
+    { name: string; service: string; connection: string } | undefined;
+  const options = res.json().options as {
+    method: string;
+    price: number;
+    carrier: { name: string; service: string; connection: string } | null;
+  }[];
+  return (
+    options.find(
+      (option) =>
+        option.method === delivery.method &&
+        (!carrier ||
+          (option.carrier?.name === carrier.name &&
+            option.carrier.service === carrier.service &&
+            option.carrier.connection === carrier.connection)),
+    )?.price ?? 0
+  );
 }
 
 // the same delivery as an order answers with it, the price and the rest left to the test
@@ -131,10 +159,7 @@ export async function placeOrderOf(
     payload: {
       orderId,
       delivery,
-      expectedDeliveryPrice: quotedDeliveryPrice(
-        added.json(),
-        typeof delivery.method === 'string' ? delivery.method : undefined,
-      ),
+      expectedDeliveryPrice: await quotedDeliveryPrice(app, headers, delivery),
     },
   });
   if (confirmed.statusCode !== 200) {

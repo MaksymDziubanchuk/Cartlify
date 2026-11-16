@@ -31,6 +31,16 @@ import {
   rememberSession,
   withStripeOutOfReach,
 } from './stripe.js';
+import {
+  breakShippyPro,
+  MOCK_CARRIERS,
+  mockParcel,
+  realShippyPro,
+  refuseNextParcel,
+  SHIPPYPRO_TEST_WEBHOOK_SECRET,
+  shippyProWebhookBody,
+  useCarriers,
+} from './shippyPro.js';
 
 import type {
   MailDropReason,
@@ -40,6 +50,11 @@ import type {
 } from '@providers/mail/index.js';
 import type { AiProviderName } from '@providers/ai/index.js';
 import type { CaptchaProviderName } from '@providers/captcha/index.js';
+import type {
+  DeliveryAddress,
+  DeliveryEventKind,
+  DeliveryProviderName,
+} from '@providers/delivery/index.js';
 import type { FileStorageProviderName } from '@providers/files/index.js';
 import type { IdentityProviderName } from '@providers/identity/index.js';
 import type { PaymentProviderName } from '@providers/payments/index.js';
@@ -294,5 +309,152 @@ export const fileStorageHarness: Record<FileStorageProviderName, FileStorageHarn
     folder: 'test/',
     keeps: async (publicId) => (await storedImage(publicId)) !== null,
     silentMoves: withSilentCloudinaryMoves,
+  },
+};
+
+// where the parcels of the contract go: a sender in Valencia, a recipient in Madrid and one in
+// London, made up; the carrier Generic of the account of the tests takes them all
+const testAddress = (over: Partial<DeliveryAddress>): DeliveryAddress => ({
+  name: 'Test Recipient',
+  street: 'Calle Mayor',
+  house: '1',
+  apartment: null,
+  city: 'Madrid',
+  postalCode: '28013',
+  country: 'ES',
+  phone: '+34910000000',
+  email: 'recipient@example.com',
+  ...over,
+});
+
+export type DeliveryHarness = {
+  // the run asks the real service: the contract makes one parcel and no more (a label each)
+  real: boolean;
+  sender: DeliveryAddress;
+  recipient: DeliveryAddress;
+  abroad: DeliveryAddress;
+  // the name of a carrier of the account that cannot void a parcel; and one that can, null when the
+  // account of the run has none (the real one of the tests)
+  steadyCarrier: string;
+  voidingCarrier: string | null;
+  // the carrier refuses the next parcel with the reason; null when the real one cannot be made to
+  refuseNext: ((reason: string) => void) | null;
+  // the first carrier of the account prices in another currency than the shop; null for real
+  pricesInOtherCurrency: (() => void) | null;
+  // the provider does not answer while fn runs
+  outOfReach<T>(fn: () => Promise<T>): Promise<T>;
+  // the server has no key of the provider while fn runs
+  withoutKey<T>(fn: () => Promise<T>): Promise<T>;
+  // the server has no secret of the webhook while fn runs
+  withoutWebhookSecret<T>(fn: () => T): T;
+  // whether the provider still keeps the parcel live (a void takes it off)
+  keepsLive(parcelId: string): Promise<boolean> | null;
+  // the headers of a request of the webhook: from the provider, with another secret, without any
+  webhookHeaders(secret?: 'own' | 'other' | 'none'): Record<string, string>;
+  // the body of an event of the parcel the provider posts, of a kind the app takes or of one it
+  // drops
+  eventBody(
+    kind: DeliveryEventKind | 'dropped',
+    parcel: { parcelId: string; reference: string; trackingNumber?: string | null },
+    at?: Date,
+  ): unknown;
+};
+
+const SHIPPYPRO_EVENTS: Record<
+  Exclude<DeliveryEventKind, 'created' | 'failed'> | 'dropped',
+  { code: number; extendedCode: string }
+> = {
+  collected: { code: 2, extendedCode: '2200' },
+  delivered: { code: 6, extendedCode: '6000' },
+  returning: { code: 5, extendedCode: '5630' },
+  returned: { code: 5, extendedCode: '5640' },
+  lost: { code: 5, extendedCode: '5330' },
+  dropped: { code: 1, extendedCode: '1000' },
+};
+
+export const deliveryHarness: Record<DeliveryProviderName, DeliveryHarness> = {
+  shippypro: {
+    real: realShippyPro,
+    sender: testAddress({
+      name: 'Test Sender',
+      street: 'Calle de la Paz',
+      city: 'Valencia',
+      postalCode: '46003',
+      phone: '+34960000000',
+      email: 'sender@example.com',
+    }),
+    recipient: testAddress({}),
+    abroad: testAddress({
+      street: 'Test Street',
+      city: 'London',
+      postalCode: 'E1 6AN',
+      country: 'GB',
+      phone: '+442000000000',
+    }),
+    steadyCarrier: 'Generic',
+    // what the real account cannot be made to do answers from the mock in both modes
+    voidingCarrier: 'MockExpress',
+    refuseNext: (reason) => refuseNextParcel(reason),
+    pricesInOtherCurrency: () =>
+      useCarriers(MOCK_CARRIERS.map((c, i) => (i === 0 ? { ...c, currency: 'USD' } : c))),
+    outOfReach: async (fn) => {
+      breakShippyPro('unreachable');
+      return fn();
+    },
+    withoutKey: async (fn) => {
+      const saved = env.SHIPPYPRO_API_KEY;
+      env.SHIPPYPRO_API_KEY = '';
+      try {
+        return await fn();
+      } finally {
+        env.SHIPPYPRO_API_KEY = saved;
+      }
+    },
+    withoutWebhookSecret: (fn) => {
+      const saved = env.SHIPPYPRO_WEBHOOK_SECRET;
+      const restore = () => {
+        env.SHIPPYPRO_WEBHOOK_SECRET = saved;
+      };
+      env.SHIPPYPRO_WEBHOOK_SECRET = '';
+      let out: ReturnType<typeof fn>;
+      try {
+        out = fn();
+      } catch (error) {
+        restore();
+        throw error;
+      }
+      // a request keeps the secret away until it is answered (app.inject starts it on then)
+      const thenable = out as { then?: unknown } | null;
+      if (
+        thenable !== null &&
+        typeof thenable === 'object' &&
+        typeof thenable.then === 'function'
+      ) {
+        return Promise.resolve(out).finally(restore) as typeof out;
+      }
+      restore();
+      return out;
+    },
+    // a parcel of the mock; one of the real account cannot be looked at here
+    keepsLive: (parcelId) => {
+      const parcel = mockParcel(parcelId);
+      return parcel ? Promise.resolve(!parcel.voided) : null;
+    },
+    webhookHeaders: (secret = 'own') => ({
+      'content-type': 'application/json',
+      ...(secret === 'none'
+        ? {}
+        : {
+            'x-webhook-secret': secret === 'own' ? SHIPPYPRO_TEST_WEBHOOK_SECRET : 'another-secret',
+          }),
+    }),
+    eventBody: (kind, parcel, at) => {
+      if (kind === 'created') return shippyProWebhookBody('shipped', parcel);
+      if (kind === 'failed') return shippyProWebhookBody('error', parcel);
+      return shippyProWebhookBody('tracking', parcel, {
+        ...SHIPPYPRO_EVENTS[kind],
+        ...(at ? { date: Math.floor(at.getTime() / 1000) } : {}),
+      });
+    },
   },
 };
