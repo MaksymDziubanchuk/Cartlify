@@ -1,4 +1,5 @@
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
+import type { DeliverySender, DeliveryZone } from '@config/deliveryZones.js';
 
 // the data of the shop (delivery, brand, reservation, moderation, withdrawal, languages, the
 // seller, the logo): a row a setting in cartlify.shop_settings, root adds one for each setting
@@ -7,9 +8,9 @@ import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 
 export interface ShopSettingsValuesDto {
   deliveryMethods: DeliveryMethodName[];
-  deliveryFlatPrice: number | null;
-  deliveryFreeFrom: number | null;
-  deliveryCountries: string[];
+  deliveryZones: DeliveryZone[];
+  customsFreeCountries: string[] | null;
+  deliverySender: DeliverySender | null;
   pickupAddress: string;
   pickupHours: string;
 
@@ -64,9 +65,9 @@ export interface ShopSettingsMissingFieldsDto {
 // value changes; the logo is not here (POST /api/root/shop-settings/logo)
 export interface PutShopSettingsBodyDto {
   deliveryMethods: DeliveryMethodName[];
-  deliveryFlatPrice: number | null;
-  deliveryFreeFrom: number | null;
-  deliveryCountries: string[];
+  deliveryZones: DeliveryZone[];
+  customsFreeCountries: string[] | null;
+  deliverySender: DeliverySender | null;
   pickupAddress: string;
   pickupHours: string;
   shopName: string;

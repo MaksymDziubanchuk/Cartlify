@@ -35,9 +35,9 @@ const getShopSettingsValuesSchema = {
   summary: 'Get every current field of the data of the shop',
   description:
     'The current value of every setting (the latest row of each), the server default for one ' +
-    'root never set; a setting with no default of the server (deliveryCountries, the seller, the ' +
-    'logo) is null, or an empty list, until root sets it (GET /api/admin/shop-settings/missing ' +
-    'names which).',
+    'root never set; a setting with no default of the server (deliveryZones, ' +
+    'customsFreeCountries, deliverySender, the seller, the logo) is null, or an empty list, until ' +
+    'root sets it (GET /api/admin/shop-settings/missing names which).',
 
   response: {
     200: {
@@ -56,8 +56,9 @@ const getShopSettingsMissingFieldsSchema = {
   operationId: 'getShopSettingsMissingFields',
   summary: 'Get the fields of the data of the shop root has not set yet',
   description:
-    'The fields with no default of the server (deliveryCountries, the seller, the logo) still ' +
-    'empty, and emailReplyTo while it is blank (no mail goes out without it); the same list the ' +
+    'The fields with no default of the server (deliveryZones, customsFreeCountries, the seller, ' +
+    'the logo) still empty, emailReplyTo while it is blank (no mail goes out without it), and ' +
+    'deliverySender while the method carrier is on without it; the same list the ' +
     'shop_settings_incomplete alert counts.',
 
   response: {
@@ -91,14 +92,19 @@ const WRITE_REFUSALS =
   'Nothing is written. `VALIDATION_ERROR`: a value out of its shape (a price not above ' +
   'zero, below the cent or over 99999999.99, a list naming one value twice, a reply-to or a ' +
   'seller email that is not an address). The rules between settings, checked on the values the ' +
-  'write would leave: `DELIVERY_FREE_FROM_WITHOUT_PRICE`: deliveryFreeFrom without ' +
-  'deliveryFlatPrice. `PICKUP_DETAILS_REQUIRED`: the pickup method on with a blank ' +
+  'write would leave: `DELIVERY_PROVIDER_NOT_CONFIGURED`: the method carrier on while the ' +
+  'server has no key of the delivery provider. `DELIVERY_SENDER_REQUIRED`: the method carrier ' +
+  'on without deliverySender. `DELIVERY_ZONE_COUNTRY_REPEATED`: a country in two zones ' +
+  '(`details.countries`). `DELIVERY_ZONE_REST_REPEATED`: more than one zone of the rest. ' +
+  '`DELIVERY_ZONE_NAME_REPEATED`: two zones of one name (`details.names`). ' +
+  '`PICKUP_DETAILS_REQUIRED`: the pickup method on with a blank ' +
   'pickupAddress or pickupHours (`details.fields` the blank ones). `PICKUP_HOURS_INVALID`: ' +
   'pickupHours not in its format (see the field). `RESERVATION_MINUTES_TOO_LONG`: ' +
   'reservationMinutes and paymentPageMinutes together over what every payment provider keeps a page ' +
   `(\`details.max\`, ${paymentPageBounds().mostWithReservation}). ` +
   '`SHOP_LOCALE_NOT_ENABLED`: shopLocale not among enabledLocales. ' +
-  '`DELIVERY_COUNTRY_NOT_SUPPORTED`: a country of deliveryCountries the app does not know ' +
+  '`DELIVERY_COUNTRY_NOT_SUPPORTED`: a country of deliveryZones or customsFreeCountries the ' +
+  'app does not know ' +
   'how to take a postal code of (`details.countries` the ones refused, `details.supported` ' +
   'the full list). `LOCALE_NOT_SUPPORTED`: a language of enabledLocales with no dictionary ' +
   '(`details.locales`/`details.supported`, src/locales).';

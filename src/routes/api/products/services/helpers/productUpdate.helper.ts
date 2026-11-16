@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 
 import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { normalizeWarnings } from '@helpers/party.js';
+import { normalizeHsCode, normalizeOriginCountry } from '@helpers/customs.js';
 import { parseWithdrawalRule } from '@helpers/withdrawal.js';
 import { BadRequestError, NotFoundError } from '@utils/errors.js';
 
@@ -51,6 +52,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     manufacturerId,
     euResponsibleId,
     warnings,
+    hsCode,
+    originCountry,
     withdrawal,
     documentIds,
     stock,
@@ -77,6 +80,10 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
   // the manufacturer and the person in the EU by their ids; the warnings, none when empty
   const partyChanges = planUpdateParties({ manufacturerId, euResponsibleId });
   const warningsNorm = warnings !== undefined ? normalizeWarnings(warnings) : undefined;
+  // what customs need: the code of the goods and the country of origin, none when empty
+  const hsCodeNorm = hsCode !== undefined ? normalizeHsCode(hsCode) : undefined;
+  const originCountryNorm =
+    originCountry !== undefined ? normalizeOriginCountry(originCountry) : undefined;
   // the rule of withdrawal: one of the rules, or none (null) when the product gives it up
   const withdrawalNorm = parseWithdrawalRule(withdrawal);
   // the documents by their ids, the list written whole; null or none is an empty list
@@ -90,6 +97,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     manufacturerId !== undefined ||
     euResponsibleId !== undefined ||
     warnings !== undefined ||
+    hsCode !== undefined ||
+    originCountry !== undefined ||
     withdrawal !== undefined ||
     documentIds !== undefined ||
     categoryId !== undefined ||
@@ -108,6 +117,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     popularityOverrideUntilDate,
     partyChanges,
     warningsNorm,
+    hsCodeNorm,
+    originCountryNorm,
     withdrawalNorm,
     documentIdsNorm,
   };
@@ -122,6 +133,8 @@ export const productBeforeUpdateSelect = {
   manufacturerId: true,
   euResponsibleId: true,
   warnings: true,
+  hsCode: true,
+  originCountry: true,
   withdrawal: true,
   popularityOverride: true,
   popularityOverrideUntil: true,
@@ -189,6 +202,8 @@ export async function writeProductUpdate(
     ...(input.description !== undefined ? { description: plan.descriptionNorm || null } : {}),
     ...plan.partyChanges,
     ...(plan.warningsNorm !== undefined ? { warnings: plan.warningsNorm } : {}),
+    ...(plan.hsCodeNorm !== undefined ? { hsCode: plan.hsCodeNorm } : {}),
+    ...(plan.originCountryNorm !== undefined ? { originCountry: plan.originCountryNorm } : {}),
     ...(plan.withdrawalNorm !== undefined ? { withdrawal: plan.withdrawalNorm } : {}),
     ...(input.categoryId !== undefined ? { categoryId: plan.categoryIdRaw! } : {}),
   };
@@ -227,6 +242,8 @@ export async function writeProductUpdate(
       manufacturerId: plan.partyChanges.manufacturerId,
       euResponsibleId: plan.partyChanges.euResponsibleId,
       warnings: plan.warningsNorm,
+      hsCode: plan.hsCodeNorm,
+      originCountry: plan.originCountryNorm,
       withdrawal: plan.withdrawalNorm,
       categoryId: input.categoryId,
       popularityOverride: input.popularityOverride,

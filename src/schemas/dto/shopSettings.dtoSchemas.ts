@@ -15,6 +15,78 @@ const moneySchema = {
   multipleOf: 0.01,
 } as const;
 const textSchema = { type: ['string', 'null'] } as const;
+const countrySchema = {
+  type: 'string',
+  minLength: 2,
+  maxLength: 2,
+  pattern: '^[A-Z]{2}$',
+} as const;
+// a text of an address: not blank, no space at an end
+const lineSchema = (maxLength: number) =>
+  ({ type: 'string', minLength: 1, maxLength, pattern: '^\\S(.*\\S)?$' }) as const;
+
+const deliveryZoneSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'countries', 'manualPrice', 'freeFrom'],
+  properties: {
+    name: { ...lineSchema(100), description: 'The name of the zone for root, once in the list.' },
+    countries: {
+      anyOf: [
+        { type: 'array', minItems: 1, uniqueItems: true, items: countrySchema },
+        { type: 'string', enum: ['rest'] },
+      ],
+      description:
+        'The countries of the zone (ISO codes, each in one zone only), or "rest": every country ' +
+        'the app delivers to that no other zone names (one such zone at most).',
+    },
+    manualPrice: {
+      type: ['number', 'null'],
+      minimum: 0,
+      maximum: 99999999.99,
+      multipleOf: 0.01,
+      description:
+        'What the manual delivery to the zone costs, 0 or more; null: the manual delivery does ' +
+        'not go there (the carriers of the delivery provider still may).',
+    },
+    freeFrom: {
+      ...moneySchema,
+      description:
+        'From this sum of the items every delivery to the zone is free, the carriers too (the shop ' +
+        'pays the carrier); null: never.',
+    },
+  },
+} as const;
+
+const deliverySenderSchema = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  required: [
+    'name',
+    'street',
+    'house',
+    'apartment',
+    'city',
+    'postalCode',
+    'country',
+    'phone',
+    'email',
+  ],
+  properties: {
+    name: lineSchema(200),
+    street: lineSchema(150),
+    house: lineSchema(20),
+    apartment: { ...lineSchema(40), type: ['string', 'null'] },
+    city: lineSchema(100),
+    postalCode: { ...lineSchema(16), type: ['string', 'null'] },
+    country: countrySchema,
+    phone: { type: 'string', pattern: '^\\+[1-9][0-9]{7,14}$' },
+    email: { type: 'string', maxLength: 254, pattern: '^[^@\\s]+@[^@\\s]+$' },
+  },
+  description:
+    'Where the parcels of the delivery provider go from and how the carrier reaches the shop; ' +
+    'required once deliveryMethods has "carrier".',
+} as const;
 const localeSchema = {
   type: 'string',
   pattern: '^[a-z]{2}$',
@@ -28,25 +100,29 @@ const valueProperties = {
     items: { type: 'string', enum: [...DELIVERY_METHOD_NAMES] },
     uniqueItems: true,
     description:
-      'manual: the shop sends the order itself; pickup: the buyer collects it at the shop. ' +
-      'Empty: the shop sends by hand, outside the app.',
+      'manual: the shop sends the order itself, at the price of the zone of the country; pickup: ' +
+      'the buyer collects it at the shop; carrier: a carrier of the delivery provider the buyer ' +
+      'picks from its prices, the parcel made by the app (needs the key of the provider and ' +
+      'deliverySender). Empty: the shop sends by hand, outside the app.',
   },
-  deliveryFlatPrice: {
-    ...moneySchema,
-    description: 'What a buyer pays for the manual method, above zero; null for no fixed price.',
-  },
-  deliveryFreeFrom: {
-    ...moneySchema,
-    description: 'From this sum of the items the manual delivery is free; needs deliveryFlatPrice.',
-  },
-  deliveryCountries: {
+  deliveryZones: {
     type: 'array',
-    items: { type: 'string', minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$' },
+    maxItems: 100,
+    items: deliveryZoneSchema,
+    description:
+      'The countries the shop delivers to, in zones (e.g. Spain 5, the EU 12, the rest 30), ' +
+      'whatever the method: there is no other list of countries. Empty: the shop delivers nowhere.',
+  },
+  customsFreeCountries: {
+    type: ['array', 'null'],
+    items: countrySchema,
     uniqueItems: true,
     description:
-      'The countries the app delivers to (ISO codes): required once deliveryMethods has ' +
-      '"manual" (GET /api/delivery/methods and POST /api/orders/confirm need it).',
+      'The countries a parcel goes to without customs: the country of the shop and its customs ' +
+      'union. A cart to any other country of a zone needs the customs code and the country of ' +
+      'origin of every product. Null: not set, nothing is checked for customs.',
   },
+  deliverySender: deliverySenderSchema,
   pickupAddress: {
     type: 'string',
     maxLength: 300,

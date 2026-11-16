@@ -257,6 +257,9 @@ const postProduct: ControllerRouter<
   let manufacturerIdRaw: string | undefined;
   let euResponsibleIdRaw: string | undefined;
   let warnings: string | undefined;
+  // what customs need of it: the code of the goods and the country of origin
+  let hsCode: string | undefined;
+  let originCountry: string | undefined;
   let withdrawal: string | undefined;
   // the ids of the documents of the directory the product names, with a comma between
   let documentIdsRaw: string | undefined;
@@ -318,6 +321,8 @@ const postProduct: ControllerRouter<
       else if (part.fieldname === 'manufacturerId' && v.trim()) manufacturerIdRaw = v;
       else if (part.fieldname === 'euResponsibleId' && v.trim()) euResponsibleIdRaw = v;
       else if (part.fieldname === 'warnings') warnings = v;
+      else if (part.fieldname === 'hsCode') hsCode = v;
+      else if (part.fieldname === 'originCountry') originCountry = v;
       else if (part.fieldname === 'withdrawal') withdrawal = v;
       else if (part.fieldname === 'documentIds') documentIdsRaw = v;
       else if (PARTY_FORM_FIELD.test(part.fieldname) && v !== '') {
@@ -361,6 +366,8 @@ const postProduct: ControllerRouter<
         euResponsibleId: euResponsibleIdRaw,
         euResponsible: partyFromFormFields(partyFields, 'euResponsible'),
         warnings,
+        hsCode,
+        originCountry,
         withdrawal,
         documentIds: documentIdsRaw,
         variants: variantsRaw,
@@ -417,6 +424,9 @@ const updateProductById: ControllerRouter<
   let manufacturerId: unknown;
   let euResponsibleId: unknown;
   let warnings: string | null | undefined;
+  // what customs need of it (empty takes each away)
+  let hsCode: string | null | undefined;
+  let originCountry: string | null | undefined;
   let withdrawal: string | null | undefined;
   // the documents by their ids: a form gives them as text, a json body as an array or null
   let documentIds: unknown;
@@ -448,6 +458,8 @@ const updateProductById: ControllerRouter<
       else if (part.fieldname === 'manufacturerId') manufacturerId = t;
       else if (part.fieldname === 'euResponsibleId') euResponsibleId = t || null;
       else if (part.fieldname === 'warnings') warnings = v;
+      else if (part.fieldname === 'hsCode') hsCode = v;
+      else if (part.fieldname === 'originCountry') originCountry = v;
       else if (part.fieldname === 'withdrawal') withdrawal = v;
       else if (part.fieldname === 'documentIds') documentIds = v;
       else if (part.fieldname === 'stock') stock = v;
@@ -468,6 +480,8 @@ const updateProductById: ControllerRouter<
     manufacturerId = b.manufacturerId;
     euResponsibleId = b.euResponsibleId;
     warnings = b.warnings;
+    hsCode = b.hsCode;
+    originCountry = b.originCountry;
     withdrawal = b.withdrawal;
     documentIds = b.documentIds;
     stock = b.stock;
@@ -485,6 +499,8 @@ const updateProductById: ControllerRouter<
       manufacturerId: manufacturerId as UpdateProductDto['manufacturerId'],
       euResponsibleId: euResponsibleId as UpdateProductDto['euResponsibleId'],
       warnings,
+      hsCode,
+      originCountry,
       withdrawal,
       documentIds: documentIds as UpdateProductDto['documentIds'],
       stock,

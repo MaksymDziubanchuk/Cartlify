@@ -590,6 +590,18 @@ const warningsResponseField = {
   description: 'The warnings of the product, null when it has none.',
 } as const;
 
+// what customs need for a parcel that crosses a border: a cart to a country with customs is
+// refused while one of its products has none of them (DELIVERY_CUSTOMS_DATA_MISSING)
+const hsCodeResponseField = {
+  type: ['string', 'null'],
+  description: 'The code of the goods for customs (HS, 6 to 10 digits), null when none.',
+} as const;
+
+const originCountryResponseField = {
+  type: ['string', 'null'],
+  description: 'The country the goods were made in (ISO code), null when none.',
+} as const;
+
 // what the law lets a buyer do with the goods when they withdraw from the purchase
 const withdrawalResponseField = {
   type: 'object',
@@ -651,6 +663,20 @@ const warningsBodyField = {
   description: `The warnings, up to ${WARNINGS_MAX} signs; empty or null takes them away.`,
 } as const;
 
+const hsCodeBodyField = {
+  type: ['string', 'null'],
+  description:
+    'The code of the goods for customs (HS): 6 to 10 digits, the dots and the spaces of a tariff ' +
+    'book are taken out (PRODUCT_HS_CODE_INVALID otherwise); empty or null takes it away.',
+} as const;
+
+const originCountryBodyField = {
+  type: ['string', 'null'],
+  description:
+    'The country the goods were made in: two letters, kept in capitals ' +
+    '(PRODUCT_ORIGIN_COUNTRY_INVALID otherwise); empty or null takes it away.',
+} as const;
+
 // a plain text, not an enum: a rule there is not is WITHDRAWAL_RULE_INVALID for the form and the
 // body alike
 const withdrawalBodyField = {
@@ -677,6 +703,8 @@ const partyIdFormFields = {
     type: 'string',
     description: `The warnings, up to ${WARNINGS_MAX} signs (PRODUCT_WARNINGS_TOO_LONG); empty takes them away on a change.`,
   },
+  hsCode: { ...hsCodeBodyField, type: 'string' },
+  originCountry: { ...originCountryBodyField, type: 'string' },
   withdrawal: {
     type: 'string',
     description:
@@ -734,6 +762,8 @@ const productResponseSchema = {
     manufacturer: manufacturerResponseField,
     euResponsible: euResponsibleResponseField,
     warnings: warningsResponseField,
+    hsCode: hsCodeResponseField,
+    originCountry: originCountryResponseField,
     documents: documentsResponseField,
     withdrawal: withdrawalResponseField,
     category: {
@@ -763,6 +793,8 @@ const productResponseSchema = {
     'manufacturer',
     'euResponsible',
     'warnings',
+    'hsCode',
+    'originCountry',
     'documents',
     'withdrawal',
   ],
@@ -1075,6 +1107,8 @@ const updateProductBodySchema = {
     manufacturerId: manufacturerIdBodyField,
     euResponsibleId: euResponsibleIdBodyField,
     warnings: warningsBodyField,
+    hsCode: hsCodeBodyField,
+    originCountry: originCountryBodyField,
     withdrawal: withdrawalBodyField,
     documentIds: documentIdsBodyField,
 
