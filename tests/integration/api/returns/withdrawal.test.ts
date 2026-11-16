@@ -365,7 +365,7 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
     const mails = watchMail();
     const bulk = await post(
       '/api/orders/status',
-      { status: 'shipped', orders: [{ orderId, shipment: { carrier: 'DHL' } }] },
+      { status: 'shipped', orders: [{ orderId, shipments: [{ carrier: 'DHL' }] }] },
       admin,
     );
     const own = await read(orderId);

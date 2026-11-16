@@ -3,14 +3,17 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
+import { SUPPORTED_DELIVERY_COUNTRIES } from '@config/deliveryCountries.js';
+
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
 
 // GET /api/delivery/methods: how this shop gets an order to its buyer, for the page that confirms an
-// order: the methods it has enabled, what the manual one costs, from which sum it is free, the
-// countries it goes to, and where and when a buyer collects an order. Everybody reads it, a guest too
+// order: the methods it has enabled, where and when a buyer collects an order, and the zones it
+// delivers to with what the manual delivery there costs and from which sum every delivery there is
+// free. Everybody reads it, a guest too
 
 let app: FastifyInstance;
 let buyer: TestUser;
@@ -34,12 +37,13 @@ const read = (headers: Record<string, string> = {}) =>
   app.inject({ method: 'GET', url: '/api/delivery/methods', headers });
 
 describe('GET /api/delivery/methods', () => {
-  it('gives a guest the methods of the shop with the price of each', async () => {
+  it('gives a guest the methods of the shop and its zones', async () => {
     setShopSettings({
-      deliveryMethods: ['manual', 'pickup'],
-      deliveryFlatPrice: 4.99,
-      deliveryFreeFrom: 50,
-      deliveryCountries: ['UA', 'PL'],
+      deliveryMethods: ['manual', 'pickup', 'carrier'],
+      deliveryZones: [
+        { name: 'Spain', countries: ['ES'], manualPrice: 5, freeFrom: 60 },
+        { name: 'EU', countries: ['FR', 'DE'], manualPrice: null, freeFrom: null },
+      ],
       pickupAddress: 'Main street 1, Kyiv',
       pickupHours: 'Mon-Fri 10:00-18:00',
     });
@@ -50,22 +54,13 @@ describe('GET /api/delivery/methods', () => {
     expect(res.json()).toEqual({
       currency: 'eur',
       methods: [
-        {
-          method: 'manual',
-          price: 4.99,
-          freeFrom: 50,
-          countries: ['UA', 'PL'],
-          address: null,
-          hours: null,
-        },
-        {
-          method: 'pickup',
-          price: 0,
-          freeFrom: null,
-          countries: [],
-          address: 'Main street 1, Kyiv',
-          hours: 'Mon-Fri 10:00-18:00',
-        },
+        { method: 'manual', address: null, hours: null },
+        { method: 'pickup', address: 'Main street 1, Kyiv', hours: 'Mon-Fri 10:00-18:00' },
+        { method: 'carrier', address: null, hours: null },
+      ],
+      zones: [
+        { name: 'Spain', countries: ['ES'], manualPrice: 5, freeFrom: 60 },
+        { name: 'EU', countries: ['FR', 'DE'], manualPrice: null, freeFrom: null },
       ],
     });
   });
@@ -80,27 +75,25 @@ describe('GET /api/delivery/methods', () => {
     ]);
   });
 
-  it('says a delivery costs nothing when the shop names no price', async () => {
-    setShopSettings({ deliveryFlatPrice: null, deliveryFreeFrom: null });
+  it('names the countries of the zone of the rest: every country no other zone names', async () => {
+    setShopSettings({
+      deliveryZones: [
+        { name: 'Spain', countries: ['ES'], manualPrice: 5, freeFrom: null },
+        { name: 'Rest', countries: 'rest', manualPrice: 30, freeFrom: null },
+      ],
+    });
 
-    const manual = (await read()).json().methods[0];
+    const [, rest] = (await read()).json().zones;
 
-    expect(manual).toMatchObject({ method: 'manual', price: 0, freeFrom: null });
+    expect(rest.countries).toEqual(SUPPORTED_DELIVERY_COUNTRIES.filter((c) => c !== 'ES'));
   });
 
-  it('leaves out a method the shop has not enabled', async () => {
-    setShopSettings({ deliveryMethods: ['pickup'] });
+  it('leaves out a method the shop has not enabled, and gives no zone a shop has not set', async () => {
+    setShopSettings({ deliveryMethods: ['pickup'], deliveryZones: [] });
 
-    const res = await read();
+    const body = (await read()).json();
 
-    expect(res.json().methods.map((m: { method: string }) => m.method)).toEqual(['pickup']);
-  });
-
-  it('lists the countries the shop has named, and none for a shop that only has a pickup', async () => {
-    setShopSettings({ deliveryMethods: ['manual'], deliveryCountries: ['DE', 'GB'] });
-    expect((await read()).json().methods[0].countries).toEqual(['DE', 'GB']);
-
-    setShopSettings({ deliveryMethods: ['pickup'] });
-    expect((await read()).json().methods[0].countries).toEqual([]);
+    expect(body.methods.map((m: { method: string }) => m.method)).toEqual(['pickup']);
+    expect(body.zones).toEqual([]);
   });
 });
