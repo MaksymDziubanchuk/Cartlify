@@ -59,7 +59,7 @@ async function sentOrder() {
   const shipped = await send(
     'PATCH',
     `/api/orders/${orderId}/status`,
-    { status: 'shipped', shipment: { carrier: 'DHL', cost: 6 } },
+    { status: 'shipped', shipments: [{ carrier: 'DHL', cost: 6 }] },
     admin,
   );
   expect(shipped.statusCode).toBe(200);

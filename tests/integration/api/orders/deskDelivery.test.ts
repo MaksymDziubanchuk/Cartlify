@@ -4,7 +4,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
+import {
+  resetShopSettings,
+  setShopSettings,
+  testZonePrice,
+} from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createProduct,
@@ -72,7 +76,7 @@ const pickupBody = { ...person, method: 'pickup' };
 // a buyer with four orders: paid to Kyiv, shipped to Warsaw by DHL with a number and a cost, shipped to
 // Berlin by DPD without either (and a free delivery, a product without weight), paid for a pickup
 async function buyerWithOrders() {
-  setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 30 });
+  setShopSettings(testZonePrice(4.99, 30));
   const buyer = await newUser({ name: 'Olena' });
   const light = await createProduct({
     price: 10,
@@ -532,6 +536,15 @@ describe('GET /api/orders?format=csv: the delivery for the courier', () => {
     // one unit of 300 g, a product that has its weight
     expect(lines[1]).toContain(',300,yes,');
     expect(lines[1]).toContain('DHL Express,JD0146000123,7.00');
+  });
+
+  it('names every send of an order in several parcels, the first one first, with their costs added up', async () => {
+    const { buyer, warsaw } = await buyerWithOrders();
+    await addShipment(warsaw, { carrier: 'DPD', trackingNumber: 'DPD777', cost: 3.5 });
+
+    const line = (await csvOf(`userId=${buyer.id}&country=PL`))[1]!;
+
+    expect(line).toContain('DHL Express; DPD,JD0146000123; DPD777,10.50');
   });
 
   it('says the weight is not complete when a product has none, and the pickup has no address', async () => {

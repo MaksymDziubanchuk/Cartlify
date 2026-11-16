@@ -77,7 +77,7 @@ async function shipped(
     1,
     deliveryBody,
   );
-  const res = await setStatus(orderId, 'shipped', { shipment });
+  const res = await setStatus(orderId, 'shipped', { shipments: [shipment] });
   expect(res.statusCode).toBe(200);
   return { orderId, shipmentId: res.json().shipments[0].id as number };
 }
@@ -123,11 +123,13 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: the details of the s
       id: orderId,
       status: 'shipped',
       delivery: {
-        shipment: {
-          carrier: 'UPS',
-          trackingNumber: 'B2',
-          trackingUrl: 'https://track.example.com/B2',
-        },
+        shipments: [
+          {
+            carrier: 'UPS',
+            trackingNumber: 'B2',
+            trackingUrl: 'https://track.example.com/B2',
+          },
+        ],
       },
       shipments: [{ id: shipmentId, carrier: 'UPS', trackingNumber: 'B2' }],
     });
@@ -167,11 +169,14 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: the details of the s
     const res = await patchShipment(orderId, shipmentId, { trackingNumber: null });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().delivery.shipment).toEqual({
-      carrier: 'DHL',
-      trackingNumber: null,
-      trackingUrl: 'https://track.example.com/A1',
-    });
+    expect(res.json().delivery.shipments).toEqual([
+      {
+        state: 'sent',
+        carrier: 'DHL',
+        trackingNumber: null,
+        trackingUrl: 'https://track.example.com/A1',
+      },
+    ]);
     expect(mails).toHaveLength(1);
     expect(mails[0]!.text).toContain('Carrier: DHL');
     expect(mails[0]!.text).toContain('Follow your parcel: https://track.example.com/A1');
@@ -529,6 +534,8 @@ describe('POST /api/orders/status and the cost of a send', () => {
       asAdminList.json().items.find((o: { id: number }) => o.id === orderId).shipments[0].cost,
     ).toBe(7.5);
     expect(JSON.stringify(asBuyerList.json())).not.toContain('"cost"');
-    expect(JSON.stringify(asBuyerList.json())).not.toContain('"shipments"');
+    // the list of the staff (shipments of the order) is none of the buyer's; the buyer has the
+    // parcels on their way in the delivery
+    for (const order of asBuyerList.json().items) expect(order).not.toHaveProperty('shipments');
   });
 });
