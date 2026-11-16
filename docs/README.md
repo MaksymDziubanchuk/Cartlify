@@ -7,6 +7,7 @@
 | [Returns](returns.md)                   | withdrawal and returns, the money back, personal data and its terms                  |
 | [Payments](payments.md)                 | the ways to pay, the money journal, refunds, refunds by hand, holds, the webhook     |
 | [Disputes](disputes.md)                 | disputes at the bank followed by the app, a text for the terms, the Stripe dashboard |
+| [Delivery](delivery.md)                 | methods, zones, customs, carriers of ShippyPro, parcels and boxes, events, voids     |
 | [Return scenarios](return-scenarios.md) | each case of a withdrawal or a return, step by step, with the routes                 |
 | [Shop settings](shop-settings.md)       | the data of the shop root changes without a deploy, a row a setting                  |
 | [Languages](languages.md)               | how the server picks a language, mails, the chat bot and payment pages               |

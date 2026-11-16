@@ -92,6 +92,9 @@ LIMIT_MAIL_PER_ADDRESS=10
 LIMIT_MAIL_PER_EMAIL=1
 # the payment pages of a user in a minute
 LIMIT_CHECKOUT_PER_USER=10
+# the requests of a user in a minute that price the delivery of the cart, the confirmations too:
+# each may ask the delivery provider, whose account takes a few requests a second for the whole shop
+LIMIT_DELIVERY_PRICES_PER_USER=30
 # the changes of the password of a user in 15 minutes
 LIMIT_PASSWORD_CHANGE_PER_USER=10
 # the exports of the data of a user in an hour
@@ -150,6 +153,17 @@ MAIL_PROVIDER=sendgrid
 FILE_STORAGE_PROVIDER=cloudinary
 AI_PROVIDER=openai
 CAPTCHA_PROVIDER=turnstile
+DELIVERY_PROVIDER=shippypro
+
+# ShippyPro, the delivery provider (see delivery.md): the key of the account (API, API Key in its
+# dashboard, Full Access). Without it the method carrier cannot be switched on. With it the secret of
+# the webhook is required, the start stops without it in development and production, and with one
+# shorter than 32 characters (the route is outside the request rate limit): the value of the custom
+# header X-Webhook-Secret of the webhook in the dashboard of ShippyPro, a random text such as
+# openssl rand -base64 32
+SHIPPYPRO_API_KEY=
+SHIPPYPRO_API_TEST_KEY=
+SHIPPYPRO_WEBHOOK_SECRET=
 
 # OpenAI / AI assistant and the check of the comments of reviews; the check asks the model for
 # temperature 0, a model that does not take it (a reasoning one) lets every comment through
