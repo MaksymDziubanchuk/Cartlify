@@ -1,31 +1,19 @@
 // DELIVERY: how the shop gets an order to its buyer
 
+import { DELIVERY_METHOD_NAMES } from '@config/deliveryMethods.js';
+
 const deliveryMethodInfoSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
     method: {
       type: 'string',
-      enum: ['manual', 'pickup'],
+      enum: [...DELIVERY_METHOD_NAMES],
       description:
-        'manual: the shop sends the order itself, to an address; pickup: the buyer collects it ' +
-        'at the shop.',
-    },
-    price: {
-      type: 'number',
-      description:
-        'What a buyer pays for the delivery, 0 for a pickup and when the shop names no price.',
-    },
-    freeFrom: {
-      type: ['number', 'null'],
-      description:
-        'From this sum of the items on the delivery is free, the sum itself included; empty when ' +
-        'the shop names none.',
-    },
-    countries: {
-      type: 'array',
-      items: { type: 'string', minLength: 2, maxLength: 2 },
-      description: 'The countries the delivery goes to (ISO codes), none for a pickup.',
+        'manual: the shop sends the order itself, to an address, at the price of the zone of the ' +
+        'country; pickup: the buyer collects it at the shop; carrier: a carrier of the delivery ' +
+        'provider the buyer picks for the address, at its price (POST ' +
+        '/api/orders/current/delivery-options).',
     },
     address: {
       type: ['string', 'null'],
@@ -39,7 +27,34 @@ const deliveryMethodInfoSchema = {
         'docs/shop-settings.md): the frontend parses it and shows it in its language.',
     },
   },
-  required: ['method', 'price', 'freeFrom', 'countries', 'address', 'hours'],
+  required: ['method', 'address', 'hours'],
+} as const;
+
+const deliveryZoneInfoSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: 'The name of the zone.' },
+    countries: {
+      type: 'array',
+      items: { type: 'string', minLength: 2, maxLength: 2 },
+      description:
+        'The countries of the zone (ISO codes); for the zone of the rest every country the app ' +
+        'delivers to that no other zone names.',
+    },
+    manualPrice: {
+      type: ['number', 'null'],
+      description:
+        'What the manual delivery to the zone costs; null: the manual delivery does not go there.',
+    },
+    freeFrom: {
+      type: ['number', 'null'],
+      description:
+        'From this sum of the items on every delivery to the zone is free, the sum itself included ' +
+        '(the carriers too); empty when the zone names none.',
+    },
+  },
+  required: ['name', 'countries', 'manualPrice', 'freeFrom'],
 } as const;
 
 const deliveryMethodsResponseSchema = {
@@ -52,8 +67,15 @@ const deliveryMethodsResponseSchema = {
       description: 'The currency of the prices, the one of the catalog.',
     },
     methods: { type: 'array', items: deliveryMethodInfoSchema },
+    zones: {
+      type: 'array',
+      items: deliveryZoneInfoSchema,
+      description:
+        'The countries the shop delivers to, whatever the method, in zones; a delivery to an ' +
+        'address in a country of none of them is refused.',
+    },
   },
-  required: ['currency', 'methods'],
+  required: ['currency', 'methods', 'zones'],
 } as const;
 
 export const deliveryDtoSchemas = [deliveryMethodsResponseSchema];
