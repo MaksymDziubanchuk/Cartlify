@@ -471,7 +471,7 @@ describe('what the bot knows of the customer', () => {
     const { instructions } = calls[0]!.request;
     expect(instructions).toContain('the customer picks one when confirming the order');
     expect(instructions).toMatch(
-      /- by hand: the shop sends the order to an address in UA, PL, DE or GB;/,
+      /- by hand: the shop sends the order to an address in UA, PL, DE, GB or ES;/,
     );
     expect(instructions).toContain('- pickup: the customer collects the order at');
     expect(instructions).toContain(
@@ -496,11 +496,13 @@ describe('what the bot knows of the customer', () => {
     const { chat, orderId } = await customerWithOrder('paid');
     await adminMoves(orderId, {
       status: 'shipped',
-      shipment: {
-        carrier: 'DHL',
-        trackingNumber: 'JD0146',
-        trackingUrl: 'https://dhl.example.com/JD0146',
-      },
+      shipments: [
+        {
+          carrier: 'DHL',
+          trackingNumber: 'JD0146',
+          trackingUrl: 'https://dhl.example.com/JD0146',
+        },
+      ],
     });
     const calls = answerAsModel();
 
@@ -533,7 +535,7 @@ describe('what the bot knows of the customer', () => {
     [
       'a send taken back',
       async (orderId: number) => {
-        await adminMoves(orderId, { status: 'shipped', shipment: { carrier: 'DHL' } });
+        await adminMoves(orderId, { status: 'shipped', shipments: [{ carrier: 'DHL' }] });
         await adminMoves(orderId, { status: 'paid', keepShippingCost: false });
       },
     ],
@@ -541,7 +543,7 @@ describe('what the bot knows of the customer', () => {
       // no send is taken back here, the order only lost a step: the journal of the admins knows
       'a delivery taken back',
       async (orderId: number) => {
-        await adminMoves(orderId, { status: 'shipped', shipment: { carrier: 'DHL' } });
+        await adminMoves(orderId, { status: 'shipped', shipments: [{ carrier: 'DHL' }] });
         await adminMoves(orderId, { status: 'delivered' });
         await adminMoves(orderId, { status: 'shipped' });
       },

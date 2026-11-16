@@ -81,7 +81,7 @@ describe('loadShopSettings()', () => {
     expect(values.paymentPageMinutes).toBeGreaterThanOrEqual(30);
     expect(values.shopLocale).toMatch(/^[a-z]{2}$/);
     expect(values.enabledLocales).toContain(values.shopLocale);
-    expect(Array.isArray(values.deliveryCountries)).toBe(true);
+    expect(Array.isArray(values.deliveryZones)).toBe(true);
   });
 
   // the limit of the newsletters has defaults in the code, written as rows of the system at the start
@@ -94,7 +94,7 @@ describe('loadShopSettings()', () => {
     expect(publicShopSettings()).not.toHaveProperty('newsletterLimitDays');
   });
 
-  it('keeps the seller fields and the countries out of the public view, and names only what it needs', () => {
+  it('keeps the sender of the parcels and the reply address out of the public view, and names only what it needs', () => {
     const pub = publicShopSettings();
 
     expect(Object.keys(pub).sort()).toEqual(
@@ -110,7 +110,7 @@ describe('loadShopSettings()', () => {
         'sellerPhone',
       ].sort(),
     );
-    expect(pub).not.toHaveProperty('deliveryCountries');
+    expect(pub).not.toHaveProperty('deliverySender');
     expect(pub).not.toHaveProperty('emailReplyTo');
   });
 });
@@ -163,7 +163,7 @@ describe('writeShopSettings()', () => {
     await expect(
       writeShopSettings({
         actorId: root.id,
-        values: { shopName: 'Refused', deliveryFlatPrice: 5 },
+        values: { shopName: 'Refused', customsFreeCountries: ['ES'] },
         check: () => {
           throw new Error('refused');
         },
@@ -183,7 +183,10 @@ describe('writeShopSettings()', () => {
         sellerTaxId: null,
         sellerEmail: null,
         sellerPhone: null,
-        deliveryCountries: [],
+        deliveryZones: [],
+        customsFreeCountries: null,
+        deliverySender: null,
+        deliveryMethods: ['manual'],
         // loadShopSettings above read the rows of the database, its reply-to is the empty default
         emailReplyTo: 'help@cartlify.test',
       },
@@ -191,7 +194,8 @@ describe('writeShopSettings()', () => {
 
     expect(missingShopSettingsFields().sort()).toEqual(
       [
-        'deliveryCountries',
+        'deliveryZones',
+        'customsFreeCountries',
         // nobody uploaded a logo in this file
         'logoUrl',
         'sellerLegalName',
@@ -210,12 +214,22 @@ describe('writeShopSettings()', () => {
         sellerTaxId: '123456',
         sellerEmail: 'legal@cartlify.test',
         sellerPhone: '+380501234567',
-        deliveryCountries: ['UA'],
+        deliveryZones: [{ name: 'Home', countries: ['UA'], manualPrice: 0, freeFrom: null }],
+        customsFreeCountries: ['UA'],
       },
     });
 
     // logoUrl stays: nothing in this file uploads one
     expect(missingShopSettingsFields()).toEqual(['logoUrl']);
+
+    // a carrier of the delivery provider sends the parcels from the address of the shop: without it
+    // the method is named too (the key of the provider is the one of the mock of the tests)
+    await writeShopSettings({
+      actorId: root.id,
+      values: { deliveryMethods: ['manual', 'carrier'] },
+    });
+    expect(missingShopSettingsFields()).toEqual(['logoUrl', 'deliverySender']);
+    await writeShopSettings({ actorId: root.id, values: { deliveryMethods: ['manual'] } });
   });
 
   // the reply-to has a default, but an empty one: no mail goes out without it
