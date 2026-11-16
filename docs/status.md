@@ -1,6 +1,6 @@
 # Status
 
-> **Stage:** backend API in active development, the storefront comes on top of it · **Tests:** 16,000+ on every push, unit and integration on a real PostgreSQL and Redis
+> **Stage:** backend API in active development, the storefront comes on top of it · **Tests:** 17,000+ on every push, unit and integration on a real PostgreSQL and Redis
 
 ## ✅ Done
 
@@ -33,12 +33,12 @@
 4. Docker, the periodic tasks (the newsletters, the cleanups, backups) and a load run
 5. prices that follow the demand (an experiment)
 6. the full documentation and a launch checklist
-7. a storefront on this API
+7. a catalog in several languages, then a storefront on this API
 
 ## 🌱 Built to Grow
 
 - **Ready for a storefront:** every route, answer and error code is described in Swagger, so a frontend is built against a documented API
 - **A new language is a dictionary:** the mails speak the language of their reader, and one more language needs no change of the code
-- **A new provider is a folder:** every outside service sits behind an interface of its kind; a new provider of payments, of mail, of files, of the models, of the captcha or of accounts joins the ones of today with a folder and a line in a registry, and runs through the same contract tests
+- **A new provider is a folder:** every outside service sits behind an interface of its kind; a new provider of payments, of delivery, of mail, of files, of the models, of the captcha or of accounts joins the ones of today with a folder and a line in a registry, and runs through the same contract tests
 - **Money that adds up:** every movement of money is a line of one journal, written by the database with the change it belongs to, so the reports, the alerts and the cards never disagree
 - **Rules live in the database:** roles, row level security and functions keep every client of the API, present or future, within the same limits

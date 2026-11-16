@@ -13,33 +13,33 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 - real-time support chat with guest/user/admin flows
 - AI-assisted product and support conversations with fallback behavior
 - shop data root changes without a deploy (a table with versions, not environment variables) and mails, the chat bot and the payment page that answer in the customer's own language, through a shared dictionary (i18next)
-- every outside service (payments, mail, files, AI, captcha, login with an account elsewhere) behind an interface of its kind, so a provider is replaced or joined by another without touching the rest of the app ([providers](providers.md))
+- every outside service (payments, delivery, mail, files, AI, captcha, login with an account elsewhere) behind an interface of its kind, so a provider is replaced or joined by another without touching the rest of the app ([providers](providers.md))
 - documented REST API surface through Swagger/OpenAPI
 - API design that can later support SSR, GraphQL, and additional real-time features
 
 ## Technology Stack
 
-| Area                          | Technologies                                                                | Status      |
-| ----------------------------- | --------------------------------------------------------------------------- | ----------- |
-| Runtime                       | Node.js, TypeScript                                                         | Implemented |
-| Web framework                 | Fastify                                                                     | Implemented |
-| Database access               | PostgreSQL, Prisma                                                          | Implemented |
-| DB hardening layer            | raw SQL scripts for roles, schema, RLS, views, functions, triggers, indexes | Implemented |
-| Authentication                | JWT, HttpOnly cookies, refresh flow                                         | Implemented |
-| Authorization                 | RBAC + PostgreSQL RLS context                                               | Implemented |
-| API documentation             | Swagger / OpenAPI                                                           | Implemented |
-| Realtime chat                 | WebSocket chat endpoint and event-based messaging                           | Implemented |
-| AI assistant                  | OpenAI-powered chatbot service with product/support context                 | Implemented |
+| Area                          | Technologies                                                                                                                                   | Status      |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Runtime                       | Node.js, TypeScript                                                                                                                            | Implemented |
+| Web framework                 | Fastify                                                                                                                                        | Implemented |
+| Database access               | PostgreSQL, Prisma                                                                                                                             | Implemented |
+| DB hardening layer            | raw SQL scripts for roles, schema, RLS, views, functions, triggers, indexes                                                                    | Implemented |
+| Authentication                | JWT, HttpOnly cookies, refresh flow                                                                                                            | Implemented |
+| Authorization                 | RBAC + PostgreSQL RLS context                                                                                                                  | Implemented |
+| API documentation             | Swagger / OpenAPI                                                                                                                              | Implemented |
+| Realtime chat                 | WebSocket chat endpoint and event-based messaging                                                                                              | Implemented |
+| AI assistant                  | OpenAI-powered chatbot service with product/support context                                                                                    | Implemented |
 | Payments                      | Stripe payment pages (card with Google Pay and Apple Pay, PayPal, Bizum) and webhook, a money journal, refunds, disputes followed to their end | Implemented |
-| Media                         | Cloudinary                                                                  | Implemented |
-| Email                         | SendGrid: a stream for the orders, one of its own for the newsletters       | Implemented |
-| Captcha                       | Cloudflare Turnstile on the forms that mail or open an account              | Implemented |
-| OAuth                         | Google, GitHub, LinkedIn                                                    | Implemented |
-| Cache / background processing | Redis, order timeout worker, the money worker, the lock of the newsletter pass | Implemented |
-| Internationalization          | i18next, a dictionary file per language (`src/locales/`)                   | Implemented |
-| Lint / formatting             | ESLint, Prettier                                                            | Implemented |
-| Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker             | Implemented |
-| CI utilities                  | GitHub Actions for tests, DB migration and SQL execution                    | Implemented |
+| Media                         | Cloudinary                                                                                                                                     | Implemented |
+| Email                         | SendGrid: a stream for the orders, one of its own for the newsletters                                                                          | Implemented |
+| Captcha                       | Cloudflare Turnstile on the forms that mail or open an account                                                                                 | Implemented |
+| OAuth                         | Google, GitHub, LinkedIn                                                                                                                       | Implemented |
+| Cache / background processing | Redis, order timeout worker, the money worker, the lock of the newsletter pass                                                                 | Implemented |
+| Internationalization          | i18next, a dictionary file per language (`src/locales/`)                                                                                       | Implemented |
+| Lint / formatting             | ESLint, Prettier                                                                                                                               | Implemented |
+| Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker                                                                                | Implemented |
+| CI utilities                  | GitHub Actions for tests, DB migration and SQL execution                                                                                       | Implemented |
 
 ## Project Structure
 

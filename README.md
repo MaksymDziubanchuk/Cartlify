@@ -19,33 +19,36 @@
 
 ---
 
-Cartlify is a portfolio project: a REST API with the parts a real shop needs, from the catalog to the accounting report. The API is documented in Swagger, the storefront comes on top of it, and the project is in active development ([status](docs/status.md)).
+Cartlify is a portfolio project: a REST API with the parts a real shop needs, from the catalog to the accounting report. The API is documented in Swagger, the storefront comes on top of it, and the project is in active development ([status](docs/status.md))
+
+**Why Cartlify:** every outside service a block of its own, money that adds up, rules the API cannot step over, the rules of the EU, 17,000+ tests — [advantages](docs/advantages.md).
 
 ## ✨ What It Does
 
-| Area                       | What is there                                                                                                                           |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 🛍️ **Catalog**             | products with variants (a size, a colour, a memory), a directory of characteristics, filters of the catalog, search, reviews, favorites |
-| 📦 **Stock**               | batches with expiry dates, deliveries, write-offs, reservation for orders, a log of every change                                        |
-| 💳 **Orders and payments** | cart, delivery, consents to the terms, a card with Google Pay and Apple Pay, PayPal and Bizum on the page of Stripe, mails              |
-| 💶 **Money**               | a journal of every movement of money, refunds followed to the end, disputes at the bank followed by the app itself                      |
-| ↩️ **Returns**             | the withdrawal within the EU term by the account or a public form, the goods taken back, the money back through the provider            |
-| 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), roles, sessions, a captcha on the public forms, data export     |
-| 📣 **Newsletters**         | a consent of its own with a double opt-in for guests, one unsubscribe, campaigns in several languages, a mail stream of its own         |
-| 💬 **Support**             | real-time chat over WebSocket with an OpenAI assistant that knows the catalog and hands a talk over to an admin                         |
-| 🌍 **Languages**           | every mail in the language of its reader (English, Ukrainian, Spanish), the data of the shop root changes without a deploy              |
-| 📊 **Admin**               | journals, alerts, statistics, accounting reports, the product safety data an offer needs in the EU                                      |
+| Area                       | What is there                                                                                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🛍️ **Catalog**             | products with variants (a size, a colour, a memory), a directory of characteristics, filters of the catalog, search, reviews, favorites                                          |
+| 📦 **Stock**               | batches with expiry dates, deliveries, write-offs, reservation for orders, a log of every change                                                                                 |
+| 💳 **Orders and payments** | cart, delivery, consents to the terms, a card with Google Pay and Apple Pay, PayPal and Bizum on the page of Stripe, mails                                                       |
+| 🚚 **Delivery**            | the carriers of a delivery provider priced for the address, zones of the shop, customs data, an order in several parcels and boxes with their labels, the events of the carriers |
+| 💶 **Money**               | a journal of every movement of money, refunds followed to the end, disputes at the bank followed by the app itself                                                               |
+| ↩️ **Returns**             | the withdrawal within the EU term by the account or a public form, the goods taken back, the money back through the provider                                                     |
+| 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), roles, sessions, a captcha on the public forms, data export                                              |
+| 📣 **Newsletters**         | a consent of its own with a double opt-in for guests, one unsubscribe, campaigns in several languages, a mail stream of its own                                                  |
+| 💬 **Support**             | real-time chat over WebSocket with an OpenAI assistant that knows the catalog and hands a talk over to an admin                                                                  |
+| 🌍 **Languages**           | every mail in the language of its reader (English, Ukrainian, Spanish), the data of the shop root changes without a deploy                                                       |
+| 📊 **Admin**               | journals, alerts, statistics, accounting reports, the product safety data an offer needs in the EU                                                                               |
 
 ## 🧱 How It Is Built
 
 - **Rules in the database.** Roles, row level security, functions and triggers live in SQL scripts; the API connects as a role that cannot step over them, and every request runs as its own actor.
 - **Thin layers.** Each module goes routes → controllers → services, with JSON schemas and DTO types next to it.
 - **Money that follows itself.** Every movement of money is a line of one journal, only added to, written by the database in the same transaction as the change it belongs to; the reports, the alerts and the cards read it. A dispute at the bank is followed from its first event to its end: the parcel is held, a draft of the evidence is put at Stripe, and when the bank decides the app sends the money that waited, or cancels the order and sends the rest ([disputes](docs/disputes.md)).
-- **Outside services you can swap.** Payments, mail, files, the models, the captcha and the login with an account elsewhere each sit behind an interface of their kind; a provider lives in a folder of its own, and a new one with the same function is a folder and a line in a registry, with nothing else of the app or of the database to change. A test keeps the name of every provider in its folder, and one contract for each kind runs every provider through the same tests ([providers](docs/providers.md)).
+- **Outside services you can swap.** Payments, delivery, mail, files, the models, the captcha and the login with an account elsewhere each sit behind an interface of their kind; a provider lives in a folder of its own, and a new one with the same function is a folder and a line in a registry, with nothing else of the app or of the database to change. A test keeps the name of every provider in its folder, and one contract for each kind runs every provider through the same tests ([providers](docs/providers.md)).
 - **Tests on the real stack.** Unit and integration tests run against a disposable PostgreSQL and Redis in Docker on every push; the structure of the built database is compared with a committed snapshot.
 - **An API held to its docs.** Every answer of the integration tests is checked against the OpenAPI document, and a test checks that the document describes every route, code and example.
 
-Also in use: Stripe, Cloudinary, SendGrid, OpenAI, Cloudflare Turnstile, Google, GitHub and LinkedIn sign-in (the providers of today, [providers](docs/providers.md)), Jest, GitHub Actions. More in [architecture](docs/architecture.md).
+Also in use: Stripe, ShippyPro, Cloudinary, SendGrid, OpenAI, Cloudflare Turnstile, Google, GitHub and LinkedIn sign-in (the providers of today, [providers](docs/providers.md)), Jest, GitHub Actions. More in [architecture](docs/architecture.md).
 
 ## 🚀 Quick Start
 

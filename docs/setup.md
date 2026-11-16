@@ -125,3 +125,7 @@ An empty shop has no products. Either load the demo data through the routes of t
 2. the categories, and for each the characteristics it asks for (`PUT /api/categories/:categoryId/attributes`);
 3. the manufacturers and the persons responsible in the EU, and the documents of the products (`/api/admin/parties`, `/api/admin/documents`);
 4. the products with their variants and pictures (`POST /api/products`), then the stock of the variants by a delivery (`POST /api/products/stock/deliveries`). A variant is shown to buyers when it shows a picture; its free units are what a delivery took in.
+
+## 11. Set up the delivery
+
+Root sets how the shop sends its orders (`PUT /api/root/shop-settings`, [shop settings](shop-settings.md)): the methods (`deliveryMethods`: by hand, a pickup, the carriers), the zones with the price of the delivery by hand and the sum it is free from (`deliveryZones`), the countries a parcel goes to without customs (`customsFreeCountries`) and the address the parcels go from (`deliverySender`). The carriers need the key of the delivery provider and the secret of its webhook in the environment (`SHIPPYPRO_API_KEY`, `SHIPPYPRO_WEBHOOK_SECRET`), the weight and the sizes of every variant, and the customs data of the products that go abroad. The whole of it — [Delivery](delivery.md).
