@@ -7,6 +7,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { askMoneyManager, isMoneyManager } from '@db/moneyManager.helper.js';
 import { askNewsletterManager, isNewsletterManager } from '@db/newsletterManager.helper.js';
 import { shopToday } from '@helpers/shopDay.js';
+import { readDeliveryProviderDown } from '@providers/delivery/index.js';
 import { NotFoundError } from '@utils/errors.js';
 import { orderTimeoutWorkerState } from '../../../../workers/orderTimeout.worker.js';
 import {
@@ -19,6 +20,10 @@ import {
   type CampaignShare,
 } from '../../newsletters/services/helpers/campaignShares.helper.js';
 import { readSendingHalt } from '../../newsletters/services/helpers/sendingHalt.helper.js';
+import {
+  parcelCaseSql,
+  type ParcelAlertCase,
+} from '../../orders/services/helpers/parcelCases.helper.js';
 import { andOf, returnConditions } from '../../returns/services/helpers/returnFilters.helper.js';
 import {
   MONEY_REFUNDS,
@@ -49,6 +54,7 @@ import {
   type AlertWindow,
 } from './helpers/alertKinds.helper.js';
 
+import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import type { OrderHoldReason } from '@helpers/orderHolds.js';
 
 import type {
@@ -82,6 +88,7 @@ type Actor = { actorId: UserId; actorRole: Role };
 type CaseKind = Exclude<
   AdminAlertKind,
   | 'worker_stalled'
+  | 'delivery_provider_down'
   | 'shop_settings_incomplete'
   | 'shop_locale_missing'
   | 'newsletter_sending_halted'
@@ -89,6 +96,7 @@ type CaseKind = Exclude<
 
 const SINGLE_STATE_KINDS = new Set<AdminAlertKind>([
   'worker_stalled',
+  'delivery_provider_down',
   'shop_settings_incomplete',
   'shop_locale_missing',
   'newsletter_sending_halted',
@@ -142,11 +150,20 @@ const sharedCases =
       and ${shareCondition(share, (share === 'complaints' ? window.permille : window.percent) ?? 0)}`,
   });
 
-// the order is delivered by the method: the delivery row of the order says it
-const deliveryMethodIs = (method: 'manual' | 'pickup') => Prisma.sql`exists (
+// the order is delivered by one of the methods: the delivery row of the order says it
+const deliveryMethodIs = (...methods: DeliveryMethodName[]) => Prisma.sql`exists (
     select 1 from cartlify.order_deliveries d
-    where d."orderId" = t.id and d.method = ${method}::cartlify."DeliveryMethod"
+    where d."orderId" = t.id and d.method = any(${methods}::cartlify."DeliveryMethod"[])
   )`;
+
+// the orders of a case of the parcels of the delivery provider (the filter parcels of the list of
+// orders)
+const parcelCases =
+  (kind: ParcelAlertCase) =>
+  (window: AlertWindow): Cases => ({
+    from: ORDERS,
+    where: parcelCaseSql(kind, window.before),
+  });
 
 // the cases of a kind about the statements of return: the statements of the filters of the list
 const returnCases = (filters: Parameters<typeof returnConditions>[0]): Cases => ({
@@ -197,12 +214,12 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
     from: ORDERS,
     where: Prisma.sql`t.status = 'paid'::cartlify."OrderStatus" and t.holds = '[]'::jsonb`,
   }),
-  // sent by hand long ago and not delivered yet
+  // sent by hand or by a carrier long ago and not delivered yet
   shipped_orders_waiting: (window) => ({
     from: ORDERS,
     where: Prisma.sql`t.status = 'shipped'::cartlify."OrderStatus"
       and t."updatedAt" < ${utcTime(window.before ?? new Date(0))}
-      and ${deliveryMethodIs('manual')}`,
+      and ${deliveryMethodIs('manual', 'carrier')}`,
   }),
   // a pickup ready long ago and not collected yet
   pickup_not_collected: (window) => ({
@@ -239,6 +256,14 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
           and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
       )`,
   }),
+  // the parcels of the delivery provider that wait for an admin: one made before the time and not
+  // taken, one waiting for its void, one coming back or lost with units no statement holds, parcels
+  // ahead of their order (parcelCases.helper.ts)
+  parcels_not_collected: parcelCases('not_collected'),
+  parcels_void_pending: parcelCases('void_pending'),
+  parcels_coming_back: parcelCases('coming_back'),
+  parcels_lost: parcelCases('lost'),
+  parcels_ahead_of_order: parcelCases('ahead'),
   // the refunds of the late payments the shop gave back, that came to their state since the time:
   // the buyer may ask
   late_refunds: (window) =>
@@ -500,8 +525,10 @@ export async function getAdminAlerts(
   const now = Date.now();
   const userId = Number(actor.actorId);
   const dismissals = await readDismissals(userId);
-  // the last stop of the sending worker, read before the snapshot of the database (it is in redis)
+  // the last stop of the sending worker and the time the delivery provider stopped answering, read
+  // before the snapshot of the database (they are in redis)
   const halt = await readSendingHalt();
+  const providerDown = await readDeliveryProviderDown();
 
   const { alerts, kept, countedKinds, kinds } = await prisma.$transaction(
     async (db) => {
@@ -538,6 +565,13 @@ export async function getAdminAlerts(
           tally = { count: stalled ? 1 : 0, dismissed: 0 };
         } else if (kind === 'newsletter_sending_halted') {
           tally = { count: halt ? 1 : 0, dismissed: 0 };
+        } else if (kind === 'delivery_provider_down') {
+          // down since before the threshold, while the shop sends by its carriers
+          const down =
+            shopSettings().deliveryMethods.includes('carrier') &&
+            providerDown !== null &&
+            providerDown < (window.before ?? new Date(0));
+          tally = { count: down ? 1 : 0, dismissed: 0 };
         } else if (kind === 'shop_locale_missing') {
           tally = { count: isAvailableLocale(shopSettings().shopLocale) ? 0 : 1, dismissed: 0 };
         } else {
@@ -550,7 +584,12 @@ export async function getAdminAlerts(
           ...tally,
           threshold,
           list: alertListOf(kind, window),
-          occurredAt: kind === 'newsletter_sending_halted' && halt ? halt.at.toISOString() : null,
+          occurredAt:
+            kind === 'newsletter_sending_halted' && halt
+              ? halt.at.toISOString()
+              : kind === 'delivery_provider_down' && tally.count > 0 && providerDown
+                ? providerDown.toISOString()
+                : null,
         });
       }
       return { alerts, kept, countedKinds, kinds };

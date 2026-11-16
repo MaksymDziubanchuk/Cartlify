@@ -7,6 +7,7 @@ import {
 } from '../../../newsletters/services/helpers/campaignShares.helper.js';
 
 import type { OrderHoldReason } from '@helpers/orderHolds.js';
+import type { ParcelCase } from '../../../orders/services/helpers/parcelCases.helper.js';
 import type { MoneyRefundPurpose } from '../../../payments/services/helpers/moneyRefunds.helper.js';
 import type {
   AdminAlertKind,
@@ -27,6 +28,12 @@ export const ADMIN_ALERT_KINDS = [
   'pickup_not_collected',
   'shipped_without_cost',
   'shipped_without_tracking',
+  // the parcels of the delivery provider that wait for an admin (parcelCases.helper.ts)
+  'parcels_not_collected',
+  'parcels_void_pending',
+  'parcels_coming_back',
+  'parcels_lost',
+  'parcels_ahead_of_order',
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
@@ -51,6 +58,7 @@ export const ADMIN_ALERT_KINDS = [
   'returns_money_late',
   'returns_goods_late',
   'worker_stalled',
+  'delivery_provider_down',
   'shop_settings_incomplete',
   'shop_locale_missing',
 ] as const satisfies readonly AdminAlertKind[];
@@ -122,6 +130,10 @@ const THRESHOLDS: Partial<Record<AdminAlertKind, ThresholdSpec>> = {
   shipped_without_cost: { unit: 'days', default: 3, min: 1, max: 365 },
   // an order shipped by hand, whose send has no tracking number, for so many days
   shipped_without_tracking: { unit: 'days', default: 2, min: 1, max: 365 },
+  // a parcel of the delivery provider made so many days ago that the carrier has not taken
+  parcels_not_collected: { unit: 'days', default: 3, min: 1, max: 365 },
+  // the delivery provider has not answered for so many seconds (decision 13: a quarter of an hour)
+  delivery_provider_down: { unit: 'seconds', default: 900, min: 60, max: 86_400 },
   // statements: the proof of the parcel is told and the shop has not confirmed it for so many days
   returns_proof_waiting: { unit: 'days', default: 2, min: 1, max: 365 },
   // statements: the buyer told nothing of the parcel and the goods are not in, so many days after
@@ -235,7 +247,11 @@ export function alertWindowOf(
     case 'pickup_not_collected':
     case 'shipped_without_cost':
     case 'shipped_without_tracking':
+    case 'parcels_not_collected':
       return { before: new Date(now - threshold * DAY) };
+    // the provider down since a time before this one
+    case 'delivery_provider_down':
+      return { before: new Date(now - threshold * 1000) };
     case 'returns_proof_waiting':
     case 'returns_goods_not_sent':
     case 'returns_money_late':
@@ -296,6 +312,14 @@ export const REFUND_ALERT_PURPOSES = {
   dispute_refunds_failed: 'dispute_remainder',
 } as const satisfies Partial<Record<AdminAlertKind, MoneyRefundPurpose>>;
 
+// the case of the parcels behind each kind of the parcels that has no window
+const PARCEL_CASE_OF = {
+  parcels_void_pending: 'void_pending',
+  parcels_coming_back: 'coming_back',
+  parcels_lost: 'lost',
+  parcels_ahead_of_order: 'ahead',
+} as const satisfies Partial<Record<AdminAlertKind, ParcelCase>>;
+
 // the paid orders root decides on, with what holds them
 export const HELD_ORDER_ALERTS = {
   hand_refunds_to_decide: 'hand_refund',
@@ -326,7 +350,7 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
         path: '/api/orders',
         query: {
           statuses: 'shipped',
-          deliveryMethod: 'manual',
+          deliveryMethod: 'manual,carrier',
           updatedTo: isoOf(window.before),
           sortBy: 'updatedAt',
           sortDir: 'asc',
@@ -362,6 +386,26 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           sortBy: 'updatedAt',
           sortDir: 'asc',
         },
+      };
+    // the parcels of the delivery provider that wait for an admin: the orders of the case, the paid
+    // first first for the parcels not taken, the longest unchanged first for the others
+    case 'parcels_not_collected':
+      return {
+        path: '/api/orders',
+        query: {
+          parcels: 'not_collected',
+          parcelsMadeTo: isoOf(window.before),
+          sortBy: 'paidAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'parcels_void_pending':
+    case 'parcels_coming_back':
+    case 'parcels_lost':
+    case 'parcels_ahead_of_order':
+      return {
+        path: '/api/orders',
+        query: { parcels: PARCEL_CASE_OF[kind], sortBy: 'updatedAt', sortDir: 'asc' },
       };
     // the refunds of the money journal: the list counts them with the same filters
     // (moneyRefunds.helper.ts is the rule of its rows), those asked before the days of the threshold
@@ -532,6 +576,7 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
     case 'chats_waiting':
       return { path: '/api/chat/admin/threads', query: { queue: 'unread' } };
     case 'worker_stalled':
+    case 'delivery_provider_down':
       return null;
     // the fields of the data of the shop root has not set yet (missingShopSettingsFields): the
     // list names them, its length is the count of the alert; root fills them in with
