@@ -45,9 +45,78 @@ export default async function ordersRouter(app: FastifyInstance) {
   );
 
   app.post(
+    '/current/delivery-options',
+    {
+      preHandler: [authGuard, requireRole(['USER']), ...requestLimits.deliveryPrices],
+      schema: ordersSchema.postDeliveryOptionsSchema,
+    },
+    ordersController.postDeliveryOptions,
+  );
+
+  // the parcels of an order of a carrier of the delivery provider: the staff
+  app.get(
+    '/:orderId/parcels/draft',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
+      schema: ordersSchema.getParcelsDraftSchema,
+    },
+    ordersController.getParcelsDraft,
+  );
+
+  app.get(
+    '/:orderId/carriers',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
+      schema: ordersSchema.getOrderCarriersSchema,
+    },
+    ordersController.getOrderCarriers,
+  );
+
+  app.post(
+    '/:orderId/parcels',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
+      schema: ordersSchema.postParcelsSchema,
+    },
+    ordersController.postParcels,
+  );
+
+  app.post(
+    '/parcels',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: ordersSchema.postParcelsBulkSchema,
+    },
+    ordersController.postParcelsBulk,
+  );
+
+  app.post(
+    '/:orderId/parcels/void',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
+      schema: ordersSchema.postParcelsVoidSchema,
+    },
+    ordersController.postParcelsVoid,
+  );
+
+  app.post(
+    '/:orderId/shipments/:shipmentId/void-confirmation',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('orderId'),
+        validateId('shipmentId'),
+      ],
+      schema: ordersSchema.postParcelVoidConfirmationSchema,
+    },
+    ordersController.postParcelVoidConfirmation,
+  );
+
+  app.post(
     '/current/confirm',
     {
-      preHandler: [authGuard, requireRole(['USER'])],
+      preHandler: [authGuard, requireRole(['USER']), ...requestLimits.deliveryPrices],
       schema: ordersSchema.postCurrentConfirmSchema,
     },
     ordersController.postConfirm,

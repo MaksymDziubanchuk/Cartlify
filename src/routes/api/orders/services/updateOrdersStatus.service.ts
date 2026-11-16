@@ -20,7 +20,7 @@ export async function updateOrdersStatus(
 ): Promise<UpdateOrdersStatusResponseDto> {
   const results: UpdateOrdersStatusResultDto[] = [];
 
-  for (const { orderId, shipment, keepShippingCost, deliveredAt } of dto.orders) {
+  for (const { orderId, shipments, keepShippingCost, deliveredAt } of dto.orders) {
     try {
       const order = await updateOrderStatus(
         {
@@ -29,7 +29,7 @@ export async function updateOrdersStatus(
           orderId,
           status: dto.status,
           bulk: true,
-          ...(shipment !== undefined ? { shipment } : {}),
+          ...(shipments !== undefined ? { shipments } : {}),
           ...(keepShippingCost !== undefined ? { keepShippingCost } : {}),
           ...(deliveredAt !== undefined ? { deliveredAt } : {}),
         },

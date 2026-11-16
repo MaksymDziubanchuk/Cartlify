@@ -11,6 +11,7 @@ import type { OrderHoldReason } from '@helpers/orderHolds.js';
 import { RETURN_STATUSES } from '@helpers/returns.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
+import { LIVE_PARCEL_STATES } from './parcelCases.helper.js';
 import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
@@ -43,6 +44,8 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
       'shippedTo',
       'holds',
       'fraudWarnedFrom',
+      'parcels',
+      'parcelsMadeTo',
     ] as const) {
       if (dto[filter] !== undefined) throw new ForbiddenError('FILTER_FORBIDDEN', { filter });
     }
@@ -141,6 +144,8 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     shippedTo: dto.shippedTo,
     holds,
     fraudWarnedFrom: dto.fraudWarnedFrom,
+    parcels: dto.parcels,
+    parcelsMadeTo: dto.parcelsMadeTo,
     sortBy,
     sortDir,
   };
@@ -206,6 +211,10 @@ export function buildOrdersWhere(args: {
   shippedTo?: Date | undefined;
   holds?: OrdersHoldsFilter | undefined;
   fraudWarnedFrom?: Date | undefined;
+  // the orders of a case of the parcels, read by the service first (ordersOfParcelCase)
+  parcelOrderIds?: number[] | undefined;
+  // the paid orders of a carrier with no live parcel yet (parcels=none)
+  withoutParcels?: boolean | undefined;
   sortBy: OrdersSortBy;
 }) {
   const where: any = {};
@@ -296,6 +305,22 @@ export function buildOrdersWhere(args: {
   }
   // the provider warned that the payment of the order, already sent, may be fraud
   if (args.fraudWarnedFrom) and.push({ fraudWarnedAt: { gte: args.fraudWarnedFrom } });
+  // the parcels of the delivery provider that wait for an admin: the orders of the case
+  if (args.parcelOrderIds) and.push({ id: { in: args.parcelOrderIds } });
+  if (args.withoutParcels) {
+    and.push({
+      status: 'paid',
+      delivery: { is: { method: 'carrier' } },
+      shipments: {
+        none: {
+          returnId: null,
+          direction: 'to_buyer',
+          rolledBackAt: null,
+          state: { in: LIVE_PARCEL_STATES },
+        },
+      },
+    });
+  }
   if (args.sortBy === 'deliveryMethod' || args.sortBy === 'deliveryPrice') {
     and.push({ delivery: { isNot: null } });
   }

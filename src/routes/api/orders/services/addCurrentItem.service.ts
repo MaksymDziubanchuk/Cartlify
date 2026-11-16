@@ -1,3 +1,4 @@
+import { hasShippingData, sellsWithoutShippingData } from '@helpers/parcelBox.js';
 import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
@@ -87,10 +88,26 @@ export async function addCurrentItem({
         // load the variant, its price and availability; the one a buyer does not see is not found
         const variant = await db.productVariant.findFirst({
           where: { id: variantId, ...visibleVariantWhere, product: { deletedAt: null } },
-          select: { id: true, productId: true, price: true, stock: true, reservedStock: true },
+          select: {
+            id: true,
+            productId: true,
+            price: true,
+            stock: true,
+            reservedStock: true,
+            weightGrams: true,
+            lengthMm: true,
+            widthMm: true,
+            heightMm: true,
+          },
         });
 
         if (!variant) throw new NotFoundError('VARIANT_NOT_FOUND', { variantId });
+
+        // a shop that sends by carriers only has nothing to send a variant without its weight or
+        // sizes with: it is not for sale (the catalog shows it with no free units)
+        if (!hasShippingData(variant) && !sellsWithoutShippingData()) {
+          throw new ConflictError('PRODUCT_NOT_DELIVERABLE', { variantId });
+        }
 
         // check availability: the stock less what the waiting orders hold and what is over
         const expired = await expiredUnitsOf(db, [variant.id]);

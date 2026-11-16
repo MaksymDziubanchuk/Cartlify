@@ -1,8 +1,10 @@
 import { buyerPaidField } from '@schemas/parcelFields.js';
 import { MoneyPart, MoneyPurpose, MoneyState } from '@prisma/client';
 
+import { DELIVERY_METHOD_NAMES } from '@config/deliveryMethods.js';
 import { MONEY_LOG_EVENTS } from '@config/journalEvents.js';
 import { ORDER_HOLD_REASONS } from '@helpers/orderHolds.js';
+import { PARCEL_CASES } from '@routes/api/orders/services/helpers/parcelCases.helper.js';
 import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 import {
   RETURN_BASES,
@@ -81,7 +83,7 @@ const orderDeliverySchema = {
     'Where and to whom the order goes; empty while the order has none (a cart of a buyer who has ' +
     'not chosen yet).',
   properties: {
-    method: { type: 'string', enum: ['manual', 'pickup'] },
+    method: { type: 'string', enum: [...DELIVERY_METHOD_NAMES] },
     price: {
       type: 'number',
       description:
@@ -104,30 +106,67 @@ const orderDeliverySchema = {
       properties: { address: { type: 'string' }, hours: { type: 'string' } },
       required: ['address', 'hours'],
     },
-    shipment: {
-      type: ['object', 'null'],
-      additionalProperties: false,
-      description: 'The send on its way, once the order is shipped.',
-      properties: {
-        carrier: { type: ['string', 'null'] },
-        trackingNumber: { type: ['string', 'null'] },
-        trackingUrl: { type: ['string', 'null'] },
+    shipments: {
+      type: 'array',
+      description:
+        'The parcels a carrier took, each from the moment it took it, the first one first: who ' +
+        'carries each, how to follow it and where it stands; none before.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          carrier: { type: ['string', 'null'] },
+          trackingNumber: { type: ['string', 'null'] },
+          trackingUrl: { type: ['string', 'null'] },
+          boxNumbers: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'The numbers of its boxes at the carrier; only when the carrier numbers each box.',
+          },
+          state: {
+            ...{
+              type: 'string',
+              enum: [
+                'created',
+                'void_pending',
+                'voided',
+                'sent',
+                'delivered',
+                'returning',
+                'returned',
+                'lost',
+              ],
+            },
+            description:
+              'sent: the carrier has it; delivered; returning, returned: on its way back to the ' +
+              'shop, back; lost: the carrier lost it.',
+          },
+        },
+        required: ['carrier', 'trackingNumber', 'trackingUrl', 'state'],
       },
-      required: ['carrier', 'trackingNumber', 'trackingUrl'],
     },
   },
-  required: ['method', 'price', 'recipient', 'address', 'note', 'pickup', 'shipment'],
+  required: ['method', 'price', 'recipient', 'address', 'note', 'pickup', 'shipments'],
 } as const;
 
 const orderDeliveryQuotesSchema = {
   type: 'array',
-  description: 'An order that is not confirmed: what each method the shop has enabled costs now.',
+  description:
+    'An order that is not confirmed: what each method the shop has enabled costs now, to the ' +
+    'country of the delivery the order has.',
   items: {
     type: 'object',
     additionalProperties: false,
     properties: {
-      method: { type: 'string', enum: ['manual', 'pickup'] },
-      price: { type: 'number' },
+      method: { type: 'string', enum: [...DELIVERY_METHOD_NAMES] },
+      price: {
+        type: ['number', 'null'],
+        description:
+          'Empty while the order names no country the method goes to, and for a carrier: its ' +
+          'price comes with the carriers for the address (POST ' +
+          '/api/orders/current/delivery-options).',
+      },
       freeFrom: {
         type: ['number', 'null'],
         description: 'The sum of the items from which it is free.',
@@ -148,7 +187,7 @@ const orderDeliverySuggestionSchema = {
     'A cart: the delivery of the last order of the buyer, for the page to start from; the buyer ' +
     'corrects it and confirms.',
   properties: {
-    method: { type: 'string', enum: ['manual', 'pickup'] },
+    method: { type: 'string', enum: [...DELIVERY_METHOD_NAMES] },
     recipient: deliveryPersonSchema,
     address: {
       type: ['object', 'null'],
@@ -162,12 +201,73 @@ const orderDeliverySuggestionSchema = {
 
 const orderShipmentsSchema = {
   type: 'array',
-  description: 'Admin and root: every send of the order, the latest first.',
+  description:
+    'Admin and root: every parcel of the order, the latest first: the sends of a manual order and ' +
+    'the parcels of the delivery provider, the voided ones and the ones taken back too.',
   items: {
     type: 'object',
     additionalProperties: false,
     properties: {
       id: { type: 'integer' },
+      state: {
+        ...{
+          type: 'string',
+          enum: [
+            'created',
+            'void_pending',
+            'voided',
+            'sent',
+            'delivered',
+            'returning',
+            'returned',
+            'lost',
+          ],
+        },
+        description:
+          'created: a parcel of the provider made, its label printed, the carrier has not taken it; ' +
+          'void_pending: waiting for its void; voided; sent: the carrier has it; delivered; ' +
+          'returning, returned; lost. A send of a manual order is sent from the start.',
+      },
+      labelUrl: {
+        type: ['string', 'null'],
+        description: 'The label of a parcel of the provider to print, none for a manual send.',
+      },
+      boxes: {
+        type: 'array',
+        description: 'The boxes of the parcel and what is in each.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            number: { type: 'integer' },
+            weightGrams: { type: ['integer', 'null'] },
+            lengthMm: { type: ['integer', 'null'] },
+            widthMm: { type: ['integer', 'null'] },
+            heightMm: { type: ['integer', 'null'] },
+            trackingNumber: { type: ['string', 'null'] },
+            labelUrl: { type: ['string', 'null'] },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: { orderItemId: { type: 'integer' }, quantity: { type: 'integer' } },
+                required: ['orderItemId', 'quantity'],
+              },
+            },
+          },
+          required: [
+            'number',
+            'weightGrams',
+            'lengthMm',
+            'widthMm',
+            'heightMm',
+            'trackingNumber',
+            'labelUrl',
+            'items',
+          ],
+        },
+      },
       carrier: { type: ['string', 'null'] },
       trackingNumber: { type: ['string', 'null'] },
       trackingUrl: { type: ['string', 'null'] },
@@ -181,7 +281,13 @@ const orderShipmentsSchema = {
         type: 'boolean',
         description: 'false when the shop owes the carrier nothing for this send.',
       },
-      shippedAt: { type: 'string', format: 'date-time' },
+      shippedAt: {
+        type: ['string', 'null'],
+        format: 'date-time',
+        description:
+          'When the parcel was sent; empty while the carrier has not taken a parcel of the ' +
+          'delivery provider.',
+      },
       rolledBackAt: {
         type: ['string', 'null'],
         format: 'date-time',
@@ -197,6 +303,9 @@ const orderShipmentsSchema = {
       'expense',
       'shippedAt',
       'rolledBackAt',
+      'state',
+      'labelUrl',
+      'boxes',
     ],
   },
 } as const;
@@ -816,6 +925,23 @@ const confirmDeliveryAddressSchema = {
   required: ['country', 'postalCode', 'city', 'street', 'house'],
 } as const;
 
+// a carrier of the delivery provider as a line of its prices names it
+const deliveryCarrierSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', minLength: 1, maxLength: 100, description: 'The carrier.' },
+    service: { type: 'string', minLength: 1, maxLength: 100, description: 'Its service.' },
+    connection: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description: 'Its connection at the delivery provider.',
+    },
+  },
+  required: ['name', 'service', 'connection'],
+} as const;
+
 const confirmDeliverySchema = {
   type: 'object',
   additionalProperties: false,
@@ -826,10 +952,11 @@ const confirmDeliverySchema = {
   properties: {
     method: {
       type: 'string',
-      enum: ['manual', 'pickup'],
+      enum: [...DELIVERY_METHOD_NAMES],
       description:
         'manual: the shop sends the order to an address; pickup: the buyer collects it at the ' +
-        'shop. A method the shop has not enabled is DELIVERY_METHOD_NOT_AVAILABLE.',
+        'shop; carrier: a carrier of the delivery provider sends it to an address, the one of ' +
+        '`carrier`. A method the shop has not enabled is DELIVERY_METHOD_NOT_AVAILABLE.',
     },
     recipientFirstName: recipientNameField('First name'),
     recipientLastName: recipientNameField('Last name'),
@@ -842,6 +969,13 @@ const confirmDeliverySchema = {
         'the first one not zero, for example +380501234567. No spaces, brackets or dashes.',
     },
     address: confirmDeliveryAddressSchema,
+    carrier: {
+      ...deliveryCarrierSchema,
+      description:
+        'The method carrier only (DELIVERY_CARRIER_REQUIRED without it, DELIVERY_CARRIER_NOT_ALLOWED ' +
+        'with another method): the carrier the buyer picked, as a line of POST ' +
+        '/api/orders/current/delivery-options names it.',
+    },
     note: {
       type: 'string',
       maxLength: SHIPPING_TEXT_MAX_LENGTH,
@@ -873,6 +1007,92 @@ const ordersCurrentConfirmBodySchema = {
     },
   },
   required: ['orderId', 'expectedDeliveryPrice'],
+} as const;
+
+const ordersDeliveryOptionsBodySchema = {
+  $id: 'ordersDeliveryOptionsBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: { address: confirmDeliveryAddressSchema },
+  required: ['address'],
+} as const;
+
+const ordersDeliveryOptionsResponseSchema = {
+  $id: 'ordersDeliveryOptionsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    currency: {
+      type: 'string',
+      description: 'The currency of the prices, the one of the catalog.',
+    },
+    zone: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The zone of the country of the address.',
+      properties: {
+        name: { type: 'string' },
+        freeFrom: {
+          type: ['number', 'null'],
+          description: 'From this sum of the items every delivery to the zone is free.',
+        },
+      },
+      required: ['name', 'freeFrom'],
+    },
+    remainingToFree: {
+      type: ['number', 'null'],
+      description: 'What the items still lack of the free delivery, 0 once it is free.',
+    },
+    options: {
+      type: 'array',
+      description:
+        'The ways the cart goes to the address with their prices for its items: the manual ' +
+        'delivery (when the zone has a price of it), the pickup, the carriers from the cheapest.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          method: { type: 'string', enum: [...DELIVERY_METHOD_NAMES] },
+          price: {
+            type: 'number',
+            description:
+              'What the buyer pays. From the free-from sum of the zone the manual delivery and ' +
+              'the cheapest carrier are 0, another carrier costs what it costs above the cheapest.',
+          },
+          carrier: {
+            anyOf: [deliveryCarrierSchema, { type: 'null' }],
+            description:
+              'The carrier, for the confirmation (delivery.carrier); null for the other methods.',
+          },
+          label: {
+            type: ['string', 'null'],
+            description: 'The name of the carrier for the buyer.',
+          },
+          days: {
+            type: ['string', 'null'],
+            description: 'How long the carrier takes, the way the shop wrote it ("1-3").',
+          },
+        },
+        required: ['method', 'price', 'carrier', 'label', 'days'],
+      },
+    },
+    carriersUnavailable: {
+      type: ['string', 'null'],
+      enum: [
+        'not_enabled',
+        'shipping_data_missing',
+        'provider_down',
+        'no_carrier_for_parcel',
+        null,
+      ],
+      description:
+        'Why no carrier is in the list: the shop sends by none (not_enabled), a variant of the ' +
+        'cart has no weight or sizes (shipping_data_missing), the delivery provider does not ' +
+        'answer now (provider_down), it answers and prices no carrier for this parcel to this ' +
+        'address (no_carrier_for_parcel); null when the carriers are there.',
+    },
+  },
+  required: ['currency', 'zone', 'remainingToFree', 'options', 'carriersUnavailable'],
 } as const;
 
 const ordersGetQuerySchema = {
@@ -983,8 +1203,8 @@ const ordersGetQuerySchema = {
     // the delivery filters of the desk of an admin
     deliveryMethod: {
       type: 'string',
-      pattern: '^(manual|pickup)(,(manual|pickup))*$',
-      description: 'Admin and root: the orders of these methods, one or both through commas.',
+      pattern: `^(${DELIVERY_METHOD_NAMES.join('|')})(,(${DELIVERY_METHOD_NAMES.join('|')}))*$`,
+      description: `Admin and root: the orders of these methods (${DELIVERY_METHOD_NAMES.join(', ')}), through commas.`,
     },
     country: {
       type: 'string',
@@ -1043,6 +1263,26 @@ const ordersGetQuerySchema = {
       description:
         'Admin and root (FILTER_FORBIDDEN for a buyer): the orders the provider warned of after ' +
         'they were sent, at this time or later.',
+    },
+    parcels: {
+      type: 'string',
+      enum: [...PARCEL_CASES],
+      description:
+        'Admin and root (FILTER_FORBIDDEN for a buyer): the orders whose parcels of the delivery ' +
+        'provider wait for an admin, the cases of the alerts parcels_*. not_collected: a parcel ' +
+        'made and not taken by the carrier; void_pending: a parcel waiting for its void; ' +
+        'coming_back: a parcel going back to the shop or back at it with units no statement ' +
+        'holds; lost: a parcel the carrier lost with units no statement holds; ahead: a cancelled ' +
+        'order a parcel of went to the buyer after the cancel, a paid order something holds the ' +
+        'carrier took a parcel of, or a paid order the carrier has every live parcel of and that ' +
+        'is not shipped; none: a paid order of the carrier with no live parcel yet.',
+    },
+    parcelsMadeTo: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Admin and root (FILTER_FORBIDDEN for a buyer): with parcels=not_collected, only the ' +
+        'parcels made before this time.',
     },
 
     // sorting
@@ -1103,14 +1343,55 @@ const ordersGetByIdParamsSchema = {
 } as const;
 
 // the send of the shipped step: who carries the order, the number, the link, what the shop pays
+// a box of a parcel as the admin lays it out: the four sizes together or none
+// (SHIPMENT_BOX_SIZES_INVALID), the items of the order in it
+const shipmentBoxInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    weightGrams: { type: ['integer', 'null'], minimum: 1, maximum: 1000000 },
+    lengthMm: { type: ['integer', 'null'], minimum: 1, maximum: 10000 },
+    widthMm: { type: ['integer', 'null'], minimum: 1, maximum: 10000 },
+    heightMm: { type: ['integer', 'null'], minimum: 1, maximum: 10000 },
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 1000,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          orderItemId: { type: 'integer', minimum: 1, maximum: MAX_ID },
+          quantity: { type: 'integer', minimum: 1, maximum: 1000000 },
+        },
+        required: ['orderItemId', 'quantity'],
+      },
+      description: 'The items of the order in the box, each once, with its units.',
+    },
+  },
+  required: ['items'],
+} as const;
+
 const shipmentInputSchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'The send, with the step to shipped of a manual order, each part only if known. A number and a ' +
-    'link each need the carrier (SHIPMENT_CARRIER_REQUIRED); a link may come without a number. A ' +
+    'A parcel, with the step to shipped of a manual order, each part only if known. A number and ' +
+    'a link each need the carrier (SHIPMENT_CARRIER_REQUIRED); a link may come without a number. A ' +
     'pickup has none (SHIPMENT_NOT_ALLOWED).',
   properties: {
+    boxes: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: shipmentBoxInputSchema,
+      description:
+        'The boxes of the parcel and what is in each. The boxes of all the parcels hold every unit ' +
+        'that travels (the units statements brought back before do not), no more and no less ' +
+        '(PARCEL_ITEMS_MISMATCH, `details.items` `{ orderItemId, units, packed }`). The one ' +
+        'parcel of an order may come without them: one box with every unit, its weight and sizes ' +
+        'when every variant has them.',
+    },
     carrier: {
       type: 'string',
       minLength: 1,
@@ -1135,6 +1416,197 @@ const shipmentInputSchema = {
         'the admin writes it (PATCH /api/orders/{orderId}/shipments/{shipmentId}).',
     },
   },
+} as const;
+
+// the parcels of a manual order with the step to shipped; none: one parcel, nothing known of it
+const shipmentsInputSchema = {
+  type: 'array',
+  minItems: 1,
+  maxItems: 20,
+  items: shipmentInputSchema,
+  description:
+    'The parcels of a manual order with the step to shipped (an order of a carrier of the delivery ' +
+    'provider is sent with the parcels the app made for it, PARCELS_REQUIRED without them; a pickup ' +
+    'has none, SHIPMENT_NOT_ALLOWED). None: one parcel of every unit, nothing known of it. Several: ' +
+    'each with its boxes.',
+} as const;
+
+// the boxes of the parcels of an order of a carrier: the box of the draft and of the answers
+const parcelBoxDataSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    weightGrams: { type: ['integer', 'null'] },
+    lengthMm: { type: ['integer', 'null'] },
+    widthMm: { type: ['integer', 'null'] },
+    heightMm: { type: ['integer', 'null'] },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { orderItemId: { type: 'integer' }, quantity: { type: 'integer' } },
+        required: ['orderItemId', 'quantity'],
+      },
+    },
+  },
+  required: ['weightGrams', 'lengthMm', 'widthMm', 'heightMm', 'items'],
+} as const;
+
+const ordersParcelsBodySchema = {
+  $id: 'ordersParcelsBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    parcels: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 20,
+      description:
+        'The parcels and the boxes of each, every unit left laid out once (PARCEL_ITEMS_MISMATCH); ' +
+        'every box with its weight and sizes (PARCEL_BOX_SIZES_REQUIRED). None: the draft, one ' +
+        'parcel of one box of every unit.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          boxes: { type: 'array', minItems: 1, maxItems: 100, items: shipmentBoxInputSchema },
+        },
+        required: ['boxes'],
+      },
+    },
+  },
+} as const;
+
+const ordersCarriersResponseSchema = {
+  $id: 'ordersCarriersResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    carriers: {
+      type: 'array',
+      description:
+        'The carriers of the delivery provider for the order to its address now, the cheapest first.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          carrier: deliveryCarrierSchema,
+          label: { type: ['string', 'null'], description: 'The name of the carrier.' },
+          days: { type: ['string', 'null'], description: 'How long the carrier takes ("1-3").' },
+          price: {
+            type: 'number',
+            description:
+              'What the provider counts for the parcel now: the cost of the shop, not what the ' +
+              'buyer paid.',
+          },
+        },
+        required: ['carrier', 'label', 'days', 'price'],
+      },
+    },
+  },
+  required: ['carriers'],
+  examples: [
+    {
+      carriers: [
+        {
+          carrier: { name: 'Correos', service: 'Standard', connection: '6001' },
+          label: 'Correos Standard',
+          days: '2-4',
+          price: 4.5,
+        },
+      ],
+    },
+  ],
+} as const;
+
+const ordersParcelsDraftResponseSchema = {
+  $id: 'ordersParcelsDraftResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    carrier: deliveryCarrierSchema,
+    parcels: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { boxes: { type: 'array', items: parcelBoxDataSchema } },
+        required: ['boxes'],
+      },
+    },
+  },
+  required: ['carrier', 'parcels'],
+} as const;
+
+const ordersParcelsResultSchema = {
+  $id: 'ordersParcelsResultSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    order: { $ref: 'ordersOrderResponseSchema#' },
+    made: {
+      type: 'array',
+      items: { type: 'integer' },
+      description: 'The ids of the parcels made now (shipments of the order).',
+    },
+    failed: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      description:
+        'The parcel that was not made after others were (its place in the request, from 1), with ' +
+        'the code and the reason of the carrier; the parcels made stay, a new request makes the ' +
+        'rest. Null when every parcel was made.',
+      properties: {
+        parcel: { type: 'integer' },
+        errorCode: { type: 'string' },
+        message: { type: ['string', 'null'] },
+      },
+      required: ['parcel', 'errorCode', 'message'],
+    },
+  },
+  required: ['order', 'made', 'failed'],
+} as const;
+
+const ordersParcelsBulkBodySchema = {
+  $id: 'ordersParcelsBulkBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderIds: {
+      type: 'array',
+      minItems: 1,
+      // each order asks the provider for its labels, one after another: twenty answer in time
+      maxItems: 20,
+      items: { type: 'integer', minimum: 1, maximum: MAX_ID },
+      description: 'The orders, each made by its draft: 20 at most in one request.',
+    },
+  },
+  required: ['orderIds'],
+} as const;
+
+const ordersParcelsBulkResultSchema = {
+  $id: 'ordersParcelsBulkResultSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          orderId: { type: 'integer' },
+          ok: { type: 'boolean' },
+          made: { type: 'array', items: { type: 'integer' } },
+          errorCode: { type: 'string' },
+          message: { type: ['string', 'null'] },
+        },
+        required: ['orderId', 'ok', 'made'],
+      },
+    },
+  },
+  required: ['results'],
 } as const;
 
 const deliveredAtSchema = {
@@ -1173,7 +1645,7 @@ const ordersBulkStatusBodySchema = {
         additionalProperties: false,
         properties: {
           orderId: { type: 'integer', minimum: 1, maximum: MAX_ID },
-          shipment: shipmentInputSchema,
+          shipments: shipmentsInputSchema,
           keepShippingCost: keepShippingCostSchema,
           deliveredAt: deliveredAtSchema,
         },
@@ -1238,7 +1710,7 @@ const ordersUpdateStatusBodySchema = {
         '(collected), and one step back: delivered to shipped, shipped to paid. A cancel is a ' +
         'statement of return: POST /api/returns with the reason shop_cancel or refused.',
     },
-    shipment: shipmentInputSchema,
+    shipments: shipmentsInputSchema,
     keepShippingCost: keepShippingCostSchema,
     deliveredAt: deliveredAtSchema,
   },
@@ -1327,7 +1799,8 @@ const ordersDeliveryUpdateBodySchema = {
   minProperties: 1,
   description:
     'What changes, each part only if it does. The person can be changed alone; an address is ' +
-    'sent whole and is checked the way the confirmation checks it. The method and the price stay.',
+    'sent whole and is checked the way the confirmation checks it. The price stays; the method stays ' +
+    'but for an order of a carrier sent by hand (method manual).',
   properties: {
     recipientFirstName: recipientNameField('First name'),
     recipientLastName: recipientNameField('Last name'),
@@ -1342,6 +1815,20 @@ const ordersDeliveryUpdateBodySchema = {
       type: 'string',
       maxLength: SHIPPING_TEXT_MAX_LENGTH,
       description: 'A note for the courier; an empty one removes it.',
+    },
+    carrier: {
+      ...deliveryCarrierSchema,
+      description:
+        'An order of a carrier before its parcels are made: another carrier of the delivery ' +
+        'provider, one of its prices now for the address and the order (the carriers of POST ' +
+        '/api/orders/current/delivery-options for a buyer; DELIVERY_SERVICE_UNAVAILABLE for another).',
+    },
+    method: {
+      type: 'string',
+      enum: ['manual'],
+      description:
+        'An order of a carrier before its parcels are made, sent by hand outside the delivery ' +
+        'provider: the method becomes manual, the carrier goes, the price of the buyer stays.',
     },
   },
 } as const;
@@ -1503,6 +1990,14 @@ export const ordersDtoSchemas = [
   ordersCurrentItemIdParamsSchema,
   ordersCurrentUpdateItemBodySchema,
   ordersCurrentConfirmBodySchema,
+  ordersDeliveryOptionsBodySchema,
+  ordersDeliveryOptionsResponseSchema,
+  ordersParcelsBodySchema,
+  ordersCarriersResponseSchema,
+  ordersParcelsDraftResponseSchema,
+  ordersParcelsResultSchema,
+  ordersParcelsBulkBodySchema,
+  ordersParcelsBulkResultSchema,
 
   ordersGetQuerySchema,
   ordersGetByIdParamsSchema,

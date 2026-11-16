@@ -1,6 +1,7 @@
-import type { Prisma, ReturnStatus } from '@prisma/client';
+import type { ParcelState, Prisma, ReturnStatus } from '@prisma/client';
 
 import { shopSettings } from '@config/shopSettings.js';
+import { sendsToAddress } from '@config/deliveryMethods.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { variantNamesOf, type VariantNameInfo } from '@db/variantNames.helper.js';
 
@@ -31,6 +32,7 @@ import type {
   OrderMoneyLineDto,
   OrderResponseDto,
   OrderShipmentAdminDto,
+  ShipmentBoxDto,
 } from 'types/dto/orders.dto.js';
 import type {
   BuyerReturnDto,
@@ -115,13 +117,25 @@ export const orderShipmentSelect = {
   expense: true,
   shippedAt: true,
   rolledBackAt: true,
+  state: true,
+  labelUrl: true,
 } satisfies Prisma.OrderShipmentSelect;
 
 // a send with what the shop paid the carrier for it: the sum of its lines in the money journal
-// (the first cost and its corrections), null while none was written
+// (the first cost and its corrections), null while none was written; and its boxes, for the staff
+// (a buyer reads none, the policy of the boxes)
 export type OrderShipmentRow = Prisma.OrderShipmentGetPayload<{
   select: typeof orderShipmentSelect;
-}> & { cost: number | null };
+}> & { cost: number | null; boxes: ShipmentBoxDto[] };
+
+// the states of a parcel a buyer is shown: the carrier has it, or had it
+export const SHOWN_STATES: readonly ParcelState[] = [
+  'sent',
+  'delivered',
+  'returning',
+  'returned',
+  'lost',
+];
 
 type OrderRowWithoutShipments = Prisma.OrderGetPayload<{ select: typeof orderResponseSelect }>;
 
@@ -158,6 +172,32 @@ export async function withDeliveryAndSends<T extends { id: number }>(
     sends.map((send) => send.id),
   );
 
+  // the boxes of the sends, in their order (a buyer is shown only their numbers at the carrier)
+  const boxes = sends.length
+    ? await db.shipmentBox.findMany({
+        where: { shipmentId: { in: sends.map((send) => send.id) } },
+        orderBy: [{ shipmentId: 'asc' }, { number: 'asc' }],
+        select: {
+          shipmentId: true,
+          number: true,
+          weightGrams: true,
+          lengthMm: true,
+          widthMm: true,
+          heightMm: true,
+          trackingNumber: true,
+          labelUrl: true,
+          items: true,
+        },
+      })
+    : [];
+  const boxesOf = new Map<number, ShipmentBoxDto[]>();
+  for (const { shipmentId, items, ...box } of boxes) {
+    boxesOf.set(shipmentId, [
+      ...(boxesOf.get(shipmentId) ?? []),
+      { ...box, items: items as ShipmentBoxDto['items'] },
+    ]);
+  }
+
   const deliveryOf = new Map<number, OrderDeliveryRow>();
   for (const { orderId, ...delivery } of deliveries) deliveryOf.set(orderId, delivery);
 
@@ -165,7 +205,7 @@ export async function withDeliveryAndSends<T extends { id: number }>(
   for (const { orderId, ...send } of sends) {
     sendsOf.set(orderId, [
       ...(sendsOf.get(orderId) ?? []),
-      { ...send, cost: costOf.get(send.id) ?? null },
+      { ...send, cost: costOf.get(send.id) ?? null, boxes: boxesOf.get(send.id) ?? [] },
     ]);
   }
 
@@ -570,7 +610,8 @@ export async function buyerReturnsOf(
           carrier: parcel.carrier,
           trackingNumber: parcel.trackingNumber,
           trackingUrl: parcel.trackingUrl,
-          shippedAt: parcel.shippedAt.toISOString(),
+          // a parcel of a statement is sent from the start (order_shipments_state_chk)
+          shippedAt: parcel.shippedAt!.toISOString(),
           confirmed: parcel.confirmedAt !== null,
           buyerPaid: parcel.buyerPaid === null ? null : decimalToNumber(parcel.buyerPaid),
         })),
@@ -643,19 +684,30 @@ function mapDelivery(row: OrderResponseRow, itemsTotal: number): OrderDeliveryDt
   const d = row.delivery;
   if (!d) return null;
 
-  const onItsWay = row.shipments.find((s) => s.rolledBackAt === null);
-  const sent = row.status === 'shipped' || row.status === 'delivered';
+  // an order of several parcels shows each from the moment the carrier took it, while the order
+  // itself still waits for the others
+  const sent = row.status === 'paid' || row.status === 'shipped' || row.status === 'delivered';
+  // the parcels on their way, the first one first: the ones the carrier has or had, not taken back
+  const onTheirWay = row.shipments
+    .filter((s) => s.rolledBackAt === null && SHOWN_STATES.includes(s.state))
+    .sort((a, b) => a.id - b.id);
 
   return {
     method: d.method,
-    price: row.confirmed ? decimalToNumber(d.price) : deliveryPriceOf(d.method, itemsTotal),
+    // a carrier that is not confirmed shows the price it was last confirmed with: the price of a
+    // carrier comes from the delivery provider for the address (POST
+    // /api/orders/current/delivery-options), the confirmation asks it again
+    price:
+      row.confirmed || d.method === 'carrier'
+        ? decimalToNumber(d.price)
+        : deliveryPriceOf(d.method, itemsTotal, d.country),
     recipient: {
       firstName: d.recipientFirstName,
       lastName: d.recipientLastName,
       phone: d.recipientPhone,
     },
     address:
-      d.method === 'manual' && d.country && d.city && d.street && d.house
+      sendsToAddress(d.method) && d.country && d.city && d.street && d.house
         ? {
             country: d.country,
             postalCode: d.postalCode,
@@ -670,14 +722,23 @@ function mapDelivery(row: OrderResponseRow, itemsTotal: number): OrderDeliveryDt
       d.method === 'pickup'
         ? { address: shopSettings().pickupAddress, hours: shopSettings().pickupHours }
         : null,
-    shipment:
-      sent && d.method === 'manual' && onItsWay
-        ? {
-            carrier: onItsWay.carrier,
-            trackingNumber: onItsWay.trackingNumber,
-            trackingUrl: onItsWay.trackingUrl,
-          }
-        : null,
+    shipments:
+      sent && sendsToAddress(d.method)
+        ? onTheirWay.map((s) => ({
+            carrier: s.carrier,
+            trackingNumber: s.trackingNumber,
+            trackingUrl: s.trackingUrl,
+            // the numbers of its boxes, when the carrier numbers each box
+            ...(s.boxes.some((box) => box.trackingNumber)
+              ? {
+                  boxNumbers: s.boxes.flatMap((box) =>
+                    box.trackingNumber ? [box.trackingNumber] : [],
+                  ),
+                }
+              : {}),
+            state: s.state,
+          }))
+        : [],
   };
 }
 
@@ -691,6 +752,9 @@ const mapShipments = (row: OrderResponseRow): OrderShipmentAdminDto[] =>
     expense: s.expense,
     shippedAt: s.shippedAt,
     rolledBackAt: s.rolledBackAt,
+    state: s.state,
+    labelUrl: s.labelUrl,
+    boxes: s.boxes,
   }));
 
 // what the order weighs: the variants that have a weight add up to it (the weight of one times the
@@ -841,7 +905,11 @@ export function mapOrderRowToResponse(
     withdrawalOpen: withdrawalOpenOf(row.status, withdrawalEndsAt, Date.now()),
     returnStatus: row.returnStatus,
     // an order that is not confirmed: what each method of the shop would cost now
-    ...(row.confirmed ? {} : { deliveryQuotes: deliveryQuotesOf(itemsTotal) }),
+    // an order that is not confirmed: what each method of the shop would cost now, to the country of
+    // its delivery
+    ...(row.confirmed
+      ? {}
+      : { deliveryQuotes: deliveryQuotesOf(itemsTotal, row.delivery?.country ?? null) }),
     ...(view === 'admin'
       ? {
           shipments: mapShipments(row),
