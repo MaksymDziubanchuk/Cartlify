@@ -1375,6 +1375,28 @@ describe('the reasons that cancel an order', () => {
 
       expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining(code) });
     });
+
+    // beside its own reasons it tells only a parcel the carrier says the buyer refused
+    it.each([
+      ['the reason of an admin', 'other' as const, 'defect' as const],
+      ['no reason', 'withdrawal' as const, null],
+    ])('gives %s (RETURN_REASON_INVALID)', async (_what, basis, reason) => {
+      const outcome = await inRolledBackTx(async (db) => {
+        const { orderId, items } = await soldOrder(db, [[plain, 1]]);
+        await asSystem(db);
+        return createReturn(db, orderId, {
+          items: [{ orderItemId: items[0]!.id, quantity: 1 }],
+          source: 'system',
+          basis,
+          reason,
+        });
+      });
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        message: expect.stringContaining('RETURN_REASON_INVALID'),
+      });
+    });
   });
 
   // what holds an order back from its sending (a dispute, a refund by hand, a warning or a review of
