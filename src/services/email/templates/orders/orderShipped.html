@@ -66,6 +66,7 @@
                   {{recipient}}
                 </div>{{/recipient}}
 
+                {{#parcels}}{{#heading}}<div style="font-size:14px;color:#111827;font-weight:700;line-height:1.5;margin:18px 0 0 0;">{{heading}}</div>{{/heading}}
                 {{#carrier}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:12px 0 0 0;">
                   <span style="font-size:12px;color:#6b7280;">{{carrierLabel}}</span><br>
                   {{carrier}}
@@ -78,7 +79,7 @@
 
                 {{#trackingUrl}}<div style="font-size:14px;line-height:1.5;margin:12px 0 0 0;">
                   <a href="{{trackingUrl}}" style="color:#6d28d9;font-weight:700;">{{followParcelLabel}}</a>
-                </div>{{/trackingUrl}}
+                </div>{{/trackingUrl}}{{/parcels}}
 
                 {{#withdrawalLine}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:18px 0 0 0;">
                   {{withdrawalLine}} <a href="{{withdrawalUrl}}" style="color:#6d28d9;text-decoration:underline;">{{withdrawContract}}</a>

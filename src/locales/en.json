@@ -140,7 +140,8 @@
     "preview": "Order #{{orderId}} is shipped and on its way to you.",
     "leadTxt": "Your {{appName}} order #{{orderId}} is shipped and on its way to you. We will let you know when it is delivered.",
     "heading": "Order shipped",
-    "body": "Your order #{{orderId}} is shipped and on its way to you. We will let you know when it is delivered."
+    "body": "Your order #{{orderId}} is shipped and on its way to you. We will let you know when it is delivered.",
+    "parcelHeading": "Parcel {{number}}"
   },
   "orderPaymentRefunded": {
     "subject": "{{appName}} — We sent your payment for order #{{orderId}} back",
