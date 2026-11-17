@@ -212,9 +212,9 @@ Stripe:
 
 ### Outside services
 
-- every outside service is a kind with an interface of its own: payments (Stripe), mail (SendGrid), files (Cloudinary), the models (OpenAI), the captcha (Cloudflare Turnstile), the login with an account elsewhere (Google, GitHub, LinkedIn)
+- every outside service is a kind with an interface of its own: payments (Stripe), delivery (ShippyPro), mail (SendGrid), files (Cloudinary), the models (OpenAI), the captcha (Cloudflare Turnstile), the login with an account elsewhere (Google, GitHub, LinkedIn)
 - a provider lives in a folder of its own, its client, its settings, its webhook and the way its answers become the words of the kind; the rest of the app names no provider
-- the provider of a kind with one at a time is a setting (`MAIL_PROVIDER`, `FILE_STORAGE_PROVIDER`, `AI_PROVIDER`, `CAPTCHA_PROVIDER`); the payment providers and the providers of accounts are offered side by side
+- the provider of a kind with one at a time is a setting (`DELIVERY_PROVIDER`, `MAIL_PROVIDER`, `FILE_STORAGE_PROVIDER`, `AI_PROVIDER`, `CAPTCHA_PROVIDER`); the payment providers and the providers of accounts are offered side by side
 - a new provider with the same function is a new folder and a line in the registry of its kind; the contract of the kind runs it through the same tests as the others
 - the database names no provider: its names are values of a type or of a registry, never columns
 - the whole account: [providers](providers.md)
