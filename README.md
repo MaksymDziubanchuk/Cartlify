@@ -76,6 +76,8 @@ Every command: [commands](docs/commands.md).
 | [Variants](docs/variants.md)           | products, variants, characteristics, stock, lists and filters             |
 | [Payments](docs/payments.md)           | the ways to pay, the money journal, refunds, holds, the webhook           |
 | [Disputes](docs/disputes.md)           | disputes at the bank followed by the app, the Stripe dashboard            |
+| [Returns](docs/returns.md)             | withdrawal and returns, the money back, personal data and its terms       |
+| [Delivery](docs/delivery.md)           | methods, zones, customs, carriers, parcels and boxes, events, voids       |
 | [Newsletters](docs/newsletters.md)     | subscription, the pages behind the mail links, campaigns, sending, setup  |
 | [API](docs/api.md)                     | the REST modules, Swagger / OpenAPI, the realtime chat                    |
 | [Architecture](docs/architecture.md)   | goals, stack, structure of the repository, the database, production notes |
