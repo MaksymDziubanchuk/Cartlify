@@ -117,6 +117,7 @@ The model in one page, for a developer and for a shop admin: [Products, variants
 - an order keeps the name each variant had when it was confirmed (`variant.name`, the copy the database keeps in `order_items."productName"`): the history, the mails, the CSV and the payment page show what was bought after a rename; an order not paid yet shows the price and the sale of each variant now, a paid one the price it was bought at; what an order weighs (admin and root) is the weights of its variants times the units, whole only when every variant has one; a cancel puts each unit back into the batch it came from, in the variant it was sold of
 - the payment page has a line for each item and the email of the buyer; the payment carries the name of the shop (`shopName`, root sets it), as the mails do
 - Redis-based timeout worker for order reservation expiry handling
+- the worker of the parcels asks the delivery provider every minute to void the parcels that wait for their void, and leaves the ones of a carrier that cannot to the admin (alert `parcels_void_pending`; [Delivery](delivery.md))
 - the buyer gets an email when the order is paid, with the delivery (the address and the recipient, or the place to collect it) (sent when the payment event of the provider comes; a failed mail never fails it); the texts of the terms and of the contract the order was confirmed with are attached to it as `terms.txt` and `contract.txt`, the copy of the contract, and its last line says so
 
 ### Shop settings
