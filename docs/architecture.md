@@ -31,11 +31,12 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | Realtime chat                 | WebSocket chat endpoint and event-based messaging                                                                                              | Implemented |
 | AI assistant                  | OpenAI-powered chatbot service with product/support context                                                                                    | Implemented |
 | Payments                      | Stripe payment pages (card with Google Pay and Apple Pay, PayPal, Bizum) and webhook, a money journal, refunds, disputes followed to their end | Implemented |
+| Delivery                      | ShippyPro: the carriers priced for an address, the parcels with their labels, their voids and the events of the webhook                        | Implemented |
 | Media                         | Cloudinary                                                                                                                                     | Implemented |
 | Email                         | SendGrid: a stream for the orders, one of its own for the newsletters                                                                          | Implemented |
 | Captcha                       | Cloudflare Turnstile on the forms that mail or open an account                                                                                 | Implemented |
 | OAuth                         | Google, GitHub, LinkedIn                                                                                                                       | Implemented |
-| Cache / background processing | Redis, order timeout worker, the money worker, the lock of the newsletter pass                                                                 | Implemented |
+| Cache / background processing | Redis, order timeout worker, the money worker, the worker of the parcel voids, the lock of the newsletter pass                                 | Implemented |
 | Internationalization          | i18next, a dictionary file per language (`src/locales/`)                                                                                       | Implemented |
 | Lint / formatting             | ESLint, Prettier                                                                                                                               | Implemented |
 | Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker                                                                                | Implemented |
