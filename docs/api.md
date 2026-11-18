@@ -23,6 +23,7 @@ Current REST modules exposed by the application:
 - `api/legal/*`
 - `api/newsletters/*` (see [newsletters](newsletters.md) and the section below; the subscription of the public form and of the profile, the pages behind the links of the mails, and the subscribers, the blocklist and the campaigns for the people who run the newsletters; `POST /api/newsletters/sendgrid/webhook` is the Event Webhook SendGrid posts the bounces, drops and spam reports of the mails to, signed with ECDSA and checked against `SENDGRID_NEWSLETTER_WEBHOOK_KEY`: it is no route of the frontend and it is outside the request rate limit, like the Stripe webhook)
 - `api/shop-settings/*` (the public one; the admin and root routes of the same data are under `api/admin/shop-settings*` and `api/root/shop-settings*`, see [shop settings](shop-settings.md))
+- `api/returns/*` (the statements of withdrawal and of return, their parcels back and their money, see [returns](returns.md))
 - `api/withdrawals/*` (the public form of withdrawal, see [returns](returns.md))
 - `api/payments/*` (the payment page, the refunds of the money journal, the refunds made by hand, the disputes; `POST /api/payments/stripe/webhook` is the webhook of Stripe, signed and outside the request rate limit; see [payments](payments.md) and [disputes](disputes.md))
 
