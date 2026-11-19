@@ -40,7 +40,7 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | Internationalization          | i18next, a dictionary file per language (`src/locales/`)                                                                                       | Implemented |
 | Lint / formatting             | ESLint, Prettier                                                                                                                               | Implemented |
 | Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker                                                                                | Implemented |
-| CI utilities                  | GitHub Actions for tests, DB migration and SQL execution                                                                                       | Implemented |
+| CI utilities                  | GitHub Actions for tests, DB migration, SQL execution and the check of the DB structure against its snapshot                                   | Implemented |
 
 ## Project Structure
 
@@ -104,7 +104,7 @@ Cartlify/
 │   ├── coverage/               # generated coverage report (gitignored)
 │   └── run.mjs                 # test launcher behind npm test
 ├── docker-compose.test.yml     # disposable PostgreSQL and Redis for integration tests
-├── .github/workflows/          # tests, DB migration and SQL execution workflows
+├── .github/workflows/          # tests, DB migration, SQL execution and DB structure check workflows
 └── package.json
 ```
 
