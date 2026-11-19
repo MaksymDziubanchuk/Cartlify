@@ -70,22 +70,25 @@ Every command: [commands](docs/commands.md).
 
 ## 📚 Documentation
 
-| Document                               | What it covers                                                            |
-| -------------------------------------- | ------------------------------------------------------------------------- |
-| [Features](docs/features.md)           | what the API does, module by module                                       |
-| [Variants](docs/variants.md)           | products, variants, characteristics, stock, lists and filters             |
-| [Payments](docs/payments.md)           | the ways to pay, the money journal, refunds, holds, the webhook           |
-| [Disputes](docs/disputes.md)           | disputes at the bank followed by the app, the Stripe dashboard            |
-| [Returns](docs/returns.md)             | withdrawal and returns, the money back, personal data and its terms       |
-| [Delivery](docs/delivery.md)           | methods, zones, customs, carriers, parcels and boxes, events, voids       |
-| [Newsletters](docs/newsletters.md)     | subscription, the pages behind the mail links, campaigns, sending, setup  |
-| [API](docs/api.md)                     | the REST modules, Swagger / OpenAPI, the realtime chat                    |
-| [Architecture](docs/architecture.md)   | goals, stack, structure of the repository, the database, production notes |
-| [Providers](docs/providers.md)         | the outside services behind an interface of their kind, adding a provider |
-| [Configuration](docs/configuration.md) | every environment variable                                                |
-| [Local setup](docs/setup.md)           | the database, Redis and the app on your machine                           |
-| [Commands](docs/commands.md)           | build, start, migrations, tests, demo data, a copy of prod for dev        |
-| [Status](docs/status.md)               | where the project stands                                                  |
+| Document                                     | What it covers                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| [Features](docs/features.md)                 | what the API does, module by module                                       |
+| [Variants](docs/variants.md)                 | products, variants, characteristics, stock, lists and filters             |
+| [Payments](docs/payments.md)                 | the ways to pay, the money journal, refunds, holds, the webhook           |
+| [Disputes](docs/disputes.md)                 | disputes at the bank followed by the app, the Stripe dashboard            |
+| [Returns](docs/returns.md)                   | withdrawal and returns, the money back, personal data and its terms       |
+| [Delivery](docs/delivery.md)                 | methods, zones, customs, carriers, parcels and boxes, events, voids       |
+| [Return scenarios](docs/return-scenarios.md) | each case of a withdrawal or a return, step by step, with the routes      |
+| [Shop settings](docs/shop-settings.md)       | the data of the shop root changes without a deploy, a row a setting       |
+| [Languages](docs/languages.md)               | how the server picks a language, mails, the chat bot and payment pages    |
+| [Newsletters](docs/newsletters.md)           | subscription, the pages behind the mail links, campaigns, sending, setup  |
+| [API](docs/api.md)                           | the REST modules, Swagger / OpenAPI, the realtime chat                    |
+| [Architecture](docs/architecture.md)         | goals, stack, structure of the repository, the database, production notes |
+| [Providers](docs/providers.md)               | the outside services behind an interface of their kind, adding a provider |
+| [Configuration](docs/configuration.md)       | every environment variable                                                |
+| [Local setup](docs/setup.md)                 | the database, Redis and the app on your machine                           |
+| [Commands](docs/commands.md)                 | build, start, migrations, tests, demo data, a copy of prod for dev        |
+| [Status](docs/status.md)                     | where the project stands                                                  |
 
 ## License
 
