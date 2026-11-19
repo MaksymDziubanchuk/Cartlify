@@ -12,7 +12,8 @@
 ```bash
 git clone https://github.com/MaksymDziubanchuk/Cartlify.git
 cd Cartlify
-npm install
+# the exact versions of package-lock.json; its postinstall generates the Prisma client
+npm ci
 ```
 
 ## 2. Create local environment file
@@ -53,6 +54,8 @@ psql -v ON_ERROR_STOP=1 -c "ALTER ROLE cartlify_owner PASSWORD '<owner password>
 ```
 
 ## 5. Generate Prisma client
+
+`npm ci` already generated it; run it again after a change of `prisma/schema.prisma`:
 
 ```bash
 npm run prisma:generate
