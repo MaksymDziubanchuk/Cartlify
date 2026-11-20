@@ -120,6 +120,10 @@ The model in one page, for a developer and for a shop admin: [Products, variants
 - the worker of the parcels asks the delivery provider every minute to void the parcels that wait for their void, and leaves the ones of a carrier that cannot to the admin (alert `parcels_void_pending`; [Delivery](delivery.md))
 - the buyer gets an email when the order is paid, with the delivery (the address and the recipient, or the place to collect it) (sent when the payment event of the provider comes; a failed mail never fails it); the texts of the terms and of the contract the order was confirmed with are attached to it as `terms.txt` and `contract.txt`, the copy of the contract, and its last line says so
 
+### Returns
+
+- a withdrawal within the days of the contract, from the account or by the public form with no account (`api/withdrawals/*`), and a return outside it that an admin takes; each is a statement of the items and units it names (`api/returns/*`), with its parcels back, the goods taken back into the stock and the money back through the payment provider or outside the app (in parts when the payment holds less); the cancel of an order by the shop is a statement too. The rules: [Returns](returns.md); each case step by step: [Return scenarios](return-scenarios.md)
+
 ### Shop settings
 
 The data of the shop that root changes without a deploy lives in a database table, not the environment, a row a setting (the latest row of a setting is its value, nothing is ever changed or removed): see [shop settings](shop-settings.md) for the full model.
