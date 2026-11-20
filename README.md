@@ -55,7 +55,7 @@ Also in use: Stripe, ShippyPro, Cloudinary, SendGrid, OpenAI, Cloudflare Turnsti
 ```bash
 git clone https://github.com/MaksymDziubanchuk/Cartlify.git
 cd Cartlify
-npm install
+npm ci
 cp .env.example .env
 ```
 
