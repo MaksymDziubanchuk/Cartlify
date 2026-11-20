@@ -61,6 +61,7 @@ Cartlify/
 │   ├── plugins/                # Fastify plugins, including Swagger/OpenAPI registration
 │   ├── providers/              # the outside services, a folder for each kind and in it one for each provider (see providers.md)
 │   │   ├── payments/           # stripe/
+│   │   ├── delivery/           # shippypro/
 │   │   ├── mail/               # sendgrid/
 │   │   ├── files/              # cloudinary/
 │   │   ├── ai/                 # openai/
@@ -140,6 +141,7 @@ Current production-oriented pieces already present:
 - PostgreSQL RLS and custom SQL hardening scripts
 - separate runtime and migration database credentials
 - Redis-backed order timeout worker, and a money worker on the database alone (refunds in transit, disputes whose step did not finish)
+- a worker of the parcels that asks the delivery provider every minute to void the parcels waiting for their void
 - JWT cookie auth with refresh-token flow
 - OAuth support
 - structured backend module boundaries
