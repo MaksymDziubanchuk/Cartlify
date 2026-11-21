@@ -3,6 +3,9 @@
 ## Run Commands
 
 ```bash
+# install the exact versions of package-lock.json; its postinstall generates the Prisma client
+npm ci
+
 # development
 npm run dev
 

@@ -23,14 +23,14 @@
 
 ## 🔄 Next Up
 
-- taxes (VAT), fiscal receipts and invoices through an aggregator
+- taxes (VAT) for a shop of almost any country, by the rules root sets with no change of the code; fiscal receipts and invoices through an aggregator
 
 ## ⏭️ Later
 
 1. two-factor login for the admins, a full set of audit journals
 2. hardening for heavy traffic: concurrent requests, timeouts and retries
-3. a security review and a polish of the whole code base
-4. Docker, the periodic tasks (the newsletters, the cleanups, backups) and a load run
+3. a security review, the speed of the database and a polish of the whole code base
+4. Docker, the periodic tasks (the newsletters, the cleanups, backups), a load run and the gates of the deploy in CI
 5. prices that follow the demand (an experiment)
 6. the full documentation and a launch checklist
 7. a catalog in several languages, then a storefront on this API

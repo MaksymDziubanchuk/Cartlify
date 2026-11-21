@@ -31,15 +31,16 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | Realtime chat                 | WebSocket chat endpoint and event-based messaging                                                                                              | Implemented |
 | AI assistant                  | OpenAI-powered chatbot service with product/support context                                                                                    | Implemented |
 | Payments                      | Stripe payment pages (card with Google Pay and Apple Pay, PayPal, Bizum) and webhook, a money journal, refunds, disputes followed to their end | Implemented |
+| Delivery                      | ShippyPro: the carriers priced for an address, the parcels with their labels, their voids and the events of the webhook                        | Implemented |
 | Media                         | Cloudinary                                                                                                                                     | Implemented |
 | Email                         | SendGrid: a stream for the orders, one of its own for the newsletters                                                                          | Implemented |
 | Captcha                       | Cloudflare Turnstile on the forms that mail or open an account                                                                                 | Implemented |
 | OAuth                         | Google, GitHub, LinkedIn                                                                                                                       | Implemented |
-| Cache / background processing | Redis, order timeout worker, the money worker, the lock of the newsletter pass                                                                 | Implemented |
+| Cache / background processing | Redis, order timeout worker, the money worker, the worker of the parcel voids, the lock of the newsletter pass                                 | Implemented |
 | Internationalization          | i18next, a dictionary file per language (`src/locales/`)                                                                                       | Implemented |
 | Lint / formatting             | ESLint, Prettier                                                                                                                               | Implemented |
 | Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker                                                                                | Implemented |
-| CI utilities                  | GitHub Actions for tests, DB migration and SQL execution                                                                                       | Implemented |
+| CI utilities                  | GitHub Actions for tests, DB migration, SQL execution and the check of the DB structure against its snapshot                                   | Implemented |
 
 ## Project Structure
 
@@ -60,6 +61,7 @@ Cartlify/
 │   ├── plugins/                # Fastify plugins, including Swagger/OpenAPI registration
 │   ├── providers/              # the outside services, a folder for each kind and in it one for each provider (see providers.md)
 │   │   ├── payments/           # stripe/
+│   │   ├── delivery/           # shippypro/
 │   │   ├── mail/               # sendgrid/
 │   │   ├── files/              # cloudinary/
 │   │   ├── ai/                 # openai/
@@ -103,7 +105,7 @@ Cartlify/
 │   ├── coverage/               # generated coverage report (gitignored)
 │   └── run.mjs                 # test launcher behind npm test
 ├── docker-compose.test.yml     # disposable PostgreSQL and Redis for integration tests
-├── .github/workflows/          # tests, DB migration and SQL execution workflows
+├── .github/workflows/          # tests, DB migration, SQL execution and DB structure check workflows
 └── package.json
 ```
 
@@ -139,6 +141,7 @@ Current production-oriented pieces already present:
 - PostgreSQL RLS and custom SQL hardening scripts
 - separate runtime and migration database credentials
 - Redis-backed order timeout worker, and a money worker on the database alone (refunds in transit, disputes whose step did not finish)
+- a worker of the parcels that asks the delivery provider every minute to void the parcels waiting for their void
 - JWT cookie auth with refresh-token flow
 - OAuth support
 - structured backend module boundaries
