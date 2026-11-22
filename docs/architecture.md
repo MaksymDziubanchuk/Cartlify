@@ -49,7 +49,7 @@ Cartlify/
 ├── db/
 │   ├── schema/                 # raw SQL, see "The database" below: roles, extensions, RLS, views, functions, indexes
 │   ├── data/                   # the scripts that clear data stay local, not in git
-│   └── tools/                  # test database build, structure snapshot (the reference of the structure), anonymized copy of prod for dev, demo data
+│   └── tools/                  # test database build, the apply of the migrations and the scripts to dev or prod (npm run db:apply), structure snapshot (the reference of the structure), anonymized copy of prod for dev, demo data
 ├── prisma/                     # Prisma schema and migrations (tables only)
 ├── src/
 │   ├── config/                 # env and service configs, the shop settings module, i18next (src/locales/*.json)
@@ -98,8 +98,8 @@ Cartlify/
 │   └── workers/                # background workers
 ├── tests/
 │   ├── unit/                   # no database or network, mirrors src/ paths
-│   ├── integration/            # api/<module>, db, flows, worker, providers (the contract of each kind) against the Docker test stack; every answer is held against the Swagger document
-│   ├── helpers/                # app startup for app.inject, test environment guard
+│   ├── integration/            # api/<module>, db, flows, worker, config (the mail streams, the shop settings), providers (the contract of each kind) against the Docker test stack; every answer is held against the Swagger document
+│   ├── helpers/                # app startup for app.inject, test environment guard, the actors and the factories of rows, readers of the database, the mocks of the outside services, the check of every answer against Swagger
 │   ├── fixtures/               # static files used by tests
 │   ├── setup/                  # per-project jest setup, keeps the local .env out of tests
 │   ├── coverage/               # generated coverage report (gitignored)
