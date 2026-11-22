@@ -19,7 +19,7 @@
 
 ---
 
-Cartlify is a portfolio project: a REST API with the parts a real shop needs, from the catalog to the accounting report. The API is documented in Swagger, the storefront comes on top of it, and the project is in active development ([status](docs/status.md))
+Cartlify is a portfolio project: a REST API with the parts a real shop needs, from the catalog to the accounting report. The API is documented in Swagger, the storefront comes on top of it, and the project is in active development ([status](docs/status.md)).
 
 **Why Cartlify:** every outside service a block of its own, money that adds up, rules the API cannot step over, the rules of the EU, 17,000+ tests — [advantages](docs/advantages.md).
 
@@ -72,6 +72,7 @@ Every command: [commands](docs/commands.md).
 
 | Document                                     | What it covers                                                            |
 | -------------------------------------------- | ------------------------------------------------------------------------- |
+| [Advantages](docs/advantages.md)             | why Cartlify: swappable services, the money, the rules, the EU, the tests |
 | [Features](docs/features.md)                 | what the API does, module by module                                       |
 | [Variants](docs/variants.md)                 | products, variants, characteristics, stock, lists and filters             |
 | [Payments](docs/payments.md)                 | the ways to pay, the money journal, refunds, holds, the webhook           |
