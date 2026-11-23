@@ -36,7 +36,8 @@ const getShopSettingsValuesSchema = {
   description:
     'The current value of every setting (the latest row of each), the server default for one ' +
     'root never set; a setting with no default of the server (deliveryZones, ' +
-    'customsFreeCountries, deliverySender, the seller, the logo) is null, or an empty list, until ' +
+    'deliverySender, the seller, its country and the choice of its tax, the invoices, the logo) is ' +
+    'null, or an empty list, until ' +
     'root sets it (GET /api/admin/shop-settings/missing names which).',
 
   response: {
@@ -56,7 +57,8 @@ const getShopSettingsMissingFieldsSchema = {
   operationId: 'getShopSettingsMissingFields',
   summary: 'Get the fields of the data of the shop root has not set yet',
   description:
-    'The fields with no default of the server (deliveryZones, customsFreeCountries, the seller, ' +
+    'The fields with no default of the server (deliveryZones, sellerCountry, vatPayer, ' +
+    'invoiceMode, the seller, ' +
     'the logo) still empty, emailReplyTo while it is blank (no mail goes out without it), and ' +
     'deliverySender while the method carrier is on without it; the same list the ' +
     'shop_settings_incomplete alert counts.',
@@ -95,19 +97,38 @@ const WRITE_REFUSALS =
   'write would leave: `DELIVERY_PROVIDER_NOT_CONFIGURED`: the method carrier on while the ' +
   'server has no key of the delivery provider. `DELIVERY_SENDER_REQUIRED`: the method carrier ' +
   'on without deliverySender. `DELIVERY_ZONE_COUNTRY_REPEATED`: a country in two zones ' +
-  '(`details.countries`). `DELIVERY_ZONE_REST_REPEATED`: more than one zone of the rest. ' +
+  '(`details.countries`). ' +
   '`DELIVERY_ZONE_NAME_REPEATED`: two zones of one name (`details.names`). ' +
   '`PICKUP_DETAILS_REQUIRED`: the pickup method on with a blank ' +
-  'pickupAddress or pickupHours (`details.fields` the blank ones). `PICKUP_HOURS_INVALID`: ' +
+  'pickupAddress or pickupHours, or no pickupCountry (`details.fields` the missing ones). ' +
+  '`SHOP_COUNTRY_MISSING`: a country of deliveryZones, or the pickupCountry, without its record ' +
+  '(`details.countries`; PUT /api/root/countries/:country writes it). `PICKUP_HOURS_INVALID`: ' +
   'pickupHours not in its format (see the field). `RESERVATION_MINUTES_TOO_LONG`: ' +
   'reservationMinutes and paymentPageMinutes together over what every payment provider keeps a page ' +
   `(\`details.max\`, ${paymentPageBounds().mostWithReservation}). ` +
   '`SHOP_LOCALE_NOT_ENABLED`: shopLocale not among enabledLocales. ' +
-  '`DELIVERY_COUNTRY_NOT_SUPPORTED`: a country of deliveryZones or customsFreeCountries the ' +
-  'app does not know ' +
+  '`DELIVERY_COUNTRY_NOT_SUPPORTED`: a country of deliveryZones the app does not know ' +
   'how to take a postal code of (`details.countries` the ones refused, `details.supported` ' +
   'the full list). `LOCALE_NOT_SUPPORTED`: a language of enabledLocales with no dictionary ' +
-  '(`details.locales`/`details.supported`, src/locales).';
+  '(`details.locales`/`details.supported`, src/locales). The tax and the documents ' +
+  '(docs/taxes.md): `SELLER_COUNTRY_NOT_SUPPORTED`: sellerCountry the United States, Portugal ' +
+  'or Poland (`details.unsupported`). `SELLER_TAX_DATA_REQUIRED`: vatPayer true without ' +
+  'sellerCountry, sellerTaxId or sellerTaxIdLabel (`details.fields`). ' +
+  '`SELLER_COUNTRY_RATES_REQUIRED`: vatPayer true while the record of sellerCountry has no ' +
+  'main rate. `SHOP_COUNTRY_RULE_REQUIRED`: vatPayer true while a country without customs has ' +
+  'no rule (`details.countries`). `INVOICE_SERIES_REQUIRED`: invoiceMode set without ' +
+  'invoicePrefix, creditNotePrefix or invoiceYearly (`details.fields`). ' +
+  '`INVOICE_SERIES_SAME`: the same prefix for the invoices and the credit notes. ' +
+  '`INVOICE_SERIES_TAKEN`: invoicePrefix a series the credit notes are numbered in, or ' +
+  'creditNotePrefix one of the invoices (a series a year of it included). The fiscal ' +
+  'receipts (RECEIPT_PROVIDER of the server): `RECEIPT_MOMENT_REQUIRED`: no receiptMoment while ' +
+  'the provider makes receipts. `RECEIPT_MOMENT_WITHOUT_PROVIDER`: receiptMoment set while the ' +
+  'server makes no receipts. `RECEIPT_PROVIDER_NOT_CONFIGURED`: receiptMoment set the first time ' +
+  'while the server has no key of the provider. `RECEIPT_INVOICE_EVERY_ORDER_REQUIRED`: the ' +
+  'provider makes receipts and invoiceMode is not every_order (a receipt registers an invoice). ' +
+  '`RECEIPT_MOMENT_FIXED`: receiptMoment other than the one the law of the provider fixes ' +
+  '(`details.moment`). `RECEIPT_SELLER_COUNTRY_NOT_SUPPORTED`: sellerCountry not one the ' +
+  'provider serves (`details.supported`).';
 
 // what turning a language off does, in the description of both writes
 const LOCALES_OFF_TEXT =

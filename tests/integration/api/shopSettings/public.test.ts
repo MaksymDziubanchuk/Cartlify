@@ -31,6 +31,10 @@ describe('GET /api/shop-settings', () => {
         'sellerTaxId',
         'sellerEmail',
         'sellerPhone',
+        'sellerCountry',
+        'sellerTaxIdLabel',
+        'maxOrderTotal',
+        'invoiceMode',
       ].sort(),
     );
     expect(typeof body.shopName).toBe('string');

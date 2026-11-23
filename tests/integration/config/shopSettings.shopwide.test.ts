@@ -108,6 +108,10 @@ describe('loadShopSettings()', () => {
         'sellerTaxId',
         'sellerEmail',
         'sellerPhone',
+        'sellerCountry',
+        'sellerTaxIdLabel',
+        'maxOrderTotal',
+        'invoiceMode',
       ].sort(),
     );
     expect(pub).not.toHaveProperty('deliverySender');
@@ -163,7 +167,7 @@ describe('writeShopSettings()', () => {
     await expect(
       writeShopSettings({
         actorId: root.id,
-        values: { shopName: 'Refused', customsFreeCountries: ['ES'] },
+        values: { shopName: 'Refused', maxOrderTotal: 3000 },
         check: () => {
           throw new Error('refused');
         },
@@ -184,8 +188,10 @@ describe('writeShopSettings()', () => {
         sellerEmail: null,
         sellerPhone: null,
         deliveryZones: [],
-        customsFreeCountries: null,
         deliverySender: null,
+        sellerCountry: null,
+        vatPayer: null,
+        invoiceMode: null,
         deliveryMethods: ['manual'],
         // loadShopSettings above read the rows of the database, its reply-to is the empty default
         emailReplyTo: 'help@cartlify.test',
@@ -195,7 +201,9 @@ describe('writeShopSettings()', () => {
     expect(missingShopSettingsFields().sort()).toEqual(
       [
         'deliveryZones',
-        'customsFreeCountries',
+        'sellerCountry',
+        'vatPayer',
+        'invoiceMode',
         // nobody uploaded a logo in this file
         'logoUrl',
         'sellerLegalName',
@@ -215,7 +223,12 @@ describe('writeShopSettings()', () => {
         sellerEmail: 'legal@cartlify.test',
         sellerPhone: '+380501234567',
         deliveryZones: [{ name: 'Home', countries: ['UA'], manualPrice: 0, freeFrom: null }],
-        customsFreeCountries: ['UA'],
+        sellerCountry: 'UA',
+        vatPayer: false,
+        invoiceMode: 'on_request',
+        invoicePrefix: 'F',
+        creditNotePrefix: 'CN',
+        invoiceYearly: true,
       },
     });
 

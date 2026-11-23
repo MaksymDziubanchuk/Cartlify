@@ -9,6 +9,19 @@ import type { DeliverySender, DeliveryZone } from './deliveryZones.js';
 
 import type { UserId } from 'types/ids.js';
 
+import { readShopCountries, setShopCountries, type ShopCountriesState } from './shopCountries.js';
+
+export const INVOICE_MODES = ['every_order', 'on_request'] as const;
+export type InvoiceModeName = (typeof INVOICE_MODES)[number];
+
+export const RECEIPT_MOMENTS = ['payment', 'shipment'] as const;
+export type ReceiptMomentName = (typeof RECEIPT_MOMENTS)[number];
+
+// the countries a shop cannot be of with this app (docs/taxes.md): the United States (a tax of every
+// state and city), Portugal (its invoices come from certified software only) and Poland (a credit
+// note lowers the tax only once the buyer confirms it, and the invoices of KSeF)
+export const UNSUPPORTED_SELLER_COUNTRIES = ['US', 'PT', 'PL'] as const;
+
 // The data of the shop (delivery, brand, reservation, moderation, withdrawal, languages, the
 // seller, the logo), one setting a row in cartlify.shop_settings: a key and the value it took.
 // Root adds a row for each setting they change, nobody changes or removes one, the current value
@@ -22,9 +35,6 @@ export type ShopSettingsValues = {
   // the countries the shop delivers to, in zones with the price of the manual delivery and the sum
   // from which a delivery is free (@config/deliveryZones.js)
   deliveryZones: DeliveryZone[];
-  // the countries a parcel goes to without customs (the country of the shop and its customs union);
-  // null: not set, nothing is checked for customs
-  customsFreeCountries: string[] | null;
   // where the parcels of the delivery provider go from; needed by the method carrier
   deliverySender: DeliverySender | null;
   pickupAddress: string;
@@ -61,6 +71,30 @@ export type ShopSettingsValues = {
   sellerTaxId: string | null;
   sellerEmail: string | null;
   sellerPhone: string | null;
+
+  // the country the seller is registered in (two capital letters); null: not set
+  sellerCountry: string | null;
+  // the shop takes the tax in its own country; null: not set, no tax is taken (docs/taxes.md)
+  vatPayer: boolean | null;
+  // the words the documents print before sellerTaxId (NIF-IVA, USt-IdNr., VAT)
+  sellerTaxIdLabel: string | null;
+  // the largest total of an order the shop takes (with the delivery); null: any
+  maxOrderTotal: number | null;
+  // the invoices: of every paid order, or of the orders the buyer asked one for; null: not set,
+  // none are made
+  invoiceMode: InvoiceModeName | null;
+  // the series of the invoices and of the credit notes (capital letters, digits, _ . / -), and a
+  // new series every year with the year in it
+  invoicePrefix: string | null;
+  creditNotePrefix: string | null;
+  invoiceYearly: boolean | null;
+  // when the fiscal receipt of a sale is made, for a receipts provider that makes them; null: not set
+  receiptMoment: ReceiptMomentName | null;
+  // the text at the foot of every document (the registration of the firm, the bank, a note), in the
+  // language of the shop
+  documentFooter: string | null;
+  // the country of the place a pickup order is collected at: its record taxes a pickup
+  pickupCountry: string | null;
 };
 
 export type ShopSettingKey = keyof ShopSettingsValues;
@@ -69,7 +103,6 @@ export type ShopSettingKey = keyof ShopSettingsValues;
 export const SHOP_SETTING_KEYS = [
   'deliveryMethods',
   'deliveryZones',
-  'customsFreeCountries',
   'deliverySender',
   'pickupAddress',
   'pickupHours',
@@ -95,6 +128,17 @@ export const SHOP_SETTING_KEYS = [
   'sellerTaxId',
   'sellerEmail',
   'sellerPhone',
+  'sellerCountry',
+  'vatPayer',
+  'sellerTaxIdLabel',
+  'maxOrderTotal',
+  'invoiceMode',
+  'invoicePrefix',
+  'creditNotePrefix',
+  'invoiceYearly',
+  'receiptMoment',
+  'documentFooter',
+  'pickupCountry',
 ] as const satisfies readonly ShopSettingKey[];
 
 // settings a buyer or a guest is shown (GET /api/shop-settings); delivery is its own route
@@ -109,6 +153,10 @@ export const PUBLIC_SHOP_SETTINGS_FIELDS = [
   'sellerTaxId',
   'sellerEmail',
   'sellerPhone',
+  'sellerCountry',
+  'sellerTaxIdLabel',
+  'maxOrderTotal',
+  'invoiceMode',
 ] as const satisfies readonly ShopSettingKey[];
 
 export type PublicShopSettings = Pick<
@@ -121,7 +169,6 @@ export type PublicShopSettings = Pick<
 export const WRITABLE_SHOP_SETTINGS_FIELDS = [
   'deliveryMethods',
   'deliveryZones',
-  'customsFreeCountries',
   'deliverySender',
   'pickupAddress',
   'pickupHours',
@@ -145,6 +192,17 @@ export const WRITABLE_SHOP_SETTINGS_FIELDS = [
   'sellerTaxId',
   'sellerEmail',
   'sellerPhone',
+  'sellerCountry',
+  'vatPayer',
+  'sellerTaxIdLabel',
+  'maxOrderTotal',
+  'invoiceMode',
+  'invoicePrefix',
+  'creditNotePrefix',
+  'invoiceYearly',
+  'receiptMoment',
+  'documentFooter',
+  'pickupCountry',
 ] as const satisfies readonly ShopSettingKey[];
 
 export type WritableShopSettingKey = (typeof WRITABLE_SHOP_SETTINGS_FIELDS)[number];
@@ -177,12 +235,12 @@ const DEFAULTS: Partial<ShopSettingsValues> = {
 
 // what a setting with no default reads as while root has not set it: no row is written for it.
 // Without zones the shop delivers nowhere (a delivery to an address is refused), without the
-// countries free of customs nothing is checked for customs, without the sender the method carrier
-// cannot be switched on; the rest only keep the shop from naming itself on its public pages and
-// mails (missingShopSettingsFields)
+// sender the method carrier cannot be switched on, without the country of the seller and the
+// choice of the tax no tax is taken, without the mode of the invoices none is made; the seller only
+// keeps the shop from naming itself on its public pages and mails (missingShopSettingsFields); the
+// rest is optional or needed by another setting (checkSettings)
 const NO_DEFAULT_VALUES = {
   deliveryZones: [],
-  customsFreeCountries: null,
   deliverySender: null,
   logoUrl: null,
   logoPublicId: null,
@@ -191,11 +249,24 @@ const NO_DEFAULT_VALUES = {
   sellerTaxId: null,
   sellerEmail: null,
   sellerPhone: null,
+  sellerCountry: null,
+  vatPayer: null,
+  sellerTaxIdLabel: null,
+  maxOrderTotal: null,
+  invoiceMode: null,
+  invoicePrefix: null,
+  creditNotePrefix: null,
+  invoiceYearly: null,
+  receiptMoment: null,
+  documentFooter: null,
+  pickupCountry: null,
 } satisfies Partial<ShopSettingsValues>;
 
 const NO_DEFAULT_FIELDS = [
   'deliveryZones',
-  'customsFreeCountries',
+  'sellerCountry',
+  'vatPayer',
+  'invoiceMode',
   'logoUrl',
   'sellerLegalName',
   'sellerAddress',
@@ -296,10 +367,12 @@ export function newsletterLimit(): { count: number; days: number } {
   return { count: values.newsletterLimitCount, days: values.newsletterLimitDays };
 }
 
-// the settings root has not set yet: the ones with no default of the server, and a required text
-// still empty or blank (the shop_settings_incomplete alert and GET /api/admin/shop-settings/missing
-// read this)
-export function missingShopSettingsFields(): ShopSettingKey[] {
+// the settings root has not set yet: the ones with no default of the server, a required text still
+// empty or blank, and the moment of the receipt when the provider of the receipts of the server
+// makes them (the shop_settings_incomplete alert and GET /api/admin/shop-settings/missing read this)
+export function missingShopSettingsFields(
+  opts: { receipts: boolean } = { receipts: false },
+): ShopSettingKey[] {
   const values = shopSettings();
   const noDefault = NO_DEFAULT_FIELDS.filter((key) => {
     const value = values[key];
@@ -311,7 +384,9 @@ export function missingShopSettingsFields(): ShopSettingKey[] {
     values.deliveryMethods.includes('carrier') && values.deliverySender === null
       ? ['deliverySender']
       : [];
-  return [...noDefault, ...blankText, ...sender];
+  const receipts: ShopSettingKey[] =
+    opts.receipts && values.receiptMoment === null ? ['receiptMoment'] : [];
+  return [...noDefault, ...blankText, ...sender, ...receipts];
 }
 
 // reads the latest row of each key (the system context: this runs at startup, never for a request
@@ -346,20 +421,30 @@ export async function loadShopSettings(): Promise<void> {
 // is a function of the database that reads the rows just written, so it comes after them, and a
 // failure of it takes the write back with it (nothing is changed, the memory of the server is not
 // either). A language that comes back brings no one back
+// The countries the shop sells to (cartlify.shop_countries) are written under the same lock, in the
+// transaction of the settings they go with (the route of a country writes the record and its zone
+// at once, docs/taxes.md): countries, when given, writes them first, the values may follow from the
+// settings before the write, and the check sees the countries as the transaction leaves them. The
+// memory of both is set once the transaction committed
 async function writeSettings(args: {
   actorId: UserId;
-  values: Partial<ShopSettingsValues>;
-  check?: (next: ShopSettingsValues) => void;
+  values:
+    Partial<ShopSettingsValues> | ((previous: ShopSettingsValues) => Partial<ShopSettingsValues>);
+  check?: (next: ShopSettingsValues, countries: ShopCountriesState) => void;
+  countries?: (db: Prisma.TransactionClient, previous: ShopSettingsValues) => Promise<void>;
 }): Promise<{ settings: ShopSettingsValues; previous: ShopSettingsValues }> {
   const written = await tx(async (db) => {
     await setUserContext(db, { userId: args.actorId, role: 'ROOT' });
     await db.$executeRaw`select pg_advisory_xact_lock(hashtext('cartlify.shop_settings'))`;
 
     const previous = valuesOf(await currentRowsOf(db));
-    const settings = { ...previous, ...args.values };
-    args.check?.(settings);
+    if (args.countries) await args.countries(db, previous);
+    const countries = await readShopCountries(db);
+    const values = typeof args.values === 'function' ? args.values(previous) : args.values;
+    const settings = { ...previous, ...values };
+    args.check?.(settings, countries);
 
-    const changed = (Object.keys(args.values) as ShopSettingKey[]).filter(
+    const changed = (Object.keys(values) as ShopSettingKey[]).filter(
       (key) => !sameValue(previous[key], settings[key]),
     );
     if (changed.length) {
@@ -376,19 +461,23 @@ async function writeSettings(args: {
       await db.$executeRaw`select * from cartlify.newsletter_reset_locale(${locale})`;
     }
 
-    return { settings, previous };
+    return { settings, previous, countries };
   });
 
   cache = written.settings;
-  return written;
+  setShopCountries(written.countries);
+  return { settings: written.settings, previous: written.previous };
 }
 
 // root sets settings of the data of the shop, all of them (PUT /api/root/shop-settings) or one
 // (PUT /api/root/shop-settings/:key); the logo has writeShopLogo
 export async function writeShopSettings(args: {
   actorId: UserId;
-  values: Partial<WritableShopSettings>;
-  check?: (next: ShopSettingsValues) => void;
+  values:
+    | Partial<WritableShopSettings>
+    | ((previous: ShopSettingsValues) => Partial<WritableShopSettings>);
+  check?: (next: ShopSettingsValues, countries: ShopCountriesState) => void;
+  countries?: (db: Prisma.TransactionClient, previous: ShopSettingsValues) => Promise<void>;
 }): Promise<ShopSettingsValues> {
   return (await writeSettings(args)).settings;
 }

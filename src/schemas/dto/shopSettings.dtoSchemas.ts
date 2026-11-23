@@ -2,6 +2,7 @@
 // languages, the seller, the logo), a row a setting root writes (docs/shop-settings.md)
 
 import { DELIVERY_METHOD_NAMES } from '@config/deliveryMethods.js';
+import { INVOICE_MODES, RECEIPT_MOMENTS } from '@config/shopSettings.js';
 import { paymentPageBounds } from '@providers/payments/index.js';
 
 const dateTimeSchema = { type: 'string', format: 'date-time' } as const;
@@ -32,13 +33,13 @@ const deliveryZoneSchema = {
   properties: {
     name: { ...lineSchema(100), description: 'The name of the zone for root, once in the list.' },
     countries: {
-      anyOf: [
-        { type: 'array', minItems: 1, uniqueItems: true, items: countrySchema },
-        { type: 'string', enum: ['rest'] },
-      ],
+      type: 'array',
+      minItems: 1,
+      uniqueItems: true,
+      items: countrySchema,
       description:
-        'The countries of the zone (ISO codes, each in one zone only), or "rest": every country ' +
-        'the app delivers to that no other zone names (one such zone at most).',
+        'The countries of the zone (ISO codes, each in one zone only), each with its record ' +
+        '(PUT /api/root/countries/:country writes the record and puts it in a zone).',
     },
     manualPrice: {
       type: ['number', 'null'],
@@ -110,17 +111,9 @@ const valueProperties = {
     maxItems: 100,
     items: deliveryZoneSchema,
     description:
-      'The countries the shop delivers to, in zones (e.g. Spain 5, the EU 12, the rest 30), ' +
-      'whatever the method: there is no other list of countries. Empty: the shop delivers nowhere.',
-  },
-  customsFreeCountries: {
-    type: ['array', 'null'],
-    items: countrySchema,
-    uniqueItems: true,
-    description:
-      'The countries a parcel goes to without customs: the country of the shop and its customs ' +
-      'union. A cart to any other country of a zone needs the customs code and the country of ' +
-      'origin of every product. Null: not set, nothing is checked for customs.',
+      'The countries the shop delivers to, in zones (e.g. Spain 5, the EU 12), whatever the ' +
+      'method: there is no other list of countries, and every one of them has its record with ' +
+      'customs and the tax (GET /api/root/countries). Empty: the shop delivers nowhere.',
   },
   deliverySender: deliverySenderSchema,
   pickupAddress: {
@@ -245,6 +238,77 @@ const valueProperties = {
   sellerTaxId: { ...textSchema, maxLength: 50 },
   sellerEmail: { ...textSchema, maxLength: 254 },
   sellerPhone: { ...textSchema, maxLength: 30 },
+  sellerCountry: {
+    ...countrySchema,
+    type: ['string', 'null'],
+    description:
+      'The country the seller is registered in; not the United States, Portugal or Poland ' +
+      '(docs/taxes.md). Its record holds the rates of the shop.',
+  },
+  vatPayer: {
+    type: ['boolean', 'null'],
+    description:
+      'The shop takes the tax in its own country: then sellerCountry, sellerTaxId and ' +
+      'sellerTaxIdLabel are needed, the record of sellerCountry with its rates, and a rule in the ' +
+      'record of every country without customs. Null: not set, no tax is taken.',
+  },
+  sellerTaxIdLabel: {
+    ...textSchema,
+    minLength: 1,
+    maxLength: 30,
+    description: 'The words the documents print before sellerTaxId (NIF-IVA, USt-IdNr., VAT).',
+  },
+  maxOrderTotal: {
+    ...moneySchema,
+    description:
+      'The largest total of an order the shop takes, the delivery in it (in Spain 3000: a ' +
+      'simplified invoice goes up to it); a larger one is refused with the sum. Null: any.',
+  },
+  invoiceMode: {
+    type: ['string', 'null'],
+    enum: [...INVOICE_MODES, null],
+    description:
+      'every_order: an invoice of every paid order; on_request: of an order the buyer asked one ' +
+      'for at the confirmation. Needs invoicePrefix, creditNotePrefix and invoiceYearly. Null: no ' +
+      'invoice is made.',
+  },
+  invoicePrefix: {
+    type: ['string', 'null'],
+    pattern: '^[A-Z0-9_./-]{1,10}$',
+    description:
+      'The series of the invoices: up to 10 capital letters, digits, _ . / - (a number is ' +
+      '<series>-<number>, without gaps).',
+  },
+  creditNotePrefix: {
+    type: ['string', 'null'],
+    pattern: '^[A-Z0-9_./-]{1,10}$',
+    description: 'The series of the credit notes, not the one of the invoices.',
+  },
+  invoiceYearly: {
+    type: ['boolean', 'null'],
+    description: 'A new series every year, the year after the prefix (F2026-1, F2027-1).',
+  },
+  receiptMoment: {
+    type: ['string', 'null'],
+    enum: [...RECEIPT_MOMENTS, null],
+    description:
+      'When the fiscal receipt of a sale is made: at the payment, or when the order is sent (an ' +
+      'order cancelled before needs none); needed once a receipts provider is on.',
+  },
+  documentFooter: {
+    ...textSchema,
+    maxLength: 1000,
+    description:
+      'The text at the foot of every invoice and credit note (the registration of the firm, the ' +
+      'bank, a note), in the language of the shop.',
+  },
+  pickupCountry: {
+    ...countrySchema,
+    type: ['string', 'null'],
+    description:
+      'The country of the place a pickup order is collected at, with its record: the tax of a ' +
+      'pickup is of it. Needed once deliveryMethods has "pickup".',
+  },
 } as const;
 
 const valueRequired = Object.keys(valueProperties);
@@ -271,6 +335,10 @@ const publicShopSettingsResponseSchema = {
     sellerTaxId: valueProperties.sellerTaxId,
     sellerEmail: valueProperties.sellerEmail,
     sellerPhone: valueProperties.sellerPhone,
+    sellerCountry: valueProperties.sellerCountry,
+    sellerTaxIdLabel: valueProperties.sellerTaxIdLabel,
+    maxOrderTotal: valueProperties.maxOrderTotal,
+    invoiceMode: valueProperties.invoiceMode,
   },
   required: [
     'shopName',
@@ -282,6 +350,10 @@ const publicShopSettingsResponseSchema = {
     'sellerTaxId',
     'sellerEmail',
     'sellerPhone',
+    'sellerCountry',
+    'sellerTaxIdLabel',
+    'maxOrderTotal',
+    'invoiceMode',
   ],
 } as const;
 
