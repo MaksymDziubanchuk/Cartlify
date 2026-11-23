@@ -30,9 +30,10 @@ concurrency:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    # the whole suite takes about 16 minutes on two workers of a desktop machine (the database built,
-    # some 8000 tests); the limit leaves room for a slower runner
-    timeout-minutes: 30
+    # the whole suite takes about 27 minutes here (the database built, some 17,600 tests, 23.11.2026);
+    # the limit leaves room for a slower runner, for real services the parts take (their queues and
+    # waits) and for the tests to come
+    timeout-minutes: 90
 
     steps:
       # with service:cloudinary in parts the cloudinary tests upload to the real account (its test/
