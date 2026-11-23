@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { writeAlertNumbers } from '../../../helpers/alerts.js';
 import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
 import {
   campaignApi,
@@ -54,15 +55,21 @@ const KINDS = [
 // the kinds with a threshold and with cases that have an id; the stop of the worker has neither
 const CASE_KINDS = KINDS.filter((kind) => kind !== 'newsletter_sending_halted');
 
-const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
+// an admin and root wrote the numbers the alerts are counted with (ALERT_NUMBERS), unless a test
+// looks at one who wrote none
+const newUser = async (
+  opts: Parameters<typeof createUser>[0] = {},
+  { numbers = true }: { numbers?: boolean } = {},
+) => {
   const user = await createUser(opts);
   userIds.push(user.id);
+  if (numbers) await writeAlertNumbers(user);
   return user;
 };
 
 // an admin root allowed to run the newsletters
-const newManager = async () => {
-  const admin = await newUser({ role: 'ADMIN' });
+const newManager = async (opts: { numbers?: boolean } = {}) => {
+  const admin = await newUser({ role: 'ADMIN' }, opts);
   await giveNewsletterRight(root.id, admin.id);
   return admin;
 };
@@ -217,13 +224,21 @@ describe('who sees the alerts of the newsletters', () => {
       'dispute_refunds_failed',
       'bank_money_to_decide',
       'returns_money_short',
-      'returns_money_overpaid',
       'hand_refunds_to_explain',
       'hand_refunds_to_decide',
       'fraud_warnings',
       'fraud_warnings_shipped',
       'payment_reviews',
+      'receipts_not_issued',
+      'receipts_refused',
       'admin_actions',
+      'tax_threshold_near',
+      'tax_threshold_passed',
+      'tax_threshold_dropped',
+      'tax_sales_stopped',
+      'tax_parcel_limit_refusals',
+      'tax_rate_soon',
+      'tax_threshold_period_ended',
     ]);
     expect(kinds.indexOf('shop_locale_missing')).toBe(kinds.indexOf(KINDS[0]) - 1);
   });
@@ -233,7 +248,7 @@ describe('who sees the alerts of the newsletters', () => {
     const of = (kind: string) => alerts.find((alert) => alert.kind === kind);
 
     expect(of('newsletter_undelivered')).toMatchObject({
-      subscribed: true,
+      subscribed: false,
       dismissed: 0,
       threshold: 5,
       list: {
@@ -261,7 +276,7 @@ describe('who sees the alerts of the newsletters', () => {
     expect(of('newsletter_running_long')!.list!.query.startedTo).toEqual(expect.any(String));
     expect(of('newsletter_starting_soon')!.list!.query.scheduledTo).toEqual(expect.any(String));
     expect(of('newsletter_cancelled_by_limit')).toMatchObject({
-      subscribed: true,
+      subscribed: false,
       dismissed: 0,
       threshold: 7,
       list: {
@@ -274,7 +289,7 @@ describe('who sees the alerts of the newsletters', () => {
     );
     // the stop of the worker is a single state: no threshold, no list, the time of the stop apart
     expect(of('newsletter_sending_halted')).toMatchObject({
-      subscribed: true,
+      subscribed: false,
       dismissed: 0,
       threshold: null,
       list: null,
@@ -421,26 +436,26 @@ describe('who sees the alerts of the newsletters', () => {
 });
 
 describe('the settings of the newsletter kinds', () => {
-  it('names the threshold of each kind with its unit and its bounds', async () => {
-    const items = await subscriptionsOf(await newManager());
+  it('names the bounds and the unit of the number of each kind, none written for a new manager', async () => {
+    const items = await subscriptionsOf(await newManager({ numbers: false }));
     const byKind = Object.fromEntries(items.map((item) => [item.kind, item.threshold]));
 
     expect(byKind).toMatchObject({
-      newsletter_undelivered: { value: 5, default: 5, min: 1, max: 100, unit: 'percent' },
-      newsletter_rejected: { value: 5, default: 5, min: 1, max: 100, unit: 'percent' },
-      newsletter_complaints: { value: 3, default: 3, min: 1, max: 1000, unit: 'permille' },
-      newsletter_running_long: { value: 3, default: 3, min: 1, max: 365, unit: 'days' },
-      newsletter_starting_soon: { value: 24, default: 24, min: 1, max: 720, unit: 'hours' },
-      newsletter_cancelled_by_limit: { value: 7, default: 7, min: 1, max: 365, unit: 'days' },
+      newsletter_undelivered: { value: null, min: 1, max: 100, unit: 'percent' },
+      newsletter_rejected: { value: null, min: 1, max: 100, unit: 'percent' },
+      newsletter_complaints: { value: null, min: 1, max: 1000, unit: 'permille' },
+      newsletter_running_long: { value: null, min: 1, max: 365, unit: 'days' },
+      newsletter_starting_soon: { value: null, min: 1, max: 720, unit: 'hours' },
+      newsletter_cancelled_by_limit: { value: null, min: 1, max: 365, unit: 'days' },
       newsletter_sending_halted: null,
     });
     expect(items.filter((item) => KINDS.includes(item.kind as (typeof KINDS)[number]))).toEqual(
-      KINDS.map((kind) => expect.objectContaining({ kind, subscribed: true })),
+      KINDS.map((kind) => expect.objectContaining({ kind, subscribed: false })),
     );
   });
 
   it.each(CASE_KINDS)(
-    'keeps the threshold a manager sets for %s for that manager only, until it is reset',
+    'keeps the threshold a manager sets for %s for that manager only, until it is taken away',
     async (kind) => {
       const first = await newManager();
       const second = await newManager();
@@ -448,15 +463,15 @@ describe('the settings of the newsletter kinds', () => {
       const set = await setThreshold(first, kind, 2);
 
       expect(set.statusCode).toBe(200);
-      expect(set.json()).toMatchObject({ kind, threshold: { value: 2, custom: true } });
+      expect(set.json()).toMatchObject({ kind, threshold: { value: 2 } });
       expect(await alertOf(first, kind)).toMatchObject({ threshold: 2 });
       expect(await alertOf(second, kind)).not.toMatchObject({ threshold: 2 });
 
       const reset = await resetThreshold(first, kind);
 
       expect(reset.statusCode).toBe(200);
-      expect(reset.json()).toMatchObject({ threshold: { custom: false } });
-      expect((await alertOf(first, kind)).threshold).toBe((await alertOf(second, kind)).threshold);
+      expect(reset.json()).toMatchObject({ threshold: { value: null } });
+      expect(await alertOf(first, kind)).toMatchObject({ threshold: null, count: 0 });
     },
   );
 
@@ -535,14 +550,14 @@ describe('the settings of the newsletter kinds', () => {
     }
   });
 
-  it('turns a kind off for one admin only', async () => {
+  it('follows a kind for one admin only', async () => {
     const first = await newManager();
     const second = await newManager();
 
-    await turn(first, 'newsletter_complaints', false);
+    await turn(first, 'newsletter_complaints', true);
 
-    expect((await alertOf(first, 'newsletter_complaints')).subscribed).toBe(false);
-    expect((await alertOf(second, 'newsletter_complaints')).subscribed).toBe(true);
+    expect((await alertOf(first, 'newsletter_complaints')).subscribed).toBe(true);
+    expect((await alertOf(second, 'newsletter_complaints')).subscribed).toBe(false);
   });
 });
 
@@ -654,7 +669,7 @@ describe.each(SHARES)(
       });
     });
 
-    it('stops counting a campaign when the admin raises the threshold over its share, and counts it again when the threshold is given back', async () => {
+    it('stops counting a campaign when the admin raises the threshold over its share, and counts it again when the threshold comes down', async () => {
       const manager = await newManager();
       const id = await wentOut(totals(threshold + 5, scale));
       await expectCounted(manager, kind, id);
@@ -662,7 +677,7 @@ describe.each(SHARES)(
       await setThreshold(manager, kind, threshold + 5);
       await expectNotCounted(manager, kind, id);
 
-      await resetThreshold(manager, kind);
+      await setThreshold(manager, kind, threshold);
       await expectCounted(manager, kind, id);
     });
 

@@ -18,7 +18,7 @@ import {
   utc,
   type SubscriptionOpts,
 } from '../../helpers/newsletterDb.js';
-import { inOwnerTx, type OwnerSession } from '../../helpers/ownerDb.js';
+import { inOwnerTx, inSuperuserTx, type OwnerSession } from '../../helpers/ownerDb.js';
 
 // the checks and the unique indexes of the newsletter tables (db/06), tried by inserting rows the
 // way the functions of the database would, as the owner, in a transaction that rolls back
@@ -398,11 +398,9 @@ describe('a line of the journal', () => {
 });
 
 describe('a campaign', () => {
-  // the maker is named by the policy of insert; the checks are tried with the policies out of the
-  // way, so that any shape of a row reaches them
-  async function open(db: OwnerSession) {
-    await db.rows('alter table cartlify.newsletter_campaigns no force row level security');
-  }
+  // the maker is named by the policy of insert; the checks are tried as the superuser of the test
+  // container, whom the policies let by, so that any shape of a row reaches them (an alter of the
+  // table would lock it for the other files until the transaction ends)
 
   const campaignRow = (set: Record<string, unknown> = {}): Record<string, unknown> => ({
     name: 'Spring sale',
@@ -445,8 +443,7 @@ describe('a campaign', () => {
   ];
 
   it.each(VALID)('is made as %s', async (_what, set) => {
-    const outcome = await inOwnerTx(async (db) => {
-      await open(db);
+    const outcome = await inSuperuserTx(async (db) => {
       return attemptInsert(db, 'newsletter_campaigns', campaignRow(set));
     });
 
@@ -531,8 +528,7 @@ describe('a campaign', () => {
   ];
 
   it.each(REFUSED)('is refused with %s', async (_what, set) => {
-    const outcome = await inOwnerTx(async (db) => {
-      await open(db);
+    const outcome = await inSuperuserTx(async (db) => {
       return attemptInsert(db, 'newsletter_campaigns', campaignRow(set));
     });
 
@@ -540,8 +536,7 @@ describe('a campaign', () => {
   });
 
   it('knows one reason of a cancellation, the limit; any other is no value of the type', async () => {
-    const outcome = await inOwnerTx(async (db) => {
-      await open(db);
+    const outcome = await inSuperuserTx(async (db) => {
       return attemptInsert(
         db,
         'newsletter_campaigns',

@@ -99,6 +99,8 @@ export const AUDIT_EVENTS = [
   'order.parcel_create_bulk',
   'order.parcel_void',
   'order.parcel_void_confirm',
+  // a fiscal receipt the admin registered by hand at the fiscal service, confirmed with its number
+  'order.receipt_confirm',
   // root sent the money of a refund that failed (of a payment the order could not take, or made by
   // hand in the dashboard of the provider) another way; the line names the lines of the money
   // journal (the work of the system on the money is in the money journal only)
@@ -119,12 +121,6 @@ export const AUDIT_EVENTS = [
   // carrier paid the shop for a send; the line names the line of the money journal
   'return.money_received',
   'order.carrier_money',
-  // money already with the buyer gave the goods of an order more than its statements took: root
-  // recorded what the buyer gave back of it, gave it up (with the reason), or kept goods not
-  // accepted that were still in the shop (with the reason and the rows paid at once)
-  'return.overpaid_received',
-  'return.overpaid_lost',
-  'return.goods_kept',
   // root decided on what holds a paid order from its sending and is root's to let go (a refund made
   // by hand of part of it, an early warning of fraud): send it, or cancel it (the statement of the
   // cancel with it), with the reason
@@ -243,20 +239,19 @@ export const MONEY_LOG_EVENTS = [
   'money.refund_failed',
   // money sent to the buyer outside the app, and the way back root paid the buyer outside the app
   'money.outside',
-  // what the shop paid a carrier: the parcel back of a statement, the send of an order
+  // what the shop paid a carrier: the parcel back of a statement, the send of an order; what a
+  // carrier gave back for a label voided
   'money.return_parcel_cost',
   'money.shipping_cost',
+  'money.shipping_refund',
   // what the bank took for a dispute and gave back
   'money.dispute_withdrawn',
   'money.dispute_reinstated',
   // the correction of a sum a person wrote: a new line with the difference
   'money.correction',
-  // money the shop got back outside the app: from the buyer for rows of a statement or of what is
-  // overpaid, from a carrier for a send of an order
+  // money the shop got back outside the app: from the buyer for rows of a statement, from a carrier
+  // for a send of an order
   'money.received',
-  // root gave up what a share of money already with the buyer had left: a compensation, a loss (it
-  // moves no money, the sum is in the meta)
-  'money.share_moved',
 ] as const;
 
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];

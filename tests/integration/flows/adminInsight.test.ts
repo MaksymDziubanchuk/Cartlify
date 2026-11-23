@@ -67,17 +67,26 @@ const variantsInList = async (kind: string, categoryId: number) => {
 };
 
 describe('what an admin learns of the shop', () => {
-  it('follows the alert of low stock to a variant, sets a threshold, puts the case aside, and a delivery ends it', async () => {
+  it('writes the number of the alert of low stock and follows it to a variant, changes it, puts the case aside, and a delivery ends it', async () => {
     const category = await createCategory();
     const product = await createProduct({ categoryId: category.id, stock: 2 });
 
+    // the alert counts nothing until the admin writes its number: five units and less, followed
+    expect((await alertOf('low_stock')).threshold).toBeNull();
+    const written = await j.put(admin, '/api/admin/alerts/subscriptions/low_stock/threshold', {
+      value: 5,
+    });
+    expect(written.json().threshold).toMatchObject({ value: 5 });
+    expect(
+      (await j.put(admin, '/api/admin/alerts/subscriptions/low_stock', {})).json().subscribed,
+    ).toBe(true);
     expect(await variantsInList('low_stock', category.id)).toEqual([product.variantId]);
 
     // the admin wants to hear of three units and less, and puts the case aside for now
     const threshold = await j.put(admin, '/api/admin/alerts/subscriptions/low_stock/threshold', {
       value: 3,
     });
-    expect(threshold.json().threshold).toMatchObject({ value: 3, custom: true });
+    expect(threshold.json().threshold).toMatchObject({ value: 3 });
     expect((await alertOf('low_stock')).list!.query).toMatchObject({ maxStock: '3' });
     const aside = await j.put(
       admin,
@@ -99,21 +108,23 @@ describe('what an admin learns of the shop', () => {
     expect(delivery.statusCode).toBe(201);
     expect(await variantsInList('low_stock', category.id)).toEqual([]);
 
-    // the case back, the threshold of the server, the kind off and on again
+    // the case back; the kind off, its number taken away, and followed again with a new one
     expect(
       (await j.del(admin, `/api/admin/alerts/dismissals/low_stock/${product.variantId}`)).json(),
     ).toMatchObject({
       dismissed: false,
     });
     expect(
-      (await j.del(admin, '/api/admin/alerts/subscriptions/low_stock/threshold')).json().threshold,
-    ).toMatchObject({
-      value: 5,
-      custom: false,
-    });
-    expect(
       (await j.del(admin, '/api/admin/alerts/subscriptions/low_stock')).json().subscribed,
     ).toBe(false);
+    expect(
+      (await j.del(admin, '/api/admin/alerts/subscriptions/low_stock/threshold')).json().threshold,
+    ).toMatchObject({ value: null });
+    expect(
+      (
+        await j.put(admin, '/api/admin/alerts/subscriptions/low_stock/threshold', { value: 4 })
+      ).json().threshold,
+    ).toMatchObject({ value: 4 });
     const subscriptions = (await j.get(admin, '/api/admin/alerts/subscriptions')).json()
       .items as Alert[];
     expect(subscriptions.find(({ kind }) => kind === 'low_stock')).toMatchObject({

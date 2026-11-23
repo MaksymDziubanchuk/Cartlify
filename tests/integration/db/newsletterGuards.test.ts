@@ -1749,8 +1749,8 @@ describe('the version of the privacy policy in force', () => {
   const PRIVACY = `insert into cartlify.legal_documents
       (kind, title, content, "publishedById", "retentionLoginAddressesDays", "retentionGuestDataDays",
        "retentionDeletedChatsDays", "retentionReturnAddressesDays", "retentionReturnPersonalDays",
-       "retentionRecipientDays", "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays")
-    values ('privacy', 'The policy', 'The text.', $1, 1, 1, 1, 1, 1, 1, 1, 1) returning version`;
+       "retentionRecipientDays", "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays", "retentionTaxDocumentsDays")
+    values ('privacy', 'The policy', 'The text.', $1, 1, 1, 1, 1, 1, 1, 1, 1, 1) returning version`;
   const TERMS = `insert into cartlify.legal_documents (kind, title, content, "publishedById")
     values ('terms', 'The terms', 'The text.', $1) returning version`;
   const CURRENT = 'select cartlify.current_privacy_version() as version';

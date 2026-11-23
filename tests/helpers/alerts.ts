@@ -1,7 +1,10 @@
 import { expect } from '@jest/globals';
 import type { FastifyInstance } from 'fastify';
 
+import { setUserContext } from '@db/dbContext.service.js';
+
 import { accessCookie } from './actors.js';
+import { testTx } from './db.js';
 import { withCsrf, type Csrf } from './csrf.js';
 import type { TestUser } from './factories.js';
 
@@ -152,9 +155,26 @@ export function alertsOf(deps: { app: () => FastifyInstance; csrf: () => Csrf })
     await expectCountIsTotalOfList(actor, kind);
   }
 
+  // the actor writes the numbers of the kinds by the route (ALERT_NUMBERS), as the page of the
+  // settings does: the server gives none
+  const writeNumbers = async (actor: TestUser, kinds: readonly string[]) => {
+    for (const kind of kinds) {
+      const n = ALERT_NUMBERS[kind];
+      if (!n) throw new Error(`no number of the tests for ${kind}`);
+      const res = await change(
+        actor,
+        'PUT',
+        `/api/admin/alerts/subscriptions/${kind}/threshold`,
+        n.window === undefined ? { value: n.value } : { value: n.value, window: n.window },
+      );
+      expect(res.statusCode).toBe(200);
+    }
+  };
+
   return {
     get,
     change,
+    writeNumbers,
     alerts,
     alertOf,
     listOf,
@@ -168,4 +188,61 @@ export function alertsOf(deps: { app: () => FastifyInstance; csrf: () => Csrf })
     expectListed,
     expectCases,
   };
+}
+
+// the numbers the tests of the alerts count with, as an admin or root writes them for a kind (PUT
+// /api/admin/alerts/subscriptions/:kind/threshold): the server gives none, a kind with numbers counts
+// nothing for a person until they write them
+export const ALERT_NUMBERS: Record<string, { value: number; window?: number }> = {
+  shipped_orders_waiting: { value: 14 },
+  pickup_not_collected: { value: 7 },
+  shipped_without_cost: { value: 3 },
+  shipped_without_tracking: { value: 2 },
+  parcels_not_collected: { value: 3 },
+  delivery_provider_down: { value: 900 },
+  returns_proof_waiting: { value: 2 },
+  returns_goods_not_sent: { value: 21 },
+  returns_money_late: { value: 10 },
+  returns_goods_late: { value: 14 },
+  low_stock: { value: 5 },
+  expiring_batches: { value: 7 },
+  late_refunds: { value: 7 },
+  late_refunds_in_transit: { value: 3 },
+  return_refunds_in_transit: { value: 3 },
+  hand_refunds_in_transit: { value: 3 },
+  compensation_refunds_in_transit: { value: 3 },
+  dispute_refunds_in_transit: { value: 3 },
+  disputes_lost: { value: 7 },
+  fraud_warnings_shipped: { value: 7 },
+  worker_stalled: { value: 180 },
+  admin_actions: { value: 24 },
+  newsletter_undelivered: { value: 5 },
+  newsletter_rejected: { value: 5 },
+  newsletter_complaints: { value: 3 },
+  newsletter_running_long: { value: 3 },
+  newsletter_starting_soon: { value: 24 },
+  newsletter_cancelled_by_limit: { value: 7 },
+  receipts_not_issued: { value: 60 },
+  tax_threshold_near: { value: 80 },
+  tax_parcel_limit_refusals: { value: 5, window: 7 },
+  tax_rate_soon: { value: 30 },
+};
+
+// the person wrote the numbers of the kinds (whether they follow a kind stays): the rows of their
+// settings, as the route writes them
+export async function writeAlertNumbers(
+  user: { id: number; role: string },
+  numbers: Record<string, { value: number; window?: number }> = ALERT_NUMBERS,
+): Promise<void> {
+  if (user.role !== 'ADMIN' && user.role !== 'ROOT') return;
+  await testTx(async (tx) => {
+    await setUserContext(tx, { userId: user.id, role: user.role as 'ADMIN' | 'ROOT' });
+    for (const [kind, n] of Object.entries(numbers)) {
+      await tx.$executeRaw`
+        insert into cartlify.admin_alert_settings ("userId", kind, threshold, "window")
+        values (${user.id}, ${kind}, ${n.value}, ${n.window ?? null}::int)
+        on conflict ("userId", kind) do update
+        set threshold = excluded.threshold, "window" = excluded."window"`;
+    }
+  });
 }

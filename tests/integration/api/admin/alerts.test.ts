@@ -5,6 +5,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { closeRedis, connectRedis } from '@redis/client.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
+import { writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
@@ -42,9 +43,11 @@ let root: TestUser;
 const userIds: number[] = [];
 let clock: { restore: () => void } | null = null;
 
+// an admin and root wrote the numbers the alerts are counted with (ALERT_NUMBERS)
 const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
   const user = await createUser(opts);
   userIds.push(user.id);
+  await writeAlertNumbers(user);
   return user;
 };
 
@@ -242,13 +245,21 @@ const ROOT_KINDS = [
   'dispute_refunds_failed',
   'bank_money_to_decide',
   'returns_money_short',
-  'returns_money_overpaid',
   'hand_refunds_to_explain',
   'hand_refunds_to_decide',
   'fraud_warnings',
   'fraud_warnings_shipped',
   'payment_reviews',
+  'receipts_not_issued',
+  'receipts_refused',
   'admin_actions',
+  'tax_threshold_near',
+  'tax_threshold_passed',
+  'tax_threshold_dropped',
+  'tax_sales_stopped',
+  'tax_parcel_limit_refusals',
+  'tax_rate_soon',
+  'tax_threshold_period_ended',
 ];
 
 // a line of the admin log of an order, with a change of the field
@@ -280,9 +291,12 @@ describe('GET /api/admin/alerts', () => {
     expect(total).toBe(alerts.reduce((sum, alert) => sum + alert.count, 0));
     expect(dismissalsAvailable).toBe(true);
     expect(alerts.find((alert) => alert.kind === 'paid_orders_waiting')).toMatchObject({
-      subscribed: true,
+      subscribed: false,
       dismissed: 0,
       threshold: null,
+      window: null,
+      informational: false,
+      seenUntil: null,
       list: {
         path: '/api/orders',
         query: { statuses: 'paid', holds: 'none', sortBy: 'paidAt', sortDir: 'asc' },
@@ -301,7 +315,7 @@ describe('GET /api/admin/alerts', () => {
     });
     // the cases of the gaps are variants (a row each) and products
     expect(alerts.find((alert) => alert.kind === 'variants_missing_required')).toMatchObject({
-      subscribed: true,
+      subscribed: false,
       dismissed: 0,
       threshold: null,
       list: {
@@ -310,7 +324,7 @@ describe('GET /api/admin/alerts', () => {
       },
     });
     expect(alerts.find((alert) => alert.kind === 'products_hidden_from_buyers')).toMatchObject({
-      subscribed: true,
+      subscribed: false,
       dismissed: 0,
       threshold: null,
       list: {
@@ -341,20 +355,33 @@ describe('GET /api/admin/alerts', () => {
     });
   });
 
-  it('names a kind turned off too, and with subscribed=true only the kinds that are on', async () => {
+  it('names a kind not followed too, and with subscribed=true only the kinds that are followed', async () => {
     const someone = await newUser({ role: 'ADMIN' });
-    await turn(someone, 'low_stock', false);
+    await turn(someone, 'low_stock', true);
+    await turn(someone, 'chats_waiting', true);
 
     const all = await alertsOf(someone);
     const on = await alertsOf(someone, '?subscribed=true');
 
-    expect(all.alerts.find((alert) => alert.kind === 'low_stock')).toMatchObject({
+    expect(all.alerts.map((alert) => alert.kind)).toEqual(ADMIN_KINDS);
+    expect(all.alerts.find((alert) => alert.kind === 'out_of_stock')).toMatchObject({
       subscribed: false,
     });
-    expect(on.alerts.map((alert) => alert.kind)).toEqual(
-      ADMIN_KINDS.filter((kind) => kind !== 'low_stock'),
-    );
+    expect(on.alerts.map((alert) => alert.kind)).toEqual(['low_stock', 'chats_waiting']);
     expect(on.total).toBe(on.alerts.reduce((sum, alert) => sum + alert.count, 0));
+  });
+
+  it('counts nothing of a kind with numbers until the actor writes them: the server gives none', async () => {
+    const fresh = await createUser({ role: 'ADMIN' });
+    userIds.push(fresh.id);
+
+    const before = await alertOf(fresh, 'low_stock');
+    await setThreshold(fresh, 'low_stock', 100_000);
+    const after = await alertOf(fresh, 'low_stock');
+
+    expect(before).toMatchObject({ subscribed: false, count: 0, threshold: null });
+    expect(after).toMatchObject({ threshold: 100_000 });
+    expect(after.count).toBeGreaterThan(0);
   });
 
   // a page that shows one alert counts it alone; a kind of root is not an admin's, and a kind that is
@@ -925,93 +952,93 @@ describe('the subscriptions to the alerts', () => {
   const itemOf = async (actor: TestUser, kind: string) =>
     (await subscriptionsOf(actor)).find((item) => item.kind === kind);
 
-  it('has every kind on with the threshold the server gives for a new admin', async () => {
-    const items = await subscriptionsOf(await newUser({ role: 'ADMIN' }));
+  it('has no kind followed and no number written for a new admin: the server gives none', async () => {
+    const fresh = await createUser({ role: 'ADMIN' });
+    userIds.push(fresh.id);
+    const items = await subscriptionsOf(fresh);
 
     expect(items.map((item) => item.kind)).toEqual(ADMIN_KINDS);
-    expect(items.every((item) => item.subscribed)).toBe(true);
+    expect(items.every((item) => !item.subscribed)).toBe(true);
     expect(items.find((item) => item.kind === 'paid_orders_waiting')!.threshold).toBeNull();
     expect(Object.fromEntries(items.map((item) => [item.kind, item.threshold]))).toMatchObject({
-      shipped_orders_waiting: {
-        value: 14,
-        default: 14,
-        min: 1,
-        max: 365,
-        unit: 'days',
-        custom: false,
-      },
-      low_stock: { value: 5, default: 5, min: 1, max: 100_000, unit: 'units', custom: false },
-      expiring_batches: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
-      late_refunds: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
-      late_refunds_in_transit: {
-        value: 3,
-        default: 3,
-        min: 1,
-        max: 365,
-        unit: 'days',
-        custom: false,
-      },
-      disputes_lost: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
-      worker_stalled: {
-        value: 180,
-        default: 180,
-        min: 60,
-        max: 86_400,
-        unit: 'seconds',
-        custom: false,
-      },
+      shipped_orders_waiting: { value: null, min: 1, max: 365, unit: 'days', window: null },
+      low_stock: { value: null, min: 1, max: 100_000, unit: 'units', window: null },
+      expiring_batches: { value: null, min: 1, max: 365, unit: 'days', window: null },
+      late_refunds_in_transit: { value: null, min: 1, max: 365, unit: 'days', window: null },
+      worker_stalled: { value: null, min: 60, max: 86_400, unit: 'seconds', window: null },
     });
   });
 
-  it('gives root the threshold of the actions of the admins', async () => {
-    expect(await itemOf(await newUser({ role: 'ROOT' }), 'admin_actions')).toEqual({
+  it('gives root the bounds of the numbers of its kinds, the refusals of a parcel with a window', async () => {
+    const fresh = await createUser({ role: 'ROOT' });
+    userIds.push(fresh.id);
+
+    expect(await itemOf(fresh, 'admin_actions')).toEqual({
       kind: 'admin_actions',
-      subscribed: true,
-      threshold: { value: 24, default: 24, min: 1, max: 720, unit: 'hours', custom: false },
+      subscribed: false,
+      threshold: { value: null, min: 1, max: 720, unit: 'hours', window: null },
+    });
+    expect(await itemOf(fresh, 'tax_parcel_limit_refusals')).toEqual({
+      kind: 'tax_parcel_limit_refusals',
+      subscribed: false,
+      threshold: {
+        value: null,
+        min: 1,
+        max: 1000,
+        unit: 'refusals',
+        window: { value: null, min: 1, max: 30, unit: 'days' },
+      },
     });
   });
 
-  it('turns a kind off and on for one admin only, and keeps its threshold', async () => {
-    const first = await newUser({ role: 'ADMIN' });
-    const second = await newUser({ role: 'ADMIN' });
-    await setThreshold(first, 'low_stock', 12);
+  it('follows a kind with numbers only once they are written, and keeps them while it is followed', async () => {
+    const first = await createUser({ role: 'ADMIN' });
+    const second = await createUser({ role: 'ADMIN' });
+    userIds.push(first.id, second.id);
 
-    const off = await turn(first, 'low_stock', false);
-
-    expect(off.statusCode).toBe(200);
-    expect(off.json()).toMatchObject({
-      kind: 'low_stock',
-      subscribed: false,
-      threshold: { value: 12, custom: true },
-    });
-    expect((await alertOf(first, 'low_stock')).subscribed).toBe(false);
-    expect((await alertOf(second, 'low_stock')).subscribed).toBe(true);
-
+    const early = await turn(first, 'low_stock', true);
+    const written = await setThreshold(first, 'low_stock', 12);
     const on = await turn(first, 'low_stock', true);
+    const taken = await resetThreshold(first, 'low_stock');
+    const off = await turn(first, 'low_stock', false);
+    const gone = await resetThreshold(first, 'low_stock');
 
+    expect(early.statusCode).toBe(400);
+    expect(early.json()).toMatchObject({
+      errorCode: 'ALERT_THRESHOLD_REQUIRED',
+      details: { kind: 'low_stock' },
+    });
+    expect(written.json()).toMatchObject({ subscribed: false, threshold: { value: 12 } });
     expect(on.json()).toMatchObject({ subscribed: true, threshold: { value: 12 } });
-    expect(await alertOf(first, 'low_stock')).toMatchObject({ subscribed: true, threshold: 12 });
+    expect(taken.statusCode).toBe(400);
+    expect(taken.json()).toMatchObject({ errorCode: 'ALERT_THRESHOLD_REQUIRED' });
+    expect(off.json()).toMatchObject({ subscribed: false, threshold: { value: 12 } });
+    expect(gone.json()).toMatchObject({ subscribed: false, threshold: { value: null } });
+    // the other admin follows nothing
+    expect(await alertOf(second, 'low_stock')).toMatchObject({
+      subscribed: false,
+      threshold: null,
+    });
   });
 
   it.each(['variants_missing_required', 'products_hidden_from_buyers'])(
-    'turns %s off and on for one admin, and it has no threshold',
+    'follows %s and stops for one admin, a kind without a threshold',
     async (kind) => {
       const first = await newUser({ role: 'ADMIN' });
       const second = await newUser({ role: 'ADMIN' });
-      expect(await itemOf(first, kind)).toEqual({ kind, subscribed: true, threshold: null });
+      expect(await itemOf(first, kind)).toEqual({ kind, subscribed: false, threshold: null });
 
-      const off = await turn(first, kind, false);
+      const on = await turn(first, kind, true);
 
-      expect(off.statusCode).toBe(200);
-      expect(off.json()).toEqual({ kind, subscribed: false, threshold: null });
-      expect((await alertOf(first, kind)).subscribed).toBe(false);
-      expect((await alertOf(second, kind)).subscribed).toBe(true);
-      // the notifications ask for the kinds that are on
-      const followed = await alertsOf(first, '?subscribed=true');
-      expect(followed.alerts.map((alert) => alert.kind)).not.toContain(kind);
-
-      expect((await turn(first, kind, true)).json()).toMatchObject({ kind, subscribed: true });
+      expect(on.statusCode).toBe(200);
+      expect(on.json()).toEqual({ kind, subscribed: true, threshold: null });
       expect((await alertOf(first, kind)).subscribed).toBe(true);
+      expect((await alertOf(second, kind)).subscribed).toBe(false);
+      // the notifications ask for the kinds that are followed
+      expect((await alertsOf(first, '?subscribed=true')).alerts.map((a) => a.kind)).toContain(kind);
+
+      expect((await turn(first, kind, false)).json()).toMatchObject({ kind, subscribed: false });
+      expect((await alertOf(first, kind)).subscribed).toBe(false);
     },
   );
 
@@ -1044,7 +1071,7 @@ describe('the subscriptions to the alerts', () => {
 });
 
 describe('PUT /api/admin/alerts/subscriptions/:kind/threshold', () => {
-  it('keeps the threshold an admin sets, for that admin only, until it is reset', async () => {
+  it('keeps the threshold an admin sets, for that admin only, until it is taken away', async () => {
     const first = await newUser({ role: 'ADMIN' });
     const second = await newUser({ role: 'ADMIN' });
 
@@ -1053,8 +1080,8 @@ describe('PUT /api/admin/alerts/subscriptions/:kind/threshold', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       kind: 'shipped_orders_waiting',
-      subscribed: true,
-      threshold: { value: 3, default: 14, min: 1, max: 365, unit: 'days', custom: true },
+      subscribed: false,
+      threshold: { value: 3, min: 1, max: 365, unit: 'days', window: null },
     });
     expect((await alertOf(first, 'shipped_orders_waiting')).threshold).toBe(3);
     expect((await alertOf(second, 'shipped_orders_waiting')).threshold).toBe(14);
@@ -1062,17 +1089,44 @@ describe('PUT /api/admin/alerts/subscriptions/:kind/threshold', () => {
     const reset = await resetThreshold(first, 'shipped_orders_waiting');
 
     expect(reset.statusCode).toBe(200);
-    expect(reset.json()).toMatchObject({ threshold: { value: 14, custom: false } });
-    expect((await alertOf(first, 'shipped_orders_waiting')).threshold).toBe(14);
+    expect(reset.json()).toMatchObject({ threshold: { value: null } });
+    expect((await alertOf(first, 'shipped_orders_waiting')).threshold).toBeNull();
+    expect((await alertOf(second, 'shipped_orders_waiting')).threshold).toBe(14);
   });
 
-  it('keeps a kind turned off off when its threshold is set', async () => {
+  it('keeps a kind followed followed when its threshold changes', async () => {
     const someone = await newUser({ role: 'ADMIN' });
-    await turn(someone, 'low_stock', false);
+    await turn(someone, 'low_stock', true);
 
     const res = await setThreshold(someone, 'low_stock', 20);
 
-    expect(res.json()).toMatchObject({ subscribed: false, threshold: { value: 20 } });
+    expect(res.json()).toMatchObject({ subscribed: true, threshold: { value: 20 } });
+  });
+
+  it('takes both numbers of a kind with a window, within their bounds, and no window for another kind', async () => {
+    const someone = await newUser({ role: 'ROOT' });
+    const put = (kind: string, payload: object) =>
+      app.inject({
+        method: 'PUT',
+        url: `/api/admin/alerts/subscriptions/${kind}/threshold`,
+        headers: withCsrf(csrf, accessCookie(someone)),
+        payload,
+      });
+
+    const both = await put('tax_parcel_limit_refusals', { value: 10, window: 14 });
+    const noWindow = await put('tax_parcel_limit_refusals', { value: 10 });
+    const tooLong = await put('tax_parcel_limit_refusals', { value: 10, window: 31 });
+    const extra = await put('low_stock', { value: 10, window: 3 });
+
+    expect(both.json()).toMatchObject({
+      threshold: { value: 10, window: { value: 14, min: 1, max: 30, unit: 'days' } },
+    });
+    expect(noWindow.json()).toMatchObject({ errorCode: 'ALERT_WINDOW_INVALID' });
+    expect(tooLong.json()).toMatchObject({
+      errorCode: 'ALERT_WINDOW_INVALID',
+      details: { min: 1, max: 30 },
+    });
+    expect(extra.json()).toMatchObject({ errorCode: 'ALERT_WINDOW_NOT_TAKEN' });
   });
 
   it.each([

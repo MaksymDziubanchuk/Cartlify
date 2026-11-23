@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   ADMIN_ALERT_KINDS,
+  INFORMATIONAL_ALERT_KINDS,
   MONEY_ALERT_KINDS,
   NEWSLETTER_ALERT_KINDS,
   ROOT_ALERT_KINDS,
@@ -9,6 +10,7 @@ import {
   alertListOf,
   alertWindowOf,
   assertThreshold,
+  numbersReady,
   thresholdOf,
   workerStalled,
 } from '@routes/api/admin/services/helpers/alertKinds.helper.js';
@@ -52,9 +54,10 @@ describe('alertKindsOf', () => {
     ]);
   });
 
-  // the refunds made by hand to decide on, the warnings and the reviews of the provider are the work
-  // of root and of an admin root allowed to handle the money; the actions of the admins are root alone
-  it('gives the money kinds to root and to an admin with the right of the money, the actions of the admins to root alone', () => {
+  // the refunds made by hand to decide on, the warnings and the reviews of the provider, the fiscal
+  // receipts are the work of root and of an admin root allowed to handle the money; the actions of
+  // the admins and the tax of the countries are root alone
+  it('gives the money kinds to root and to an admin with the right of the money, the kinds of root to root alone', () => {
     const money = [
       'hand_refunds_in_transit',
       'hand_refunds_failed',
@@ -63,16 +66,26 @@ describe('alertKindsOf', () => {
       'dispute_refunds_failed',
       'bank_money_to_decide',
       'returns_money_short',
-      'returns_money_overpaid',
       'hand_refunds_to_explain',
       'hand_refunds_to_decide',
       'fraud_warnings',
       'fraud_warnings_shipped',
       'payment_reviews',
+      'receipts_not_issued',
+      'receipts_refused',
     ];
 
     expect(MONEY_ALERT_KINDS).toEqual(money);
-    expect(ROOT_ALERT_KINDS).toEqual(['admin_actions']);
+    expect(ROOT_ALERT_KINDS).toEqual([
+      'admin_actions',
+      'tax_threshold_near',
+      'tax_threshold_passed',
+      'tax_threshold_dropped',
+      'tax_sales_stopped',
+      'tax_parcel_limit_refusals',
+      'tax_rate_soon',
+      'tax_threshold_period_ended',
+    ]);
     expect(alertKindsOf('ADMIN', { newsletters: false, money: true })).toEqual([
       ...ADMIN_ALERT_KINDS,
       ...money,
@@ -81,7 +94,18 @@ describe('alertKindsOf', () => {
       expect(alertKindsOf('ADMIN', { newsletters: true, money: false })).not.toContain(kind);
       expect(ADMIN_ALERT_KINDS).not.toContain(kind);
     }
-    expect(alertKindsOf('ADMIN', ALL)).not.toContain('admin_actions');
+    for (const kind of ROOT_ALERT_KINDS) expect(alertKindsOf('ADMIN', ALL)).not.toContain(kind);
+  });
+
+  // what only informs and waits for no action: the refusals within the limit of a parcel, a rate
+  // that starts soon, the period of a threshold that ended
+  it('names the kinds that only inform, all of them of root', () => {
+    expect([...INFORMATIONAL_ALERT_KINDS]).toEqual([
+      'tax_parcel_limit_refusals',
+      'tax_rate_soon',
+      'tax_threshold_period_ended',
+    ]);
+    for (const kind of INFORMATIONAL_ALERT_KINDS) expect(ROOT_ALERT_KINDS).toContain(kind);
   });
 
   it('gives an admin who may run the newsletters their kinds after the rest', () => {
@@ -97,14 +121,14 @@ describe('alertKindsOf', () => {
     ]);
   });
 
-  it('gives root the kinds of the newsletters, of the money and the actions of the admins, in that order', () => {
+  it('gives root the kinds of the newsletters, of the money and its own, in that order', () => {
     expect(alertKindsOf('ROOT', ALL)).toEqual([
       ...ADMIN_ALERT_KINDS,
       ...NEWSLETTER_ALERT_KINDS,
       ...MONEY_ALERT_KINDS,
       ...ROOT_ALERT_KINDS,
     ]);
-    expect(alertKindsOf('ROOT', ALL).at(-1)).toBe('admin_actions');
+    expect(alertKindsOf('ROOT', ALL).at(-1)).toBe('tax_threshold_period_ended');
   });
 
   // root has the rights always: what the caller read about the account does not matter
@@ -169,56 +193,74 @@ describe('workerStalled', () => {
 });
 
 describe('thresholdOf', () => {
-  it('gives the threshold the server sets until the admin sets one', () => {
+  // the server gives no number: the person writes each (the kind counts nothing for them until then)
+  it('gives no number until the person writes one, with its bounds', () => {
     expect(thresholdOf('low_stock', null)).toEqual({
-      value: 5,
-      default: 5,
+      value: null,
       min: 1,
       max: 100_000,
       unit: 'units',
-      custom: false,
+      window: null,
     });
   });
 
-  it('gives the threshold the admin set', () => {
+  it('gives the number the person wrote', () => {
     expect(thresholdOf('shipped_orders_waiting', 3)).toEqual({
       value: 3,
-      default: 14,
       min: 1,
       max: 365,
       unit: 'days',
-      custom: true,
+      window: null,
+    });
+  });
+
+  // a kind of a second number: how many in how many days
+  it('gives the window of a kind that takes one, written or not', () => {
+    expect(thresholdOf('tax_parcel_limit_refusals', null)).toEqual({
+      value: null,
+      min: 1,
+      max: 1000,
+      unit: 'refusals',
+      window: { value: null, min: 1, max: 30, unit: 'days' },
+    });
+    expect(thresholdOf('tax_parcel_limit_refusals', 20, 7)).toMatchObject({
+      value: 20,
+      window: { value: 7 },
     });
   });
 
   it.each([
-    ['pickup_not_collected', 7, 'days'],
-    ['shipped_without_cost', 3, 'days'],
-    ['expiring_batches', 7, 'days'],
-    ['late_refunds', 7, 'days'],
-    ['late_refunds_in_transit', 3, 'days'],
-    ['return_refunds_in_transit', 3, 'days'],
-    ['hand_refunds_in_transit', 3, 'days'],
-    ['dispute_refunds_in_transit', 3, 'days'],
-    ['disputes_lost', 7, 'days'],
-    ['fraud_warnings_shipped', 7, 'days'],
-    ['shipped_without_tracking', 2, 'days'],
-    ['parcels_not_collected', 3, 'days'],
-    ['delivery_provider_down', 900, 'seconds'],
-    ['returns_proof_waiting', 2, 'days'],
-    ['returns_goods_not_sent', 21, 'days'],
-    ['returns_money_late', 10, 'days'],
-    ['returns_goods_late', 14, 'days'],
-    ['worker_stalled', 180, 'seconds'],
-    ['admin_actions', 24, 'hours'],
-    ['newsletter_undelivered', 5, 'percent'],
-    ['newsletter_rejected', 5, 'percent'],
-    ['newsletter_complaints', 3, 'permille'],
-    ['newsletter_running_long', 3, 'days'],
-    ['newsletter_starting_soon', 24, 'hours'],
-    ['newsletter_cancelled_by_limit', 7, 'days'],
-  ] as const)('gives %s %p %s unless set', (kind, value, unit) => {
-    expect(thresholdOf(kind, null)).toMatchObject({ value, unit, custom: false });
+    ['pickup_not_collected', 'days'],
+    ['shipped_without_cost', 'days'],
+    ['expiring_batches', 'days'],
+    ['late_refunds', 'days'],
+    ['late_refunds_in_transit', 'days'],
+    ['return_refunds_in_transit', 'days'],
+    ['hand_refunds_in_transit', 'days'],
+    ['compensation_refunds_in_transit', 'days'],
+    ['dispute_refunds_in_transit', 'days'],
+    ['disputes_lost', 'days'],
+    ['fraud_warnings_shipped', 'days'],
+    ['shipped_without_tracking', 'days'],
+    ['parcels_not_collected', 'days'],
+    ['delivery_provider_down', 'seconds'],
+    ['returns_proof_waiting', 'days'],
+    ['returns_goods_not_sent', 'days'],
+    ['returns_money_late', 'days'],
+    ['returns_goods_late', 'days'],
+    ['worker_stalled', 'seconds'],
+    ['admin_actions', 'hours'],
+    ['newsletter_undelivered', 'percent'],
+    ['newsletter_rejected', 'percent'],
+    ['newsletter_complaints', 'permille'],
+    ['newsletter_running_long', 'days'],
+    ['newsletter_starting_soon', 'hours'],
+    ['newsletter_cancelled_by_limit', 'days'],
+    ['receipts_not_issued', 'minutes'],
+    ['tax_threshold_near', 'percent'],
+    ['tax_rate_soon', 'days'],
+  ] as const)('gives %s in %s, no number until written', (kind, unit) => {
+    expect(thresholdOf(kind, null)).toMatchObject({ value: null, unit, window: null });
   });
 
   it.each([
@@ -244,8 +286,23 @@ describe('thresholdOf', () => {
     'parcels_coming_back',
     'parcels_lost',
     'parcels_ahead_of_order',
+    'receipts_refused',
+    'tax_threshold_passed',
+    'tax_threshold_dropped',
+    'tax_sales_stopped',
+    'tax_threshold_period_ended',
   ] as const)('gives %s no threshold', (kind) => {
     expect(thresholdOf(kind, null)).toBeNull();
+  });
+});
+
+describe('numbersReady', () => {
+  it('works a kind without numbers always, one with them once each is written', () => {
+    expect(numbersReady('paid_orders_waiting', null, null)).toBe(true);
+    expect(numbersReady('low_stock', null, null)).toBe(false);
+    expect(numbersReady('low_stock', 5, null)).toBe(true);
+    expect(numbersReady('tax_parcel_limit_refusals', 20, null)).toBe(false);
+    expect(numbersReady('tax_parcel_limit_refusals', 20, 7)).toBe(true);
   });
 });
 
@@ -324,6 +381,42 @@ describe('assertThreshold', () => {
     expect(() => assertThreshold(kind, value)).not.toThrow();
   });
 
+  it.each([
+    ['receipts_not_issued', 0, { min: 1, max: 10_080 }],
+    ['receipts_not_issued', 10_081, { min: 1, max: 10_080 }],
+    ['tax_threshold_near', 0, { min: 1, max: 99 }],
+    ['tax_threshold_near', 100, { min: 1, max: 99 }],
+    ['tax_rate_soon', 366, { min: 1, max: 365 }],
+  ] as const)('refuses %s of the tax and the receipts at %p', (kind, value, details) => {
+    expect(thrownBy(() => assertThreshold(kind, value))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'ALERT_THRESHOLD_INVALID',
+      details,
+    });
+  });
+
+  it('takes the window of a kind that has one, both numbers in their bounds', () => {
+    expect(() => assertThreshold('tax_parcel_limit_refusals', 1, 1)).not.toThrow();
+    expect(() => assertThreshold('tax_parcel_limit_refusals', 1000, 30)).not.toThrow();
+    for (const window of [null, 0, 31]) {
+      expect(
+        thrownBy(() => assertThreshold('tax_parcel_limit_refusals', 20, window)),
+      ).toMatchObject({
+        statusCode: 400,
+        errorCode: 'ALERT_WINDOW_INVALID',
+        details: { min: 1, max: 30 },
+      });
+    }
+  });
+
+  it('refuses a window for a kind without one', () => {
+    expect(thrownBy(() => assertThreshold('low_stock', 5, 7))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'ALERT_WINDOW_NOT_TAKEN',
+      details: { kind: 'low_stock' },
+    });
+  });
+
   it('answers ALERT_THRESHOLD_NOT_FOUND for a kind without a threshold', () => {
     expect(thrownBy(() => assertThreshold('paid_orders_waiting', 3))).toMatchObject({
       statusCode: 404,
@@ -334,6 +427,21 @@ describe('assertThreshold', () => {
 });
 
 describe('alertWindowOf', () => {
+  it('gives the kinds of the tax and of the receipts their windows', () => {
+    expect(alertWindowOf('receipts_not_issued', 30, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 30 * 60_000),
+    });
+    expect(alertWindowOf('tax_threshold_near', 80, NOW, '2026-10-25')).toEqual({ percent: 80 });
+    expect(alertWindowOf('tax_rate_soon', 7, NOW, '2026-10-25')).toEqual({
+      until: new Date(NOW + 7 * DAY),
+    });
+    expect(alertWindowOf('tax_parcel_limit_refusals', 20, NOW, '2026-10-25', 7)).toEqual({
+      units: 20,
+      days: 7,
+    });
+    expect(alertWindowOf('tax_rate_soon', null, NOW, '2026-10-25')).toEqual({});
+  });
+
   it('starts the time of a period the threshold back from now', () => {
     expect(alertWindowOf('shipped_orders_waiting', 14, NOW, '2026-10-25')).toEqual({
       before: new Date(NOW - 14 * DAY),
@@ -474,8 +582,40 @@ describe('alertWindowOf', () => {
 });
 
 describe('alertListOf', () => {
+  it.each([
+    'tax_threshold_near',
+    'tax_threshold_passed',
+    'tax_threshold_dropped',
+    'tax_sales_stopped',
+    'tax_parcel_limit_refusals',
+    'tax_rate_soon',
+    'tax_threshold_period_ended',
+  ] as const)('sends %s to the records of the countries', (kind) => {
+    expect(alertListOf(kind, {})).toEqual({ path: '/api/root/countries', query: {} });
+  });
+
   const listOf = (kind: Parameters<typeof alertListOf>[0], threshold: number | null) =>
     alertListOf(kind, alertWindowOf(kind, threshold, NOW, '2026-10-25'));
+
+  // a receipt is a document of its order: the orders that have one, the order paid first first
+  it('sends to the orders with a receipt made before the minutes and not registered yet', () => {
+    expect(listOf('receipts_not_issued', 60)).toEqual({
+      path: '/api/orders',
+      query: {
+        receipts: 'pending',
+        receiptsMadeTo: new Date(NOW - 60 * 60_000).toISOString(),
+        sortBy: 'paidAt',
+        sortDir: 'asc',
+      },
+    });
+  });
+
+  it('sends to the orders with a receipt the provider refused', () => {
+    expect(listOf('receipts_refused', null)).toEqual({
+      path: '/api/orders',
+      query: { receipts: 'refused', sortBy: 'paidAt', sortDir: 'asc' },
+    });
+  });
 
   // an order held from its sending (a dispute, a refund made by hand, a warning, a review) waits for
   // the bank or for root, not for the shop to send it
@@ -649,10 +789,6 @@ describe('alertListOf', () => {
     expect(listOf('returns_money_short', null)).toEqual({
       path: '/api/returns',
       query: { state: 'open', moneyShort: 'true' },
-    });
-    expect(listOf('returns_money_overpaid', null)).toEqual({
-      path: '/api/returns',
-      query: { state: 'closed', moneyOverpaid: 'true' },
     });
   });
 

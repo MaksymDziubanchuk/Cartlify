@@ -247,8 +247,8 @@ export async function publishPrivacy(db: Session, rootId: number): Promise<numbe
     `insert into cartlify.legal_documents
        (kind, title, content, "publishedById", "retentionLoginAddressesDays", "retentionGuestDataDays",
         "retentionDeletedChatsDays", "retentionReturnAddressesDays", "retentionReturnPersonalDays",
-        "retentionRecipientDays", "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays")
-     values ('privacy', 'The policy', 'The text.', $1, 1, 1, 1, 1, 1, 1, 1, 1) returning version`,
+        "retentionRecipientDays", "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays", "retentionTaxDocumentsDays")
+     values ('privacy', 'The policy', 'The text.', $1, 1, 1, 1, 1, 1, 1, 1, 1, 1) returning version`,
     rootId,
   );
   return row!.version;
@@ -267,8 +267,8 @@ export async function publishPolicyWith(
     `insert into cartlify.legal_documents
        (kind, title, content, "publishedById", "retentionLoginAddressesDays", "retentionGuestDataDays",
         "retentionDeletedChatsDays", "retentionReturnAddressesDays", "retentionReturnPersonalDays",
-        "retentionRecipientDays", "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays")
-     values ('privacy', 'The policy', 'The text.', $1, 3650, 3650, 3650, 3650, 3650, 3650, $2, $3)
+        "retentionRecipientDays", "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays", "retentionTaxDocumentsDays")
+     values ('privacy', 'The policy', 'The text.', $1, 3650, 3650, 3650, 3650, 3650, 3650, $2, $3, 3650)
      returning version, "createdAt"::text as "createdAt"`,
     rootId,
     terms.consent ?? 3650,

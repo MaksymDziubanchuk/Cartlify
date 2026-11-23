@@ -32,6 +32,7 @@ const RETENTION = {
   recipientDays: 3650,
   newsletterConsentDays: 3650,
   newsletterRecipientsDays: 365,
+  taxDocumentsDays: 3650,
 };
 
 let app: FastifyInstance;
