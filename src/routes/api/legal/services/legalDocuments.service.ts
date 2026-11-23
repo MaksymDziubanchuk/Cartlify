@@ -41,6 +41,7 @@ type KindFields = Pick<
   | 'retentionRecipientDays'
   | 'retentionNewsletterConsentDays'
   | 'retentionNewsletterRecipientsDays'
+  | 'retentionTaxDocumentsDays'
 >;
 
 // the columns a kind keeps beside its text (db/06): a contract the three of the contract, a privacy
@@ -87,6 +88,7 @@ export function kindFieldsOf(args: {
       retentionRecipientDays: retention.recipientDays,
       retentionNewsletterConsentDays: retention.newsletterConsentDays,
       retentionNewsletterRecipientsDays: retention.newsletterRecipientsDays,
+      retentionTaxDocumentsDays: retention.taxDocumentsDays,
     };
   }
 

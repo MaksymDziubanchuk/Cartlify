@@ -143,7 +143,7 @@ const postRootLegalDocumentSchema = {
     '(a person said the address is not theirs, or an admin added it) is kept as hashes with ' +
     'no term until an admin removes a record, and the proof of the consent and the rows of ' +
     'the mails of a campaign are kept for `newsletterConsentDays` and ' +
-    '`newsletterRecipientsDays`. The terms carry neither. The database numbers the versions of each ' +
+    '`newsletterRecipientsDays`, `taxDocumentsDays`. The terms carry neither. The database numbers the versions of each ' +
     'kind and keeps the sha256 of the text; nobody changes or takes a version away, the next one ' +
     'replaces it. The text of the version an order is confirmed with goes to the buyer as a file ' +
     'of the mail of the payment, the copy of the contract: the terms and the contract together ' +
@@ -166,6 +166,7 @@ const postRootLegalDocumentSchema = {
           recipientDays: 3650,
           newsletterConsentDays: 3650,
           newsletterRecipientsDays: 365,
+          taxDocumentsDays: 3650,
         },
       },
     ],

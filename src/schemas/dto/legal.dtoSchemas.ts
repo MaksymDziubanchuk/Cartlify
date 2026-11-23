@@ -115,6 +115,15 @@ const retentionProperties = {
       'are kept this many days after the campaign ended (finished, stopped or cancelled), then ' +
       'removed; the campaign with its totals stays.',
   },
+  taxDocumentsDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description:
+      'The copy of the buyer (the name and the address) an invoice, a credit note or a fiscal ' +
+      'receipt keeps, counted from the document (the law of the taxes asks years); then it is ' +
+      'emptied, the document stays with its number, its lines and its sums (docs/taxes.md).',
+  },
 } as const;
 
 const contractRequired = ['withdrawalDays', 'returnAddress', 'returnShippingPaidBy'] as const;
@@ -127,6 +136,7 @@ const retentionRequired = [
   'recipientDays',
   'newsletterConsentDays',
   'newsletterRecipientsDays',
+  'taxDocumentsDays',
 ] as const;
 
 const dateTimeSchema = { type: 'string', format: 'date-time' } as const;
