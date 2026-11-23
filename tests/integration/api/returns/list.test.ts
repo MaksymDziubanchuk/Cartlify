@@ -952,7 +952,12 @@ describe('the periods', () => {
       const card = await detailOf(ids[key]);
       const row = card.items.find((one: { money: string }) => one.money === 'refunded');
       return Date.parse(
-        card.money.find((move: { id: number }) => move.id === row.moneyLogId).createdAt,
+        [...card.money]
+          .reverse()
+          .find(
+            (move: { part: string; itemIds: number[] }) =>
+              move.part === 'goods' && move.itemIds.includes(row.id),
+          ).createdAt,
       );
     };
     const f = await refundedAt('F');

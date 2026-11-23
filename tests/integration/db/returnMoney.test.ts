@@ -112,6 +112,8 @@ type Result = {
   quantity: number;
   goods: 'to_stock' | 'written_off' | 'not_accepted' | 'lost' | 'not_arrived';
   notAcceptedReason?: string;
+  // of the units that came back, the ones money already with the buyer pays
+  paidUnits?: number;
 };
 
 const receive = (db: Session, returnId: number, results: Result[]) =>
@@ -138,9 +140,16 @@ type Row = {
 const rowsOf = async (db: Session, returnId: number) => {
   await asAdmin(db);
   return db.rows<Row>(
-    `select id, quantity, goods::text as goods, money::text as money, amount::float8 as amount,
-            "amountNote", "refusedCode"::text as "refusedCode", "moneyLogId"
-     from cartlify.return_items where "returnId" = $1 order by id`,
+    // the line of the last money of a row: the lines name the rows (no row names a line)
+    `select i.id, i.quantity, i.goods::text as goods, i.money::text as money, i.amount::float8 as amount,
+            i."amountNote", i."refusedCode"::text as "refusedCode",
+            case when i.money = 'failed' then (
+              select max(f.id)
+              from cartlify.money_log as f
+              where f.event = 'money.refund_failed' and f.part = 'goods' and f."returnId" = i."returnId"
+                and i.id in (select n.return_item_id from cartlify.money_line_return_rows(f.id) as n)
+            ) else cartlify.return_row_line(i.id) end as "moneyLogId"
+     from cartlify.return_items as i where i."returnId" = $1 order by i.id`,
     returnId,
   );
 };
@@ -2737,9 +2746,11 @@ describe('the currency of the money of a payment', () => {
 });
 
 // money already with the buyer for an item whose units came in with two results (two rows of the one
-// item): the transfer of both rows takes the share for each, a part covered for each row
+// item): the transfer of both rows takes the share for each, recorded in each row (no line)
 describe('a share that covers two rows of one item', () => {
-  it('is taken by each row in one transfer, and the provider is asked for the rest', async () => {
+  // 15 for two units of 10: the first unit marked takes all its price and its row is paid at once,
+  // the second the 5 left, and the transfer asks the provider for the rest of it only
+  it('is taken by the rows unit by unit, and the provider is asked for the rest', async () => {
     const result = await inRolledBackTx(async (db) => {
       const { orderId, itemId, paymentId } = await soldOrder(db, 3);
       await asAdmin(db);
@@ -2758,21 +2769,41 @@ describe('a share that covers two rows of one item', () => {
       const returnId = await statementOf(db, orderId, itemId, 2);
       const [row] = await rowsOf(db, returnId);
       await asAdmin(db);
+      // the third unit may still come: the admin says these two are the ones the money pays
       const taken = await receive(db, returnId, [
-        { itemId: row!.id, quantity: 1, goods: 'to_stock' },
-        { itemId: row!.id, quantity: 1, goods: 'written_off' },
+        { itemId: row!.id, quantity: 1, goods: 'to_stock', paidUnits: 1 },
+        { itemId: row!.id, quantity: 1, goods: 'written_off', paidUnits: 1 },
       ]);
       if (!taken.ok) throw new Error(`receive_return_items refused: ${taken.message}`);
+      const received = await rowsOf(db, returnId);
+      const sent = await begin(db, returnId);
       return {
-        sent: await begin(db, returnId),
+        received,
+        sent,
         rows: await rowsOf(db, returnId),
         lines: await linesOf(db, returnId),
+        records: await db.rows<{ row: number; amount: string }>(
+          `select sh.return_item_id as row, to_char(sh.amount, 'FM90.00') as amount
+           from cartlify.return_row_shares(
+             (select r."orderId" from cartlify.returns as r where r.id = $1)
+           ) as sh
+           where sh.return_id = $1 and sh.source_id = $2
+           order by sh.return_item_id`,
+          returnId,
+          hand,
+        ),
       };
     });
 
     expect(result.rows).toHaveLength(2);
-    expect(done(result.sent)).toMatchObject({ amount: '5.00', covered: '15.00' });
-    expect(partsOf(result.lines).filter(([part]) => part === 'covered')).toHaveLength(2);
+    expect(result.received.map((r) => r.money)).toEqual(['refunded', 'not_refunded']);
+    expect(done(result.sent)).toMatchObject({ amount: '5.00', covered: '5.00' });
+    // each row takes its share; the transfer writes lines for the 5 it sends only
+    expect(result.records).toEqual([
+      { row: result.rows[0]!.id, amount: '10.00' },
+      { row: result.rows[1]!.id, amount: '5.00' },
+    ]);
+    expect(partsOf(result.lines).map(([part]) => part)).not.toContain('covered');
   });
 });
 
@@ -2809,5 +2840,483 @@ describe('the guards of the functions of the money', () => {
         message: expect.stringContaining('RETURN_ITEMS_INVALID'),
       });
     }
+  });
+});
+
+// the tax of the money of the order (money_log.taxShares, docs/taxes.md): the money a refund made
+// by hand gave back, and that a transfer of a statement then takes for its rows, went back once
+describe('the tax of a transfer that money already with the buyer covers', () => {
+  it('counts the money that went back once: the decision gives its tax, the transfer only the tax of what it sends', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId, paymentId } = await soldOrder(db, 3);
+      await asAdmin(db);
+      await db.rows(
+        `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
+        orderId,
+      );
+      const hand = await handRefund(db, paymentId, `re_hand_${randomUUID()}`, 15);
+      await asRoot(db);
+      const decided = await db.attempt(
+        `select cartlify.decide_money_use($1::int, $2::jsonb, 0, 'For two units.') as result`,
+        hand,
+        JSON.stringify([{ orderItemId: itemId, quantity: 2, amount: 15 }]),
+      );
+      if (!decided.ok) throw new Error(`decide_money_use refused: ${decided.message}`);
+      const returnId = await statementOf(db, orderId, itemId, 2);
+      const [row] = await rowsOf(db, returnId);
+      await asAdmin(db);
+      // the third unit may still come: the admin says these two are the ones the money pays
+      const taken = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 1, goods: 'to_stock', paidUnits: 1 },
+        { itemId: row!.id, quantity: 1, goods: 'written_off', paidUnits: 1 },
+      ]);
+      if (!taken.ok) throw new Error(`receive_return_items refused: ${taken.message}`);
+      const transfer = done(await begin(db, returnId));
+      await asSystem(db);
+      const settled = await settle(db, transfer.key, 'succeeded', { refundId: `re_${returnId}` });
+      if (!settled.ok) throw new Error(`settle_money_refund refused: ${settled.message}`);
+      await asAdmin(db);
+      return db.rows<{ part: string; event: string; gross: number | null }>(
+        `select l.part::text as part, l.event,
+                (select sum((e ->> 'gross')::numeric)::float8
+                 from jsonb_array_elements(l."taxShares") as e where e ->> 'kind' = 'item') as gross
+         from cartlify.money_log as l where l."orderId" = $1 order by l.id`,
+        orderId,
+      );
+    });
+
+    const of = (part: string) =>
+      result.filter((l) => l.part === part).reduce((s, l) => s + (l.gross ?? 0), 0);
+    // 3 units at 10 paid; 15 went back by hand for two units, the transfer of the two units takes it
+    // and sends 5
+    expect(of('goods')).toBe(30 - 5);
+    expect(of('whole')).toBe(-15);
+    // the units the shop has back: two of the three, once
+    expect(result.reduce((s, l) => s + (l.gross ?? 0), 0)).toBe(10);
+  });
+});
+
+// the units money already with the buyer was given for (a refund made by hand root decided on: a unit
+// bought back at its price, or a part of its price off) are marked as they come back: the admin says
+// which while another unit of the item may still come, they are marked by themselves when none can,
+// and the marks pay the rows (no line of the journal, no list on the rows)
+describe('the units money already with the buyer pays, marked as they come back', () => {
+  // a shipped order of units at 10, money given back by hand of it and root's decision of what for
+  async function handPaid(
+    db: DbSession,
+    units: number,
+    paid: { quantity: number; amount: number },
+  ) {
+    const sold = await soldOrder(db, units);
+    await asAdmin(db);
+    await db.rows(
+      `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
+      sold.orderId,
+    );
+    const hand = await handRefund(db, sold.paymentId, `re_hand_${randomUUID()}`, paid.amount);
+    await asRoot(db);
+    const decided = await db.attempt(
+      `select cartlify.decide_money_use($1::int, $2::jsonb, 0, 'For the units.') as result`,
+      hand,
+      JSON.stringify([{ orderItemId: sold.itemId, quantity: paid.quantity, amount: paid.amount }]),
+    );
+    if (!decided.ok) throw new Error(`decide_money_use refused: ${decided.message}`);
+    return { ...sold, hand };
+  }
+
+  const marksOf = async (db: Session, returnId: number) => {
+    await asAdmin(db);
+    return db.rows<{ quantity: number; money: string; paidUnits: number }>(
+      `select quantity, money::text as money, "paidUnits"
+       from cartlify.return_items where "returnId" = $1 order by id`,
+      returnId,
+    );
+  };
+
+  it('asks which of the units that came back the money pays while another may still come, at most the units it was given for', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId } = await handPaid(db, 3, { quantity: 1, amount: 10 });
+      const returnId = await statementOf(db, orderId, itemId, 2);
+      const [row] = await rowsOf(db, returnId);
+      await asAdmin(db);
+      const unsaid = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 2, goods: 'to_stock' },
+      ]);
+      const more = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 2, goods: 'to_stock', paidUnits: 2 },
+      ]);
+      const refused = await receive(db, returnId, [
+        {
+          itemId: row!.id,
+          quantity: 2,
+          goods: 'not_accepted',
+          notAcceptedReason: 'used',
+          paidUnits: 1,
+        },
+      ]);
+      const said = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 2, goods: 'to_stock', paidUnits: 1 },
+      ]);
+      const sent = done(await begin(db, returnId));
+      return { unsaid, more, refused, said, sent, marks: await marksOf(db, returnId) };
+    });
+
+    expect(result.unsaid).toMatchObject({ ok: false, message: 'RETURN_PAID_UNITS_REQUIRED' });
+    expect(result.more).toMatchObject({ ok: false, message: 'RETURN_PAID_UNITS_INVALID' });
+    expect(result.refused).toMatchObject({ ok: false, message: 'RETURN_PAID_UNITS_INVALID' });
+    expect(result.said.ok).toBe(true);
+    expect(result.marks).toEqual([{ quantity: 2, money: 'pending', paidUnits: 1 }]);
+    // the unit bought back is paid with the 10 already with the buyer: the provider sends the other
+    expect(result.sent).toMatchObject({ amount: '10.00', covered: '10.00' });
+  });
+
+  it('never refuses a unit the money paid when no other unit of the item can come: the units that came back take it by themselves', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId } = await handPaid(db, 2, { quantity: 1, amount: 10 });
+      const returnId = await statementOf(db, orderId, itemId, 2);
+      const [row] = await rowsOf(db, returnId);
+      await asAdmin(db);
+      const bothRefused = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 2, goods: 'not_accepted', notAcceptedReason: 'used' },
+      ]);
+      const taken = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 1, goods: 'written_off' },
+        { itemId: row!.id, quantity: 1, goods: 'not_accepted', notAcceptedReason: 'used' },
+      ]);
+      return {
+        bothRefused,
+        taken,
+        marks: await marksOf(db, returnId),
+        lines: await linesOf(db, returnId),
+        total: await totalOf(db, returnId),
+      };
+    });
+
+    expect(result.bothRefused).toMatchObject({ ok: false, message: 'RETURN_ITEM_MONEY_SETTLED' });
+    expect(result.taken.ok).toBe(true);
+    // the unit taken in is the one bought back: refunded at once, with no line; the other is refused
+    expect(result.marks).toEqual([
+      { quantity: 1, money: 'refused', paidUnits: 0 },
+      { quantity: 1, money: 'refunded', paidUnits: 1 },
+    ]);
+    expect(result.lines).toEqual([]);
+    expect(result.total).toBe('10.00');
+  });
+
+  // two lamps at 10, 4 off one that came scratched; the buyer sends back the lamp that is whole:
+  // all of its price goes back. The scratched one comes back later: the 4 are taken off it
+  it('gives back the price of a unit that came back whole, and takes the part off a unit the money paid', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId } = await handPaid(db, 2, { quantity: 1, amount: 4 });
+      const whole = await statementOf(db, orderId, itemId, 1);
+      const [first] = await rowsOf(db, whole);
+      await asAdmin(db);
+      const firstTaken = await receive(db, whole, [
+        { itemId: first!.id, quantity: 1, goods: 'to_stock', paidUnits: 0 },
+      ]);
+      if (!firstTaken.ok) throw new Error(`receive_return_items refused: ${firstTaken.message}`);
+      const firstSent = done(await begin(db, whole));
+      const scratched = await statementOf(db, orderId, itemId, 1);
+      const [second] = await rowsOf(db, scratched);
+      await asAdmin(db);
+      const taken = await receive(db, scratched, [
+        { itemId: second!.id, quantity: 1, goods: 'written_off' },
+      ]);
+      const secondSent = done(await begin(db, scratched));
+      return { firstSent, taken, secondSent, marks: await marksOf(db, scratched) };
+    });
+
+    expect(result.firstSent).toMatchObject({ amount: '10.00', covered: '0.00' });
+    expect(result.taken.ok).toBe(true);
+    expect(result.marks).toEqual([{ quantity: 1, money: 'pending', paidUnits: 1 }]);
+    expect(result.secondSent).toMatchObject({ amount: '6.00', covered: '4.00' });
+  });
+
+  it('lowers a row a part of the price off down to what the money paid of it, never below: paid all of it, nothing sent', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId } = await handPaid(db, 2, { quantity: 1, amount: 4 });
+      const returnId = await statementOf(db, orderId, itemId, 1);
+      const [row] = await rowsOf(db, returnId);
+      await asAdmin(db);
+      const taken = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 1, goods: 'written_off', paidUnits: 1 },
+      ]);
+      await asRoot(db);
+      const below = await begin(db, returnId, null, [
+        { itemId: row!.id, amount: 3, note: 'Used.' },
+      ]);
+      const down = done(
+        await begin(db, returnId, null, [{ itemId: row!.id, amount: 4, note: 'Used.' }]),
+      );
+      return {
+        taken,
+        below,
+        down,
+        marks: await marksOf(db, returnId),
+        lines: await linesOf(db, returnId),
+        total: await totalOf(db, returnId),
+      };
+    });
+
+    expect(result.taken.ok).toBe(true);
+    expect(result.below).toMatchObject({ ok: false, message: 'RETURN_AMOUNT_INVALID' });
+    expect(result.down).toMatchObject({ key: null, amount: '0.00', settled: true });
+    expect(result.marks).toEqual([{ quantity: 1, money: 'refunded', paidUnits: 1 }]);
+    expect(result.lines).toEqual([]);
+    expect(result.total).toBe('4.00');
+  });
+
+  // the admin sent the money of a unit ahead of its parcel, and it is the one bought back: the buyer
+  // had its price twice; the share of the money given back by hand becomes a loss of the shop, written
+  // into its line (no line of its own), and the statement counts its own transfer only
+  it('gives the money already with the buyer for a unit a transfer ahead paid too to a loss of the shop', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId, hand } = await handPaid(db, 2, { quantity: 1, amount: 10 });
+      const returnId = await statementOf(db, orderId, itemId, 1);
+      const [row] = await rowsOf(db, returnId);
+      await asAdmin(db);
+      await confirmProof(db, returnId);
+      const ahead = done(await begin(db, returnId));
+      await asSystem(db);
+      done(await settle(db, ahead.key, 'succeeded', { refundId: `re_${randomUUID()}` }));
+      await asAdmin(db);
+      const taken = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 1, goods: 'to_stock', paidUnits: 1 },
+      ]);
+      const [line] = await db.rows<{ meta: unknown }>(
+        'select meta from cartlify.money_log where id = $1',
+        hand,
+      );
+      return { ahead, taken, meta: line!.meta, total: await totalOf(db, returnId) };
+    });
+
+    expect(result.ahead).toMatchObject({ amount: '10.00' });
+    expect(result.taken.ok).toBe(true);
+    expect(result.meta).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ lost: 10, lostReturnItemId: expect.any(Number) }),
+      ]),
+    );
+    expect(result.total).toBe('10.00');
+  });
+
+  // 4 off a scratched unit, then 10 for a unit the shop bought back, both of one item: the two units
+  // come back, each takes its own money (not the 10 on the unit the 4 took), and the transfer sends
+  // the 6 the scratched one lacks: the buyer has the 20 of the two units, no more
+  it('gives each of two units that come back its own money: a part off one, the price of the other', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId, paymentId } = await soldOrder(db, 3);
+      await asAdmin(db);
+      await db.rows(
+        `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
+        orderId,
+      );
+      for (const amount of [4, 10]) {
+        await asAdmin(db);
+        const hand = await handRefund(db, paymentId, `re_hand_${randomUUID()}`, amount);
+        await asRoot(db);
+        const decided = await db.attempt(
+          `select cartlify.decide_money_use($1::int, $2::jsonb, 0, 'For a unit.') as result`,
+          hand,
+          JSON.stringify([{ orderItemId: itemId, quantity: 1, amount }]),
+        );
+        if (!decided.ok) throw new Error(`decide_money_use refused: ${decided.message}`);
+      }
+      const returnId = await statementOf(db, orderId, itemId, 2);
+      const [row] = await rowsOf(db, returnId);
+      await asAdmin(db);
+      const taken = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 2, goods: 'to_stock', paidUnits: 2 },
+      ]);
+      if (!taken.ok) throw new Error(`receive_return_items refused: ${taken.message}`);
+      return { sent: done(await begin(db, returnId)) };
+    });
+
+    expect(result.sent).toMatchObject({ amount: '6.00', covered: '14.00' });
+  });
+
+  // money given back by hand of a shipped order of two units at 10 and root's decision: for units of
+  // the item, the sum
+  async function decided(db: DbSession, paymentId: string, itemId: number, quantity: number, amount: number) {
+    await asAdmin(db);
+    const hand = await handRefund(db, paymentId, `re_hand_${randomUUID()}`, amount);
+    await asRoot(db);
+    const outcome = await db.attempt(
+      `select cartlify.decide_money_use($1::int, $2::jsonb, 0, 'For units.') as result`,
+      hand,
+      JSON.stringify([{ orderItemId: itemId, quantity, amount }]),
+    );
+    if (!outcome.ok) throw new Error(`decide_money_use refused: ${outcome.message}`);
+    return hand;
+  }
+
+  async function shippedOf(db: DbSession, units: number) {
+    const sold = await soldOrder(db, units);
+    await asAdmin(db);
+    await db.rows(
+      `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
+      sold.orderId,
+    );
+    return sold;
+  }
+
+  // 4 off a scratched unit, and then, with that unit back and waiting for the rest of its money, 10
+  // for the other unit, bought back: the 10 never go onto the scratched unit, they wait for their
+  // unit, which pays its statement whole once it comes
+  it('keeps the price of a unit bought back for that unit, never on the scratched one that came before', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId, paymentId } = await shippedOf(db, 2);
+      await decided(db, paymentId, itemId, 1, 4);
+      const first = await statementOf(db, orderId, itemId, 1);
+      const [scratched] = await rowsOf(db, first);
+      await asAdmin(db);
+      const one = await receive(db, first, [
+        { itemId: scratched!.id, quantity: 1, goods: 'to_stock', paidUnits: 1 },
+      ]);
+      if (!one.ok) throw new Error(`receive_return_items refused: ${one.message}`);
+      await decided(db, paymentId, itemId, 1, 10);
+      const waiting = await marksOf(db, first);
+      const second = await statementOf(db, orderId, itemId, 1);
+      const [bought] = await rowsOf(db, second);
+      await asAdmin(db);
+      const two = await receive(db, second, [
+        { itemId: bought!.id, quantity: 1, goods: 'written_off' },
+      ]);
+      if (!two.ok) throw new Error(`receive_return_items refused: ${two.message}`);
+      return {
+        waiting,
+        second: await marksOf(db, second),
+        sent: done(await begin(db, first)),
+      };
+    });
+
+    expect(result.waiting).toEqual([{ quantity: 1, money: 'not_refunded', paidUnits: 1 }]);
+    expect(result.second).toEqual([{ quantity: 1, money: 'refunded', paidUnits: 1 }]);
+    // the scratched unit: 4 already with the buyer, the transfer sends the 6 left
+    expect(result.sent).toMatchObject({ amount: '6.00', covered: '4.00' });
+  });
+
+  // 4 off a scratched unit, then a line for both units of the item (16, the rest of what they cost):
+  // the shares are for more units than the order has, so the second tops the scratched unit up first
+  // and pays the other unit with the rest
+  it('tops a unit another share took up first when the shares are for more units than the order has', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId, paymentId } = await shippedOf(db, 2);
+      await decided(db, paymentId, itemId, 1, 4);
+      const first = await statementOf(db, orderId, itemId, 1);
+      const [scratched] = await rowsOf(db, first);
+      await asAdmin(db);
+      const one = await receive(db, first, [
+        { itemId: scratched!.id, quantity: 1, goods: 'to_stock', paidUnits: 1 },
+      ]);
+      if (!one.ok) throw new Error(`receive_return_items refused: ${one.message}`);
+      await decided(db, paymentId, itemId, 2, 16);
+      const topped = await marksOf(db, first);
+      const second = await statementOf(db, orderId, itemId, 1);
+      const [other] = await rowsOf(db, second);
+      await asAdmin(db);
+      const two = await receive(db, second, [{ itemId: other!.id, quantity: 1, goods: 'to_stock' }]);
+      if (!two.ok) throw new Error(`receive_return_items refused: ${two.message}`);
+      return {
+        topped,
+        second: await marksOf(db, second),
+        totals: [await totalOf(db, first), await totalOf(db, second)],
+      };
+    });
+
+    expect(result.topped).toEqual([{ quantity: 1, money: 'refunded', paidUnits: 1 }]);
+    expect(result.second).toEqual([{ quantity: 1, money: 'refunded', paidUnits: 1 }]);
+    expect(result.totals).toEqual(['10.00', '10.00']);
+  });
+
+  it('refuses marks the money cannot pay instead of dropping them: no money for the item, or not all the units left when no other can come', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const none = await shippedOf(db, 2);
+      const free = await statementOf(db, none.orderId, none.itemId, 2);
+      const [freeRow] = await rowsOf(db, free);
+      await asAdmin(db);
+      const unpaid = await receive(db, free, [
+        { itemId: freeRow!.id, quantity: 2, goods: 'to_stock', paidUnits: 1 },
+      ]);
+
+      const { orderId, itemId, paymentId } = await shippedOf(db, 2);
+      await decided(db, paymentId, itemId, 2, 18);
+      const all = await statementOf(db, orderId, itemId, 2);
+      const [row] = await rowsOf(db, all);
+      await asAdmin(db);
+      const short = await receive(db, all, [
+        { itemId: row!.id, quantity: 2, goods: 'to_stock', paidUnits: 1 },
+      ]);
+      const whole = await receive(db, all, [
+        { itemId: row!.id, quantity: 2, goods: 'to_stock', paidUnits: 2 },
+      ]);
+      return { unpaid, short, whole, marks: await marksOf(db, all) };
+    });
+
+    expect(result.unpaid).toMatchObject({ ok: false, message: 'RETURN_PAID_UNITS_INVALID' });
+    expect(result.short).toMatchObject({ ok: false, message: 'RETURN_PAID_UNITS_INVALID' });
+    expect(result.whole.ok).toBe(true);
+    expect(result.marks).toEqual([{ quantity: 2, money: 'not_refunded', paidUnits: 2 }]);
+  });
+
+  it('marks the units of a row that waits for its money once root says the money given back by hand was for them', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId, paymentId } = await soldOrder(db, 3);
+      await asAdmin(db);
+      await db.rows(
+        `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
+        orderId,
+      );
+      const returnId = await comeBack(db, orderId, itemId, 1);
+      const before = await marksOf(db, returnId);
+      const hand = await handRefund(db, paymentId, `re_hand_${randomUUID()}`, 10);
+      await asRoot(db);
+      const decided = await db.attempt(
+        `select cartlify.decide_money_use($1::int, $2::jsonb, 0, 'For the unit.') as result`,
+        hand,
+        JSON.stringify([{ orderItemId: itemId, quantity: 1, amount: 10 }]),
+      );
+      return {
+        before,
+        decided,
+        after: await marksOf(db, returnId),
+        total: await totalOf(db, returnId),
+      };
+    });
+
+    expect(result.before).toEqual([{ quantity: 1, money: 'not_refunded', paidUnits: 0 }]);
+    expect(result.decided.ok).toBe(true);
+    expect(result.after).toEqual([{ quantity: 1, money: 'refunded', paidUnits: 1 }]);
+    expect(result.total).toBe('10.00');
+  });
+
+  // the transfer ahead paid the row of two units; the units come back with two results (two rows, the
+  // second split off the first); the bank of the card sends the transfer back: both wait again
+  it('takes back the rows split off a row a transfer paid when it fails', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId } = await soldOrder(db, 3);
+      const returnId = await statementOf(db, orderId, itemId, 2);
+      const [row] = await rowsOf(db, returnId);
+      await asAdmin(db);
+      await confirmProof(db, returnId);
+      const ahead = done(await begin(db, returnId));
+      await asSystem(db);
+      const refundId = `re_${randomUUID()}`;
+      done(await settle(db, ahead.key, 'succeeded', { refundId }));
+      await asAdmin(db);
+      const taken = await receive(db, returnId, [
+        { itemId: row!.id, quantity: 1, goods: 'to_stock' },
+        { itemId: row!.id, quantity: 1, goods: 'written_off' },
+      ]);
+      const split = await marksOf(db, returnId);
+      await asSystem(db);
+      const back = await settle(db, ahead.key, 'failed', { refundId, failure: 'card_unavailable' });
+      return { taken, split, back, rows: await rowsOf(db, returnId) };
+    });
+
+    expect(result.taken.ok).toBe(true);
+    expect(result.split.map((one) => one.money)).toEqual(['refunded', 'refunded']);
+    expect(result.back.ok).toBe(true);
+    expect(result.rows.map((one) => one.money)).toEqual(['failed', 'failed']);
   });
 });

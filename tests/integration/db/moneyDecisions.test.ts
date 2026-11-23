@@ -16,6 +16,7 @@ import {
   lineOf,
   linesWhere,
   newDisputeId,
+  paidByOf,
   reasonsOf,
   rowsOf,
   settledOf,
@@ -49,16 +50,16 @@ import {
 //   delivery ({ delivery }); moneyUse says what it was: goods when all of it went to the items and
 //   the delivery, else what the rest was, compensation (by hand) or loss (the bank). A hold of the
 //   refund goes. The rows of the open statements of the order that wait for their money and whose
-//   items the decision covers get it at once, nothing asked of the provider: a movement of the
-//   parts covered (money.refund, sent, no key). The answer is { moneyLogId, orderId, use,
+//   items the decision covers get it at once, nothing asked of the provider: no line, each row
+//   records the money that paid it (return_items.paidBy). The answer is { moneyLogId, orderId, use,
 //   distributed, rest, covered: [{ returnId, itemIds }], previous }, previous the split it took the
 //   place of ({ use, items, delivery }), null the first time.
 //
-// The money a statement takes as covered (begin_return_refund, mark_return_refunded_outside): for
-// each row, what the decisions of the order gave its item less what the parts covered of the
-// statements already used of it (a failure gives a part back); the delivery the same. Each part
-// covered names its source (coversId) and the item. returns.refundedTotal is what the parts of the
-// statement other than covered gave back: all the buyer has back for it.
+// The money a statement takes of the money already with the buyer (begin_return_refund,
+// mark_return_refunded_outside): for each row, what the decisions of the order gave its item less
+// what rows of statements already took of it; the delivery the same. Each row records its source
+// and the sum (paidBy); the lines of the movement are only what it sent. returns.refundedTotal is
+// what the lines of the statement gave back and what its rows recorded: all the buyer has back.
 //
 // The transfers of an order wait while a refund made by hand of its payment is not decided
 // (RETURN_HAND_REFUND_PENDING), and while what the bank took for a lost dispute of it is not
@@ -211,6 +212,8 @@ describe('decide_money_use', () => {
         quantity: 1,
         unitPrice: 10,
         amount: 10,
+        // the moment of the decision
+        at: expect.any(String),
       },
     ]);
   });
@@ -451,18 +454,15 @@ describe('the money a decision gave the items of an order', () => {
           `"returnId" = $1 and event = 'money.refund'`,
           returnId,
         ),
+        records: await paidByOf(db, admin.id, returnId),
       };
     });
 
     expect(out.answer.covered).toEqual([{ returnId: out.returnId, itemIds: [out.rows[0]!.id] }]);
     expect(out.rows).toEqual([expect.objectContaining({ money: 'refunded' })]);
-    expect(out.parts.map((line) => [line.part, line.amount, line.state, line.transferKey])).toEqual(
-      [
-        ['goods', '-15.00', 'sent', null],
-        ['covered', '15.00', 'sent', null],
-      ],
-    );
-    expect(out.parts[1]).toMatchObject({ coversId: out.hand.id });
+    // no money moved: no line of the statement, the row records the money that paid it
+    expect(out.parts).toEqual([]);
+    expect(out.records).toEqual([[out.rows[0]!.id, out.hand.id, 'goods', '15.00']]);
     // the buyer has the 15 back for the statement
     expect(out.statement).toEqual({ refundedTotal: '15.00', closed: true });
   });
@@ -601,7 +601,10 @@ describe('the money shared by itself, by the sums of the items and the delivery'
     expect(out.line).toMatchObject({ moneyUse: 'goods' });
     const meta = out.line.meta as Array<Record<string, unknown>>;
     expect(meta.filter((one) => one.orderItemId).map((one) => one.amount)).toEqual([5, 3.75]);
-    expect(meta.find((one) => one.delivery !== undefined)).toEqual({ delivery: 1.25 });
+    expect(meta.find((one) => one.delivery !== undefined)).toEqual({
+      delivery: 1.25,
+      at: expect.any(String),
+    });
   });
 
   it('shares what the bank took for a lost dispute of an order not sent, which the system cancels', async () => {
@@ -681,7 +684,10 @@ describe('the money shared by itself, by the sums of the items and the delivery'
     expect(
       meta.filter((one) => one.orderItemId).map((one) => [one.orderItemId, one.amount]),
     ).toEqual([[out.itemIds[0], 20]]);
-    expect(meta.find((one) => one.delivery !== undefined)).toEqual({ delivery: 5 });
+    expect(meta.find((one) => one.delivery !== undefined)).toEqual({
+      delivery: 5,
+      at: expect.any(String),
+    });
   });
 
   it('gives nothing to the items and the delivery the statements paid whole: the line is a loss', async () => {

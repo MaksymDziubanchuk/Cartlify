@@ -51,7 +51,7 @@ export async function linesOfMovement(
   const rows = await db.$queryRaw<{ id: number }[]>(Prisma.sql`
     select l.id
     from cartlify.return_items as i
-    join cartlify.money_log as g on g.id = i."moneyLogId"
+    join cartlify.money_log as g on g.id = cartlify.return_row_line(i.id)
     join cartlify.money_log as l
       on l.event = ${event}
       and l."returnId" = ${returnId}::int

@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 import { settleRefundsInTransit } from '@routes/api/payments/services/settleRefundsInTransit.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
-import { alertsOf } from '../../../helpers/alerts.js';
+import { alertsOf, writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
@@ -75,6 +75,7 @@ const { alertOf, idsOf, dismiss, setThreshold, subscriptionOf, expectListed, exp
 
 const newAdmin = async () => {
   const user = await createUser({ role: 'ADMIN' });
+  await writeAlertNumbers(user);
   userIds.push(user.id);
   return user;
 };
@@ -84,6 +85,7 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   admin = await newAdmin();
   root = await createUser({ role: 'ROOT' });
+  await writeAlertNumbers(root);
   userIds.push(root.id);
   product = await createProduct({ price: 10, stock: 500 });
   products.push(product);
@@ -183,28 +185,22 @@ describe('the kinds of the late refunds', () => {
 
   it('have the thresholds of their days, the failed ones none', async () => {
     const someone = await newAdmin();
-    const days = (value: number) => ({
-      value,
-      default: value,
-      min: 1,
-      max: 365,
-      unit: 'days',
-      custom: false,
-    });
+    const days = (value: number) => ({ value, min: 1, max: 365, unit: 'days', window: null });
 
+    // the admin wrote the numbers (ALERT_NUMBERS) and follows none of the kinds yet
     expect(await subscriptionOf(someone, 'late_refunds')).toEqual({
       kind: 'late_refunds',
-      subscribed: true,
+      subscribed: false,
       threshold: days(7),
     });
     expect(await subscriptionOf(someone, 'late_refunds_in_transit')).toEqual({
       kind: 'late_refunds_in_transit',
-      subscribed: true,
+      subscribed: false,
       threshold: days(3),
     });
     expect(await subscriptionOf(someone, 'late_refunds_failed')).toEqual({
       kind: 'late_refunds_failed',
-      subscribed: true,
+      subscribed: false,
       threshold: null,
     });
     for (const value of [0, 366, 1.5, 'x']) {

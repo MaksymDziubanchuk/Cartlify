@@ -31,6 +31,7 @@ const columns = (patch: Partial<DeliveryColumns> = {}): DeliveryColumns => ({
   return_sends_without_cost: 0n,
   return_ship_deducted: dec('0'),
   return_ship_reimbursed: dec('0'),
+  ship_corrections: dec('0'),
   ...patch,
 });
 
@@ -43,9 +44,21 @@ describe('deliveryMoneyOf', () => {
       refunded: { orders: 1, revenue: 5 },
       shipping: { sends: 10, cost: 36.5, withoutCost: 2 },
       returnShipping: { sends: 1, cost: 4.5, withoutCost: 0, deducted: 0, reimbursed: 0 },
+      corrections: 0,
       // 45 - 5 - 36.5 - 4.5
       result: -1,
     });
+  });
+
+  // a person changed a cost they wrote: the difference is apart from the costs, and comes off the
+  // result as they do
+  it('gives the corrections of the costs apart and takes them off the result', () => {
+    const out = deliveryMoneyOf(columns({ ship_corrections: dec('2.50') }));
+
+    expect(out.shipping.cost).toBe(36.5);
+    expect(out.corrections).toBe(2.5);
+    // 45 - 5 - 36.5 - 4.5 - 2.5
+    expect(out.result).toBe(-3.5);
   });
 
   // the way back the buyers owed is an income of the delivery, the one paid back to them is spent
@@ -121,6 +134,7 @@ describe('deliveryMoneyOf', () => {
       refunded: { orders: 0, revenue: 0 },
       shipping: { sends: 3, cost: 1, withoutCost: 0 },
       returnShipping: { sends: 0, cost: 0, withoutCost: 0, deducted: 0, reimbursed: 0 },
+      corrections: 0,
       result: 9.01,
     });
   });
@@ -142,6 +156,7 @@ describe('deliveryMoneyOf', () => {
           return_sends_without_cost: 0n,
           return_ship_deducted: zero,
           return_ship_reimbursed: zero,
+          ship_corrections: zero,
         }),
       ),
     ).toEqual({
@@ -149,6 +164,7 @@ describe('deliveryMoneyOf', () => {
       refunded: { orders: 0, revenue: 0 },
       shipping: { sends: 0, cost: 0, withoutCost: 0 },
       returnShipping: { sends: 0, cost: 0, withoutCost: 0, deducted: 0, reimbursed: 0 },
+      corrections: 0,
       result: 0,
     });
   });

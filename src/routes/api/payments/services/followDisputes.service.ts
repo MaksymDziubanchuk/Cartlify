@@ -250,11 +250,21 @@ async function afterLost(
   // the cancel of the system takes all that is left of the order, the statements open beside it
   // too; the transfers of all the statements that go by themselves take the money of the bank first
   // (a sync again finds the order cancelled). The order stays held until the cancel commits
-  await tx(async (db) => {
+  const settled = await tx(async (db) => {
     await setAdminContext(db);
     await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
-    return cancelBySystem(db, synced.orderId!, 'dispute_lost');
+    const returnId = await cancelBySystem(db, synced.orderId!, 'dispute_lost');
+    if (returnId === null) return null;
+    // the money of the bank pays the goods of the statement as they come back (the marks of its
+    // rows): the rows it paid all of are refunded already, nothing to send for them
+    const rows = await db.orderReturnItem.findMany({
+      where: { returnId, money: 'refunded' },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+    return rows.length ? { returnId, itemIds: rows.map((row) => row.id) } : null;
   }, TX_OPTIONS);
+  if (settled) await sendReturnMoneyEmail(settled.returnId, settled.itemIds, log);
 
   await sendWaitingStatements(synced.orderId, log);
 }

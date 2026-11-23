@@ -8,6 +8,8 @@ import { bankMoneyPendingOf } from '@routes/api/payments/services/helpers/moneyH
 
 import {
   deductibleOf,
+  lastLineOfRow,
+  namesRowOrOrigin,
   readReturnMoneyLines,
   rowPaidOf,
   shipmentCostOf,
@@ -76,7 +78,8 @@ export async function readReturnCard(
       money: true,
       amount: true,
       amountNote: true,
-      moneyLogId: true,
+      paidUnits: true,
+      splitFromId: true,
       refusedCode: true,
       goodsSetAt: true,
       goodsSetById: true,
@@ -221,13 +224,6 @@ export async function readReturnCard(
     short: owed!.left.short === true,
   };
 
-  // what money already with the buyer gave the goods of the order more than its statements took
-  // (order_money_overpaid, db/05): the buyer gave it back, the shop gives it up or keeps the goods
-  const [over] = await db.$queryRaw<{ overpaid: string }[]>(Prisma.sql`
-    select cartlify.order_money_overpaid(${row.orderId}::int)::text as overpaid
-  `);
-  const moneyOverpaid = Number(over!.overpaid);
-
   const personIds = [
     ...new Set(
       [
@@ -269,7 +265,16 @@ export async function readReturnCard(
     rows.some((item) => item.money === 'not_refunded' || item.money === 'failed')
       ? deductibleOf(parcels.find((parcel) => parcel.direction === 'to_shop')?.id ?? null, lines)
       : 0;
-  const lineOf = (id: number | null) => lines.find((line) => line.id === id) ?? null;
+  // the units of the items of the rows money already with the buyer may still pay (a decision on a
+  // refund made by hand or on what a bank took, db/05: money_item_units_left): what the admin marks
+  // as the goods come in, a hint while the money goes ahead of them
+  const unitsLeft = new Map<number, number>();
+  for (const orderItemId of [...new Set(rows.map((item) => item.orderItemId))]) {
+    const [left] = await db.$queryRaw<{ units: number }[]>(Prisma.sql`
+      select cartlify.money_item_units_left(${row.orderId}::int, ${orderItemId}::int) as units
+    `);
+    unitsLeft.set(orderItemId, Number(left?.units ?? 0));
+  }
   // what a row had of its money: refunded, all of it; a row the lines name, what they paid of it;
   // a row that came of a row a transfer pays (its units with a result of their own) goes with it
   const paidOf = rowPaidOf(lines);
@@ -307,7 +312,6 @@ export async function readReturnCard(
     handRefundPending,
     bankMoneyPending,
     moneyLeft,
-    moneyOverpaid,
     money: lines.map((line) => ({
       id: line.id,
       event: line.event,
@@ -328,6 +332,7 @@ export async function readReturnCard(
       note: line.note,
       coversId: line.coversId,
       shipmentId: line.orderShipmentId,
+      itemIds: rows.filter((item) => namesRowOrOrigin(line, rows, item.id)).map((item) => item.id),
       by: personOf(line.actorId),
     })),
     createdAt: row.createdAt.toISOString(),
@@ -427,9 +432,10 @@ export async function readReturnCard(
       amountNote: item.amountNote,
       goodsSetAt: iso(item.goodsSetAt),
       goodsSetBy: personOf(item.goodsSetById),
-      moneyLogId: item.moneyLogId,
+      paidUnits: item.paidUnits,
+      paidUnitsLeft: unitsLeft.get(item.orderItemId) ?? 0,
       refundFailure: (() => {
-        const failed = item.money === 'failed' ? lineOf(item.moneyLogId) : null;
+        const failed = item.money === 'failed' ? lastLineOfRow(lines, rows, item) : null;
         return failed?.failure ? { code: failed.failure, text: failed.failureText } : null;
       })(),
       refusedCode: item.refusedCode,

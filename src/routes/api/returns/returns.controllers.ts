@@ -10,9 +10,6 @@ import type {
   CreateReturnBodyDto,
   ReceiveReturnItemsBodyDto,
   RecordMoneyReceivedBodyDto,
-  RecordOverpaidReceivedBodyDto,
-  LoseOverpaidBodyDto,
-  KeepReturnGoodsBodyDto,
   RefundReturnBodyDto,
   RefundReturnOutsideBodyDto,
   ReturnDto,
@@ -133,56 +130,6 @@ const postMoneyReceived: ControllerRouter<
     actorId,
     actorRole,
     returnId: Number(req.params.returnId),
-  });
-  return reply.code(200).send(result);
-};
-
-const postOverpaidReceived: ControllerRouter<
-  ReturnParamsDto,
-  RecordOverpaidReceivedBodyDto,
-  {},
-  ReturnDto
-> = async (req, reply) => {
-  const { id: actorId, role: actorRole } = req.user as User;
-
-  const result = await returnsServices.recordOverpaidReceived({
-    ...req.body,
-    actorId,
-    actorRole,
-    returnId: Number(req.params.returnId),
-  });
-  return reply.code(200).send(result);
-};
-
-const postOverpaidLost: ControllerRouter<
-  ReturnParamsDto,
-  LoseOverpaidBodyDto,
-  {},
-  ReturnDto
-> = async (req, reply) => {
-  const { id: actorId, role: actorRole } = req.user as User;
-
-  const result = await returnsServices.loseOverpaid({
-    ...req.body,
-    actorId,
-    actorRole,
-    returnId: Number(req.params.returnId),
-  });
-  return reply.code(200).send(result);
-};
-
-const postKeep: ControllerRouter<ReturnParamsDto, KeepReturnGoodsBodyDto, {}, ReturnDto> = async (
-  req,
-  reply,
-) => {
-  const { id: actorId, role: actorRole } = req.user as User;
-
-  const result = await returnsServices.keepReturnGoods({
-    ...req.body,
-    actorId,
-    actorRole,
-    returnId: Number(req.params.returnId),
-    log: req.log,
   });
   return reply.code(200).send(result);
 };
@@ -313,9 +260,6 @@ export const returnsController = {
   postRefund,
   postRefundOutside,
   postMoneyReceived,
-  postOverpaidReceived,
-  postOverpaidLost,
-  postKeep,
   postClose,
   postShipment,
   patchShipmentCost,

@@ -116,17 +116,10 @@ async function statementOf(db: DbSession, orderId: number, itemIds: number[], go
 }
 
 const LEFT = 'select cartlify.return_money_left($1::int) as result';
-const OVERPAID = 'select cartlify.order_money_overpaid($1::int)::text as result';
 const DECIDE = `select cartlify.decide_money_use($1::int, $2::jsonb, 0, 'For the goods.') as result`;
 
 const leftOf = async (db: DbSession, returnId: number, actor: Actor = asRoot()) => {
   const outcome = await call<{ result: Record<string, unknown> }>(db, actor, LEFT, returnId);
-  if (!outcome.ok) throw new Error(outcome.message ?? 'refused');
-  return outcome.rows[0]!.result;
-};
-
-const overpaidOf = async (db: DbSession, orderId: number) => {
-  const outcome = await call<{ result: string }>(db, asRoot(), OVERPAID, orderId);
   if (!outcome.ok) throw new Error(outcome.message ?? 'refused');
   return outcome.rows[0]!.result;
 };
@@ -211,66 +204,3 @@ describe('return_money_left', () => {
     expect(out.none).toBeNull();
   });
 });
-
-describe('order_money_overpaid', () => {
-  it('is 0 while the money already with the buyer pays the goods that came back', async () => {
-    const out = await inRolledBackTx(async (db) => {
-      const { orderId, paymentId, itemIds } = await sentOrder(db);
-      const hand = await handRefundOf(db, paymentId, 15);
-      await call(
-        db,
-        asRoot(),
-        DECIDE,
-        hand.id,
-        JSON.stringify([{ orderItemId: itemIds[1], quantity: 1, amount: 15 }]),
-      );
-      const before = await overpaidOf(db, orderId);
-      // the book came back: the refund pays it at once
-      await statementOf(db, orderId, [itemIds[1]!]);
-      const transfer = await begun(db, admin.id, (await lastStatement(db, orderId))!);
-      return { before, transfer, after: await overpaidOf(db, orderId) };
-    });
-
-    expect(out.before).toBe('0.00');
-    expect(out.after).toBe('0.00');
-  });
-
-  it('tells the share no statement took once every unit of the item came back and its statement is over', async () => {
-    const out = await inRolledBackTx(async (db) => {
-      const { orderId, paymentId, itemIds } = await sentOrder(db);
-      // the book came back, but the shop did not accept it: the row owes nothing
-      const returnId = await statementOf(db, orderId, [itemIds[1]!], false);
-      const [row] = await rowsOf(db, admin.id, returnId);
-      await asAdmin(db);
-      await db.rows(
-        `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
-        returnId,
-        JSON.stringify([
-          { itemId: row!.id, quantity: 1, goods: 'not_accepted', notAcceptedReason: 'used' },
-        ]),
-      );
-      // then 15 went back by hand and root gave it to the book: it stays with the buyer (money
-      // already with the buyer is never refused at the parcel: db/moneyOverpaid.test.ts)
-      const hand = await handRefundOf(db, paymentId, 15);
-      await call(
-        db,
-        asRoot(),
-        DECIDE,
-        hand.id,
-        JSON.stringify([{ orderItemId: itemIds[1], quantity: 1, amount: 15 }]),
-      );
-      return overpaidOf(db, orderId);
-    });
-
-    expect(out).toBe('15.00');
-  });
-});
-
-async function lastStatement(db: DbSession, orderId: number) {
-  await asAdmin(db);
-  const [row] = await db.rows<{ id: number }>(
-    'select id from cartlify.returns where "orderId" = $1 order by id desc limit 1',
-    orderId,
-  );
-  return row?.id;
-}

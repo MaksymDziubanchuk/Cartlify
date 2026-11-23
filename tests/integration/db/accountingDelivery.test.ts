@@ -401,7 +401,8 @@ describe('the delivery of a period from the money journal', () => {
     expect(outside).toMatchObject({ refunded_orders: 1, refunded_revenue: 6 });
   });
 
-  it('counts a cost of a send written again by the difference, and a cost of 0 as none', async () => {
+  // the cost as it was first written, the correction of it apart (a person changed a sum they wrote)
+  it('counts a cost of a send written again as a correction of its own, and a cost of 0 as none', async () => {
     const orderId = await waitingOrder();
 
     const { raised, zeroed } = await inRolledBackTx(async (db) => {
@@ -425,12 +426,22 @@ describe('the delivery of a period from the money journal', () => {
       return { raised, zeroed: diff(await deliveryOf(db), before) };
     }, REPEATABLE_READ);
 
-    expect(raised).toMatchObject({ sends: 1, ship_cost: 9.5, sends_without_cost: 0 });
-    // free and not known yet are one: the send has no cost
-    expect(zeroed).toMatchObject({ sends: 1, ship_cost: 0, sends_without_cost: 1 });
+    expect(raised).toMatchObject({
+      sends: 1,
+      ship_cost: 7,
+      ship_corrections: 2.5,
+      sends_without_cost: 0,
+    });
+    // free and not known yet are one: the send has no cost, its correction takes the 7 off
+    expect(zeroed).toMatchObject({
+      sends: 1,
+      ship_cost: 7,
+      ship_corrections: -7,
+      sends_without_cost: 1,
+    });
   });
 
-  it('counts a cost of a parcel back written again by the difference', async () => {
+  it('counts a cost of a parcel back written again as a correction of its own', async () => {
     const orderId = await waitingOrder();
 
     const { before, after } = await inRolledBackTx(async (db) => {
@@ -459,7 +470,8 @@ describe('the delivery of a period from the money journal', () => {
 
     expect(diff(after, before)).toMatchObject({
       return_sends: 1,
-      return_ship_cost: 6.25,
+      return_ship_cost: 4,
+      ship_corrections: 2.25,
       return_sends_without_cost: 0,
     });
   });

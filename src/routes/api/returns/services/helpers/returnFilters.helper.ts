@@ -10,6 +10,19 @@ import type { ReturnBasis, ReturnReason, ReturnSource } from '@prisma/client';
 // statements under an alias. The alerts of the admins count their cases with the same conditions
 // (alerts.service.ts), so the count of an alert and the total of the list it names are one number.
 
+// a line of the goods of the own money of a statement (a transfer, money sent outside the app) that
+// did not fail: what the rows it names had back by themselves
+function ownGoodsLine(alias: string): Prisma.Sql {
+  const m = Prisma.raw(alias);
+  return Prisma.sql`${m}.purpose = 'return'::cartlify."MoneyPurpose"
+    and ${m}.part = 'goods'::cartlify."MoneyPart"
+    and ${m}.event in ('money.refund', 'money.outside')
+    and not exists (
+      select 1 from cartlify.money_log as f
+      where f.event = 'money.refund_failed' and f."coversId" = ${m}.id
+    )`;
+}
+
 export const RETURN_STATE_FILTERS = ['open', 'closed'] as const;
 // waiting: some row waits for its goods; waiting_no_proof: and the buyer has told nothing of the
 // parcel and the shop has confirmed none; proof_provided: and the buyer told, the shop has not
@@ -75,9 +88,6 @@ export type ReturnFilters = {
   // what is due, or the way back beside the money the other statements of the order owe, does not
   // fit in what is left of the payment (return_money_left, db/05)
   moneyShort?: boolean | undefined;
-  // money already with the buyer gave the goods of the order more than its statements took
-  // (order_money_overpaid, db/05)
-  moneyOverpaid?: boolean | undefined;
 };
 
 const DAY = 86_400_000;
@@ -191,18 +201,21 @@ export function returnConditions(filters: ReturnFilters, alias: string, now: num
   if (filters.statedTo) where.push(Prisma.sql`${a}."statedAt" < ${utcTime(filters.statedTo)}`);
   if (filters.closedFrom) where.push(Prisma.sql`${a}."closedAt" >= ${utcTime(filters.closedFrom)}`);
   if (filters.closedTo) where.push(Prisma.sql`${a}."closedAt" < ${utcTime(filters.closedTo)}`);
+  // a line of the own money of the statement (a transfer, money sent outside the app) that did not
+  // fail, in the period, for a row that is refunded (the lines name the rows, money_line_return_rows)
   if (filters.refundedFrom || filters.refundedTo) {
-    where.push(
-      someRow(
-        a,
-        Prisma.sql`i.money = 'refunded'::cartlify."ReturnMoney" and exists (
-          select 1 from cartlify.money_log as m
-          where m.id = i."moneyLogId"
-          ${filters.refundedFrom ? Prisma.sql`and m."createdAt" >= ${utcTime(filters.refundedFrom)}` : Prisma.empty}
-          ${filters.refundedTo ? Prisma.sql`and m."createdAt" < ${utcTime(filters.refundedTo)}` : Prisma.empty}
-        )`,
-      ),
-    );
+    where.push(Prisma.sql`exists (
+      select 1 from cartlify.money_log as m
+      where m."returnId" = ${a}.id
+        and ${ownGoodsLine('m')}
+        ${filters.refundedFrom ? Prisma.sql`and m."createdAt" >= ${utcTime(filters.refundedFrom)}` : Prisma.empty}
+        ${filters.refundedTo ? Prisma.sql`and m."createdAt" < ${utcTime(filters.refundedTo)}` : Prisma.empty}
+        and exists (
+          select 1 from cartlify.money_line_return_rows(m.id) as n
+          join cartlify.return_items as i on i.id = n.return_item_id
+          where i.money = 'refunded'::cartlify."ReturnMoney"
+        )
+    )`);
   }
 
   if (filters.olderThanDays !== undefined) {
@@ -298,15 +311,6 @@ export function returnConditions(filters: ReturnFilters, alias: string, now: num
       then (cartlify.return_money_left(${a}.id) ->> 'short')::boolean else false end)`;
     where.push(filters.moneyShort ? short : Prisma.sql`not ${short}`);
   }
-  // money already with the buyer for goods no statement of the order owes any more; counted only
-  // for an order with money a decision shared
-  if (filters.moneyOverpaid !== undefined) {
-    const overpaid = Prisma.sql`(case when exists (
-      select 1 from cartlify.money_log as ml
-      where ml."orderId" = ${a}."orderId" and ml."moneyUse" is not null
-    ) then cartlify.order_money_overpaid(${a}."orderId") > 0 else false end)`;
-    where.push(filters.moneyOverpaid ? overpaid : Prisma.sql`not ${overpaid}`);
-  }
 
   if (filters.paidAheadForDays !== undefined) {
     where.push(
@@ -316,7 +320,10 @@ export function returnConditions(filters: ReturnFilters, alias: string, now: num
           and i.money = 'refunded'::cartlify."ReturnMoney"
           and exists (
             select 1 from cartlify.money_log as m
-            where m.id = i."moneyLogId" and m."createdAt" < ${before(filters.paidAheadForDays)}
+            where m."returnId" = i."returnId"
+              and ${ownGoodsLine('m')}
+              and m."createdAt" < ${before(filters.paidAheadForDays)}
+              and i.id in (select n.return_item_id from cartlify.money_line_return_rows(m.id) as n)
           )`,
       ),
     );

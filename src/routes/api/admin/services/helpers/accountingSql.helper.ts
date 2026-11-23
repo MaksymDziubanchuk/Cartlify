@@ -27,8 +27,8 @@ import type {
 //    lines stock.return of the stock log, by the item of the statement), booked when the money of
 //    the units has gone back and the units are in, the later of the two: a refund before the goods
 //    arrive, goods before the refund or goods that come in parts change no period that is over. The
-//    part a transfer covered with money already sent another way is no return of its own: the
-//    goods are. The sales less the returns are the net;
+//    money already sent another way that paid rows of a statement is no return of its own (the
+//    rows record it, no line): its decision is. The sales less the returns are the net;
 //  - a write-off: the lines stock.write_off and stock.return_write_off of the stock log (a line for
 //    each variant), the batches with their costs;
 //  - a purchase: the batches taken in during the period;
@@ -40,13 +40,14 @@ import type {
 //    deduction, an income), the one the shop paid back to buyers (the parts way_back of the
 //    transfers and of the money outside the app, an expense), what the sends the shop owes the
 //    carriers for cost
-//    (money.shipping_cost with its corrections, only of a send of order_shipments.expense) and the
-//    parcels back the shop paid for (money.return_parcel_cost with its corrections). The sends and
-//    the parcels are counted by the time they went (shippedAt);
+//    (money.shipping_cost as written, less what a carrier gave back for a label voided,
+//    money.shipping_refund, only of a send of order_shipments.expense) and the parcels back the shop
+//    paid for (money.return_parcel_cost), the corrections of both apart (money.correction). The sends
+//    and the parcels are counted by the time they went (shippedAt);
 //  - the payments past the statements (of no product): what the bank took for the disputes and gave
 //    back, the refunds made by hand in the dashboard of the provider (by what root or the system
 //    decided they were), what the transfers of statements took of both as money the buyer had back
-//    (the parts covered: that money is in the returns), and the payments the orders could not take
+//    (what the rows record: that money is in the returns), and the payments the orders could not take
 //    with every movement of such a payment after it
 
 export type ReportScope = {
@@ -195,8 +196,8 @@ function stepsCte(steps: Period[]): Prisma.Sql {
 //    or money sent outside the app, units and money above 0; its failure, below 0), in the step its
 //    line was written. Money already with the buyer is the return of its items when it is decided,
 //    in the step of its own line (a refund made by hand, what a bank
-//    took, by the shares of the decision; money, no units, of no statement), so the part covered of a
-//    later transfer takes its money off the statement (the units stay), a failure of the refund made
+//    took, by the shares of the decision; money, no units, of no statement), so the rows a later
+//    statement pays with it take no money of the statement again (the units stay), a failure of the refund made
 //    by hand takes the shares off in its step and money sent another way after it gives them back;
 //    the money the buyer gave back outside the app comes off the statement in its step;
 //  - the cost of the units back, by the item of a statement: the units whose money has gone back
@@ -249,23 +250,6 @@ function stepMoneyCtes(): Prisma.Sql {
         and l."createdAt" < (select t from bounds)
         and (g.value ->> 'variantId')::int in (select id from scope)
       union all
-      -- the money the parts covered took for the items: already the return of the items, by the
-      -- decision on the money they name
-      select l."createdAt", l."returnId", ri."orderItemId", oi."variantId", 0,
-             -sign(l.amount) * (c.value ->> 'amount')::numeric
-      from cartlify.money_log as l
-      cross join lateral jsonb_array_elements(
-        case when jsonb_typeof(l.meta) = 'array' then l.meta else '[]'::jsonb end
-      ) as c(value)
-      join cartlify.return_items as ri on ri.id = (c.value ->> 'returnItemId')::int
-      join cartlify.order_items as oi on oi.id = (c.value ->> 'orderItemId')::int
-      where l.purpose = 'return'::cartlify."MoneyPurpose"
-        and l.part = 'covered'::cartlify."MoneyPart"
-        and l.event in ('money.refund', 'money.refund_failed', 'money.outside')
-        and coalesce(c.value ->> 'orderItemId', '') <> ''
-        and l."createdAt" < (select t from bounds)
-        and oi."variantId" in (select id from scope)
-      union all
       -- the shares of the decisions on money given back by hand or taken by a bank, in the step of
       -- the line; the failure of a refund made by hand takes them off, money sent another way after
       -- it gives them back
@@ -302,20 +286,6 @@ function stepMoneyCtes(): Prisma.Sql {
       join cartlify.return_items as ri on ri.id = (g.value ->> 'returnItemId')::int
       where l.event = 'money.received'
         and l.purpose = 'return'::cartlify."MoneyPurpose"
-        and l."createdAt" < (select t from bounds)
-        and (g.value ->> 'variantId')::int in (select id from scope)
-      union all
-      -- what the buyer gave back of the share of an item that was overpaid, and what root gave up of
-      -- it: no more a return of the goods, in the step of the line
-      select l."createdAt", null::int, (g.value ->> 'orderItemId')::int, (g.value ->> 'variantId')::int,
-             0, -(g.value ->> 'amount')::numeric
-      from cartlify.money_log as l
-      cross join lateral jsonb_array_elements(
-        case when jsonb_typeof(l.meta) = 'array' then l.meta else '[]'::jsonb end
-      ) as g(value)
-      where l.event in ('money.received', 'money.share_moved')
-        and l.purpose in ('hand'::cartlify."MoneyPurpose", 'dispute'::cartlify."MoneyPurpose")
-        and coalesce(g.value ->> 'orderItemId', '') <> ''
         and l."createdAt" < (select t from bounds)
         and (g.value ->> 'variantId')::int in (select id from scope)
     ),
@@ -553,12 +523,14 @@ export type DeliveryColumns = {
   // the cost of the way back taken off the transfers (an income), and paid back to buyers (spent)
   return_ship_deducted: Prisma.Decimal | string | number;
   return_ship_reimbursed: Prisma.Decimal | string | number;
+  // the corrections of the costs of the sends and of the parcels back written in the period
+  ship_corrections: Prisma.Decimal | string | number;
 };
 
 // the columns of DeliveryColumns in their order
 const DELIVERY_COLUMNS = Prisma.sql`paid_orders, paid_revenue, refunded_orders, refunded_revenue,
   sends, ship_cost, sends_without_cost, return_sends, return_ship_cost, return_sends_without_cost,
-  return_ship_deducted, return_ship_reimbursed`;
+  return_ship_deducted, return_ship_reimbursed, ship_corrections`;
 
 // the delivery of one period [from, to): a row of DeliveryColumns, the one step of
 // deliveryOfStepsSql
@@ -623,7 +595,7 @@ export function deliveryOfStepsSql(steps: Period[]): Prisma.Sql {
       join cartlify.money_log as l on ${inStep(Prisma.sql`l."createdAt"`)}
       join cartlify.order_shipments as s on s.id = l."orderShipmentId"
       where l.purpose = 'shipping'::cartlify."MoneyPurpose" and s."returnId" is null and s.expense
-        and l.event <> 'money.received'
+        and l.event not in ('money.received', 'money.correction')
       group by b.n
     ),
     back_cost as (
@@ -631,7 +603,17 @@ export function deliveryOfStepsSql(steps: Period[]): Prisma.Sql {
       from steps as b
       join cartlify.money_log as l on ${inStep(Prisma.sql`l."createdAt"`)}
       where l.purpose = 'shipping'::cartlify."MoneyPurpose" and l."returnId" is not null
-        and l."orderShipmentId" is not null
+        and l."orderShipmentId" is not null and l.event <> 'money.correction'
+      group by b.n
+    ),
+    -- a person changed a cost they wrote of a send or of a parcel back: the difference, apart
+    corrected as (
+      select b.n, -sum(l.amount) as cost
+      from steps as b
+      join cartlify.money_log as l on ${inStep(Prisma.sql`l."createdAt"`)}
+      join cartlify.order_shipments as s on s.id = l."orderShipmentId"
+      where l.event = 'money.correction' and l.purpose = 'shipping'::cartlify."MoneyPurpose"
+        and (s."returnId" is not null or s.expense)
       group by b.n
     ),
     sent as (
@@ -683,13 +665,15 @@ export function deliveryOfStepsSql(steps: Period[]): Prisma.Sql {
            coalesce(back_cost.cost, 0) as return_ship_cost,
            coalesce(back.without_cost, 0)::bigint as return_sends_without_cost,
            coalesce(refunded.deducted, 0) as return_ship_deducted,
-           coalesce(reimbursed.amount, 0) as return_ship_reimbursed
+           coalesce(reimbursed.amount, 0) as return_ship_reimbursed,
+           coalesce(corrected.cost, 0) as ship_corrections
     from steps as b
     left join paid on paid.n = b.n
     left join refunded on refunded.n = b.n
     left join reimbursed on reimbursed.n = b.n
     left join send_cost on send_cost.n = b.n
     left join back_cost on back_cost.n = b.n
+    left join corrected on corrected.n = b.n
     left join sent on sent.n = b.n
     left join back on back.n = b.n
     order by b.n
@@ -723,23 +707,18 @@ export type PaymentsColumns = {
   received_carriers: Prisma.Decimal | string | number;
   // for the expenses of the summary: what the decisions on the money of disputes and of refunds by
   // hand gave the goods (the report by product counts it as their return) and the delivery, and
-  // what the parts covered took of each for the delivery (the delivery report counts it then)
+  // what the rows of statements took of each for the delivery (the delivery report counts it then)
   dispute_goods: Prisma.Decimal | string | number;
   dispute_delivery_used: Prisma.Decimal | string | number;
   hand_delivery: Prisma.Decimal | string | number;
   hand_delivery_used: Prisma.Decimal | string | number;
-  // what root did with what was overpaid: what it gave up of the shares of the goods (a loss or a
-  // compensation now, no more their return), and what the buyer gave back of a share of the delivery
-  shares_moved_goods: Prisma.Decimal | string | number;
-  received_share_delivery: Prisma.Decimal | string | number;
 };
 
 // the columns of PaymentsColumns in their order
 const PAYMENTS_COLUMNS = Prisma.sql`dispute_withdrawn, dispute_reinstated, dispute_used,
   dispute_undecided, hand_compensations, hand_coverage, hand_undecided, hand_used, late_received,
   late_refunded, compensations_given, received_buyers, received_carriers, dispute_goods,
-  dispute_delivery_used, hand_delivery, hand_delivery_used, shares_moved_goods,
-  received_share_delivery`;
+  dispute_delivery_used, hand_delivery, hand_delivery_used`;
 
 // the payments past the statements of one period [from, to): a row of PaymentsColumns, the one
 // step of paymentsOfStepsSql
@@ -754,9 +733,9 @@ export function paymentsOfPeriodSql(from: Date, to: Date): Prisma.Sql {
 // (money.late_payment) is a section of its own: every line of it is there, our refunds of it, the
 // ones made by hand, the money sent outside the app and what the bank took for a dispute of it. The
 // disputes and the refunds by hand are those of the payments of orders; a failure and the money
-// sent outside the app after it take the decision of the refund they name. A part covered of a
-// transfer of a statement names the money it took (its failure names the part): that money is
-// counted as used by the source it came from. A decision on money of a past period is told in that
+// sent outside the app after it take the decision of the refund they name. What money already
+// with the buyer pays of the rows of statements (their marks take it, return_row_shares) is counted
+// as used by the source it came from, in the step the row took it. A decision on money of a past period is told in that
 // period (its sum stays, only what it was for is known now). The compensations of the app and the
 // money the shop got back outside the app (from buyers, from carriers) are sections of their own
 export function paymentsOfStepsSql(steps: Period[]): Prisma.Sql {
@@ -779,8 +758,6 @@ export function paymentsOfStepsSql(steps: Period[]): Prisma.Sql {
               'dispute'::cartlify."MoneyPurpose",
               'compensation'::cartlify."MoneyPurpose"
             )
-         or (l.purpose = 'return'::cartlify."MoneyPurpose"
-             and l.part = 'covered'::cartlify."MoneyPart")
          or l.event = 'money.received'
     ),
     disputes as (
@@ -829,7 +806,7 @@ export function paymentsOfStepsSql(steps: Period[]): Prisma.Sql {
       from lines as x
       left join cartlify.money_log as c on c.id = x."coversId"
       where x.purpose = 'hand'::cartlify."MoneyPurpose" and not x.is_late
-        and x.event not in ('money.received', 'money.share_moved')
+        and x.event <> 'money.received'
     ),
     hands as (
       select n,
@@ -841,25 +818,30 @@ export function paymentsOfStepsSql(steps: Period[]): Prisma.Sql {
       from hand
       group by n
     ),
+    taken as (
+      select sh.source_id, sh.part, sh.amount, sh.at
+      from (
+        select distinct r."orderId"
+        from cartlify.returns as r
+        join cartlify.return_items as ri on ri."returnId" = r.id
+        where ri."paidUnits" > 0 or ri."paidDelivery"
+      ) as o
+      cross join lateral cartlify.return_row_shares (o."orderId") as sh
+    ),
     used as (
-      select x.n,
-             sum(x.amount) filter (where s.purpose = 'dispute'::cartlify."MoneyPurpose") as dispute,
-             sum(x.amount) filter (where s.purpose = 'hand'::cartlify."MoneyPurpose") as hand,
-             sum(x.amount) filter (
-               where s.purpose = 'dispute'::cartlify."MoneyPurpose"
-                 and coalesce((case when x.event = 'money.refund_failed' then p.meta else x.meta end) -> 0 ->> 'orderItemId', '') = ''
+      select b.n,
+             sum(t.amount) filter (where s.purpose = 'dispute'::cartlify."MoneyPurpose") as dispute,
+             sum(t.amount) filter (where s.purpose = 'hand'::cartlify."MoneyPurpose") as hand,
+             sum(t.amount) filter (
+               where s.purpose = 'dispute'::cartlify."MoneyPurpose" and t.part = 'delivery'
              ) as dispute_delivery,
-             sum(x.amount) filter (
-               where s.purpose = 'hand'::cartlify."MoneyPurpose"
-                 and coalesce((case when x.event = 'money.refund_failed' then p.meta else x.meta end) -> 0 ->> 'orderItemId', '') = ''
+             sum(t.amount) filter (
+               where s.purpose = 'hand'::cartlify."MoneyPurpose" and t.part = 'delivery'
              ) as hand_delivery
-      from lines as x
-      left join cartlify.money_log as p on p.id = x."coversId"
-      join cartlify.money_log as s
-        on s.id = case when x.event = 'money.refund_failed' then p."coversId" else x."coversId" end
-      where x.purpose = 'return'::cartlify."MoneyPurpose"
-        and x.part = 'covered'::cartlify."MoneyPart"
-      group by x.n
+      from steps as b
+      join taken as t on t.at >= b.f and t.at < b.t
+      join cartlify.money_log as s on s.id = t.source_id
+      group by b.n
     ),
     lates as (
       select n,
@@ -882,21 +864,6 @@ export function paymentsOfStepsSql(steps: Period[]): Prisma.Sql {
       from lines
       where event = 'money.received'
       group by n
-    ),
-    shares as (
-      select n,
-             sum((
-               select coalesce(sum((e.value ->> 'amount')::numeric), 0)
-               from jsonb_array_elements(coalesce(meta, '[]'::jsonb)) as e (value)
-               where coalesce(e.value ->> 'orderItemId', '') <> ''
-             )) filter (where event = 'money.share_moved') as moved_goods,
-             sum(amount) filter (
-               where event = 'money.received' and coalesce(meta -> 0 ->> 'orderItemId', '') = ''
-             ) as received_delivery
-      from lines
-      where event in ('money.received', 'money.share_moved')
-        and purpose in ('hand'::cartlify."MoneyPurpose", 'dispute'::cartlify."MoneyPurpose")
-      group by n
     )
     select b.n,
            coalesce(disputes.withdrawn, 0) as dispute_withdrawn,
@@ -915,9 +882,7 @@ export function paymentsOfStepsSql(steps: Period[]): Prisma.Sql {
            coalesce(disputes.goods, 0) as dispute_goods,
            coalesce(used.dispute_delivery, 0) as dispute_delivery_used,
            coalesce(hands.delivery, 0) as hand_delivery,
-           coalesce(used.hand_delivery, 0) as hand_delivery_used,
-           coalesce(shares.moved_goods, 0) as shares_moved_goods,
-           coalesce(shares.received_delivery, 0) as received_share_delivery
+           coalesce(used.hand_delivery, 0) as hand_delivery_used
     from steps as b
     left join disputes on disputes.n = b.n
     left join hands on hands.n = b.n
@@ -925,7 +890,6 @@ export function paymentsOfStepsSql(steps: Period[]): Prisma.Sql {
     left join lates on lates.n = b.n
     left join comps on comps.n = b.n
     left join receipts on receipts.n = b.n
-    left join shares on shares.n = b.n
     order by b.n
   `;
 }
@@ -981,11 +945,9 @@ export function paymentsMoneyOf(row: PaymentsColumns): AdminPaymentsMoneyDto {
 // what the disputes, the refunds by hand and the compensations cost the shop in the period past the
 // returns of the goods and the delivery: what the bank kept and what went out by hand, less what
 // the decisions gave the goods (the report by product counts it as their return, in the period of
-// the line) and less what the parts covered took for the delivery (the delivery report counts it
+// the line) and less what the rows of statements took for the delivery (the delivery report counts it
 // when a statement takes it), with what went out as compensations, less what carriers paid the
-// shop. The money buyers gave back is in the report by product (it comes off their returns), but for
-// what they gave back of a share of the delivery; what root gave up of an overpaid share of the
-// goods is no more their return but a loss or a compensation
+// shop. The money buyers gave back is in the report by product (it comes off their returns)
 const otherRefundsOf = (row: PaymentsColumns) =>
   dec(row.dispute_withdrawn)
     .minus(dec(row.dispute_reinstated))
@@ -996,9 +958,7 @@ const otherRefundsOf = (row: PaymentsColumns) =>
     .plus(dec(row.hand_undecided))
     .minus(dec(row.hand_delivery_used))
     .plus(dec(row.compensations_given))
-    .minus(dec(row.received_carriers))
-    .plus(dec(row.shares_moved_goods))
-    .minus(dec(row.received_share_delivery));
+    .minus(dec(row.received_carriers));
 
 // the delivery of a row as the answers give it: the decimals, not the floats; the result is the
 // income less what went back with the returns and less what the carriers cost, the parcels back
@@ -1010,6 +970,7 @@ export function deliveryMoneyOf(row: DeliveryColumns): AdminDeliveryMoneyDto {
   const backCost = dec(row.return_ship_cost);
   const deducted = dec(row.return_ship_deducted);
   const reimbursed = dec(row.return_ship_reimbursed);
+  const corrections = dec(row.ship_corrections);
 
   return {
     income: { orders: Number(row.paid_orders), revenue: money(paid) },
@@ -1026,8 +987,15 @@ export function deliveryMoneyOf(row: DeliveryColumns): AdminDeliveryMoneyDto {
       deducted: money(deducted),
       reimbursed: money(reimbursed),
     },
+    corrections: money(corrections),
     result: money(
-      paid.minus(refunded).minus(cost).minus(backCost).plus(deducted).minus(reimbursed),
+      paid
+        .minus(refunded)
+        .minus(cost)
+        .minus(backCost)
+        .minus(corrections)
+        .plus(deducted)
+        .minus(reimbursed),
     ),
   };
 }
@@ -1061,6 +1029,7 @@ export function summaryOf(parts: {
   const shipping = parts.delivery
     ? dec(parts.delivery.ship_cost)
         .plus(dec(parts.delivery.return_ship_cost))
+        .plus(dec(parts.delivery.ship_corrections))
         .plus(dec(parts.delivery.return_ship_reimbursed))
     : null;
 

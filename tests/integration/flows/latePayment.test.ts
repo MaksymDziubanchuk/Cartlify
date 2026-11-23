@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
-import { getCsrf, type Csrf } from '../../helpers/csrf.js';
+import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
 import { closeSessions, createProduct, createUser, stockOf } from '../../helpers/factories.js';
 import { watchMail } from '../../helpers/mail.js';
 import { loseReservation, placeOrder } from '../../helpers/orders.js';
@@ -73,7 +73,15 @@ describe('a payment that comes after the units were sold', () => {
       mails.filter((mail) => mail.to.includes(late.email)).map((mail) => mail.subject),
     ).toEqual([expect.stringContaining(`We sent your payment for order #${lateOrder} back`)]);
 
-    // the admins see the refund among their alerts, and the list the alert names holds its line
+    // the admin watches the refunds of the late payments of the last week, and sees this one among
+    // the alerts; the list the alert names holds its line
+    const days = await app.inject({
+      method: 'PUT',
+      url: '/api/admin/alerts/subscriptions/late_refunds/threshold',
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: { value: 7 },
+    });
+    expect(days.statusCode).toBe(200);
     const alerts = await app.inject({
       method: 'GET',
       url: '/api/admin/alerts',

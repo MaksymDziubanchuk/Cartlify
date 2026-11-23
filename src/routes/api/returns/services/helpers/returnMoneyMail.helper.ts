@@ -25,7 +25,9 @@ import { buildReturnSplitTemplate } from '@services/email/templates/returns/retu
 
 import {
   movementOf,
+  lastLineOfRow,
   namesRow,
+  namesRowOrOrigin,
   readReturnMoneyLines,
   wayBackOutsideOf,
   wayBackSentOf,
@@ -80,7 +82,7 @@ async function loadStatement(returnId: number) {
         money: true,
         amount: true,
         notAcceptedReason: true,
-        moneyLogId: true,
+        splitFromId: true,
         backShipmentId: true,
         orderItem: {
           select: {
@@ -167,21 +169,29 @@ function paidLinesOfRow(statement: Statement, row: Row): ReturnMoneyLine[] {
   return statement.lines.filter(
     (one) =>
       one.part === 'goods' &&
-      (one.id === row.moneyLogId ||
-        ((one.event === 'money.refund' || one.event === 'money.outside') &&
-          !failed.has(one.id) &&
-          namesRow(one, row.id))),
+      (one.event === 'money.refund' || one.event === 'money.outside') &&
+      !failed.has(one.id) &&
+      namesRowOrOrigin(one, statement.items, row.id),
   );
 }
 
-// the line of the last money of a row: the line it names, or, for a row paid in part that waits
-// for the rest naming none, the last part of it that went
-function lineOfRow(statement: Statement, row: Row): ReturnMoneyLine | null {
-  if (row.moneyLogId !== null) {
-    return statement.lines.find((one) => one.id === row.moneyLogId) ?? null;
-  }
-  return paidLinesOfRow(statement, row).at(-1) ?? null;
+// what money already with the buyer paid of a row, as the part covered of its movement (no line of
+// the journal: the row records it)
+function coverPartOfRow(statement: Statement, row: Row): ReturnMoneyLine | null {
+  return statement.lines.find((one) => one.part === 'covered' && namesRow(one, row.id)) ?? null;
 }
+
+// the line of the last money of a row: the line it names, or, for a row paid in part that waits
+// for the rest naming none, the last part of it that went; for a row only money already with the
+// buyer paid, its part covered
+function lineOfRow(statement: Statement, row: Row): ReturnMoneyLine | null {
+  return lastLineOfRow(statement.lines, statement.items, row);
+}
+
+// a movement once: a transfer by its key, money with no key by its moment (the rows paid by money
+// already with the buyer in one movement share it)
+const movementKey = (line: ReturnMoneyLine) =>
+  line.transferKey ?? `${line.event}@${line.createdAt.getTime()}`;
 
 function movementOfRow(statement: Statement, row: Row): ReturnMoneyLine[] {
   const line = lineOfRow(statement, row);
@@ -191,13 +201,13 @@ function movementOfRow(statement: Statement, row: Row): ReturnMoneyLine[] {
 // what the rows took back in all: the units and the delivery, less the way back the buyer owes,
 // in cents; the rows of one movement share its parts, each movement counts once
 function moneyOf(statement: Statement, rows: Row[]) {
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const sum = { total: 0, delivery: 0, deduction: 0, wayBack: 0 };
 
   for (const row of rows) {
     const line = lineOfRow(statement, row);
-    if (!line || seen.has(line.id)) continue;
-    seen.add(line.id);
+    if (!line || seen.has(movementKey(line))) continue;
+    seen.add(movementKey(line));
 
     const sums = sumsOf(movementOfRow(statement, row));
     sum.total += cents(sums.total);
@@ -229,13 +239,13 @@ function coveredOf(statement: Statement, parts: ReturnMoneyLine[]) {
 
 // what money already with the buyer paid of the rows, each movement once
 function coveredOfRows(statement: Statement, rows: Row[]) {
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const sum = { bank: 0, earlier: 0 };
 
   for (const row of rows) {
     const line = lineOfRow(statement, row);
-    if (!line || seen.has(line.id)) continue;
-    seen.add(line.id);
+    if (!line || seen.has(movementKey(line))) continue;
+    seen.add(movementKey(line));
 
     const covered = coveredOf(statement, movementOfRow(statement, row));
     sum.bank += covered.bank;
@@ -250,14 +260,18 @@ function coveredOfRows(statement: Statement, rows: Row[]) {
 // went the way the buyer paid), the rest to the movement itself (a transfer went the way the buyer
 // paid; money root sent another way has its way and its day)
 function moneySourcesOf(statement: Statement, rows: Row[]): ReturnClosedMoney {
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const sum = { bank: 0, card: 0 };
   const outside: { cents: number; method: string; sentOn: Date }[] = [];
 
   // every part of the money of a row, once: a row paid in parts went more than one way
-  for (const line of rows.flatMap((row) => paidLinesOfRow(statement, row))) {
-    if (seen.has(line.id)) continue;
-    seen.add(line.id);
+  for (const line of rows.flatMap((row) => {
+    const paid = paidLinesOfRow(statement, row);
+    const cover = paid.length ? null : coverPartOfRow(statement, row);
+    return cover ? [cover] : paid;
+  })) {
+    if (seen.has(movementKey(line))) continue;
+    seen.add(movementKey(line));
 
     const covered = coveredOf(statement, movementOf(statement.lines, line));
     sum.bank += covered.bank;
@@ -475,7 +489,7 @@ export async function sendReturnRefundFailedEmail(
       (row) =>
         itemIds.includes(row.id) &&
         row.money === 'failed' &&
-        statement.lines.find((line) => line.id === row.moneyLogId)?.failure === 'card_unavailable',
+        lastLineOfRow(statement.lines, statement.items, row)?.failure === 'card_unavailable',
     );
     if (!rows.length) return;
 

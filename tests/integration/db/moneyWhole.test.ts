@@ -174,7 +174,7 @@ describe('a lost dispute of an order sent that took all of the payment', () => {
         meta: [
           expect.objectContaining({ orderItemId: out.lampItem, quantity: 2, amount: 20 }),
           expect.objectContaining({ orderItemId: out.bookItem, quantity: 1, amount: 15 }),
-          { delivery: 5 },
+          { delivery: 5, at: expect.any(String) },
         ],
       }),
     ]);

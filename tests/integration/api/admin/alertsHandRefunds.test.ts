@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
-import { alertsOf } from '../../../helpers/alerts.js';
+import { alertsOf, writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -67,9 +67,11 @@ const {
   expectCases,
 } = alerts;
 
+// an admin and root wrote the numbers the alerts are counted with (ALERT_NUMBERS)
 const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
   const user = await createUser(opts);
   userIds.push(user.id);
+  await writeAlertNumbers(user);
   return user;
 };
 
@@ -170,16 +172,20 @@ describe('the kinds of the refunds made by hand', () => {
       const res = await dismiss(someone, kind, 1);
       expect(res.statusCode).toBe(404);
       expect(res.json()).toMatchObject({ errorCode: 'ALERT_KIND_NOT_FOUND' });
-      expect(await subscriptionOf(root, kind)).toEqual({ kind, subscribed: true, threshold: null });
+      expect(await subscriptionOf(root, kind)).toEqual({
+        kind,
+        subscribed: false,
+        threshold: null,
+      });
     }
-    expect(rootKinds.slice(rootKinds.indexOf('hand_refunds_to_explain'), -1)).toEqual([
-      ...ROOT_KINDS,
-      'fraud_warnings',
-      'fraud_warnings_shipped',
-      'payment_reviews',
-    ]);
+    expect(
+      rootKinds.slice(
+        rootKinds.indexOf('hand_refunds_to_explain'),
+        rootKinds.indexOf('receipts_not_issued'),
+      ),
+    ).toEqual([...ROOT_KINDS, 'fraud_warnings', 'fraud_warnings_shipped', 'payment_reviews']);
     expect(await subscriptionOf(root, 'hand_refunds_in_transit')).toMatchObject({
-      threshold: { value: 3, default: 3, min: 1, max: 365, unit: 'days' },
+      threshold: { value: 3, min: 1, max: 365, unit: 'days', window: null },
     });
   });
 
@@ -190,11 +196,18 @@ describe('the kinds of the refunds made by hand', () => {
     await giveMoneyRight(root.id, manager.id);
     const kinds = (await alerts.alerts(manager)).map((alert) => alert.kind);
 
-    const money = [...ROOT_KINDS, 'fraud_warnings', 'fraud_warnings_shipped', 'payment_reviews'];
+    const money = [
+      ...ROOT_KINDS,
+      'fraud_warnings',
+      'fraud_warnings_shipped',
+      'payment_reviews',
+      'receipts_not_issued',
+      'receipts_refused',
+    ];
     expect(kinds.slice(kinds.indexOf('hand_refunds_to_explain'))).toEqual(money);
     expect(kinds).not.toContain('admin_actions');
     for (const kind of money) {
-      expect(await subscriptionOf(manager, kind)).toMatchObject({ kind, subscribed: true });
+      expect(await subscriptionOf(manager, kind)).toMatchObject({ kind, subscribed: false });
     }
   });
 

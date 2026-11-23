@@ -1,3 +1,4 @@
+import { taxDocumentNumberOf } from '@helpers/taxDocumentNumber.js';
 import { prisma } from '@db/client.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
@@ -9,6 +10,7 @@ import {
 } from './helpers/exportNewsletter.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import {
+  lastLineOfRow,
   readReturnMoneyLines,
   rowSharesOf,
   sentAtOf,
@@ -42,6 +44,9 @@ export type ExportPersonResponseDto = {
   newsletterSubscriptions: ExportedNewsletterSubscription[];
   // every movement of the money of the person, the oldest first (the money journal)
   money: Record<string, unknown>[];
+  // the tax documents of the orders of the person: which, the number, when, the sum, the copy of
+  // the buyer
+  taxDocuments: Record<string, unknown>[];
 };
 
 // everything the shop keeps of the person, read with the rights of whoever asks (rls shows a person
@@ -51,7 +56,9 @@ export type ExportPersonResponseDto = {
 // subscriptions to the newsletter on the address of the account with their journal (the fields
 // are agreed by name, see exportNewsletter.helper.ts), and every movement of the money of the
 // person (the money journal: what it was, its part, the sum, the currency, the time, the state and
-// the number the bank gives to follow a refund). The money of a statement comes from its lines of
+// the number the bank gives to follow a refund), and the tax documents of the orders (which, the
+// number, when, the sum and the copy of the buyer; the seller, the lines and the answer of a fiscal
+// service are the shop's). The money of a statement comes from its lines of
 // the money journal: the share of the delivery and the deduction for the way back a row carries,
 // when its money went back, the way root sent it outside the app (the way back given back is a line
 // of the money journal of the person, part way_back).
@@ -221,7 +228,7 @@ export async function exportPerson({
           goods: true,
           money: true,
           amount: true,
-          moneyLogId: true,
+          splitFromId: true,
           refusedCode: true,
           notAcceptedReason: true,
           orderItem: {
@@ -281,7 +288,6 @@ export async function exportPerson({
             }) => {
               const lines = statementMoney.get(statement.id) ?? [];
               const shares = rowSharesOf(lines);
-              const lineOf = (id: number | null) => lines.find((line) => line.id === id) ?? null;
 
               return {
                 ...statement,
@@ -300,7 +306,7 @@ export async function exportPerson({
                   .filter((row) => row.returnId === statement.id)
                   .map((row) => {
                     // the line that put the money of the row where it stands
-                    const line = lineOf(row.moneyLogId);
+                    const line = lastLineOfRow(lines, statementRows, row);
                     const share = shares.get(row.id);
 
                     return {
@@ -422,6 +428,24 @@ export async function exportPerson({
         },
       });
 
+      // the tax documents of the orders of the person, with the copy of the buyer they keep (emptied
+      // when its term ended); the seller, the lines and a receipt's answer are the shop's
+      // the invoices and the credit notes: a receipt is the record of the shop at the fiscal service
+      const taxDocuments = await tx.taxDocument.findMany({
+        where: { order: { userId }, kind: { in: ['invoice', 'credit_note'] } },
+        orderBy: { id: 'asc' },
+        select: {
+          orderId: true,
+          kind: true,
+          series: true,
+          number: true,
+          createdAt: true,
+          gross: true,
+          currency: true,
+          buyer: true,
+        },
+      });
+
       // the subscriptions on the address of the account, read last of the person's tables
       const newsletterSubscriptions = await newsletterSubscriptionsOf(tx, {
         subjectId: userId,
@@ -501,6 +525,12 @@ export async function exportPerson({
           ...line,
           amount: amount.toString(),
           createdAt: createdAt.toISOString(),
+        })),
+        taxDocuments: taxDocuments.map(({ series, number, gross, createdAt, ...document }) => ({
+          ...document,
+          number: taxDocumentNumberOf(series, number),
+          createdAt: createdAt.toISOString(),
+          gross: gross.toString(),
         })),
       };
     });

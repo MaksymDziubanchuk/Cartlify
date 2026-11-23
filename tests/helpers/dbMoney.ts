@@ -362,9 +362,18 @@ export async function statementOf(db: DbSession, adminId: number, returnId: numb
 // the money of the rows of a statement
 export async function rowsOf(db: DbSession, adminId: number, returnId: number) {
   await db.as({ role: 'ADMIN', userId: adminId });
+  // the line of the last money of each row (no row names one: the lines name the rows, and the rows
+  // split off them go with them): the last failure of a row that failed, else the last line of its
+  // own money that went (db/05: return_row_line); none when only money already with the buyer paid it
   return db.rows<{ id: number; money: string; moneyLogId: number | null }>(
-    `select id, money::text as money, "moneyLogId"
-     from cartlify.return_items where "returnId" = $1 order by id`,
+    `select i.id, i.money::text as money,
+            case when i.money = 'failed' then (
+              select max(f.id)
+              from cartlify.money_log as f
+              where f.event = 'money.refund_failed' and f.part = 'goods' and f."returnId" = i."returnId"
+                and i.id in (select n.return_item_id from cartlify.money_line_return_rows(f.id) as n)
+            ) else cartlify.return_row_line(i.id) end as "moneyLogId"
+     from cartlify.return_items as i where i."returnId" = $1 order by i.id`,
     returnId,
   );
 }
@@ -397,3 +406,25 @@ export async function begun(
 
 export const DECIDE = `select cartlify.decide_order_hold($1::int, $2, $3, $4) as result`;
 export const DECIDE_USE = `select cartlify.decide_money_use($1::int, $2::jsonb, $3::numeric, $4) as result`;
+
+// what money already with the buyer pays of the rows of a statement by their marks (db/05:
+// return_row_shares, no line of the journal and no list on the rows): [row, line of the money, part,
+// sum], the rows by id
+export async function paidByOf(
+  db: DbSession,
+  adminId: number,
+  returnId: number,
+): Promise<[number, number, string, string][]> {
+  await db.as({ role: 'ADMIN', userId: adminId });
+  const rows = await db.rows<{ row: number; line: number; part: string; amount: string }>(
+    `select sh.return_item_id as row, sh.source_id as line, sh.part,
+            to_char(sh.amount, 'FM99999999990.00') as amount
+     from cartlify.return_row_shares(
+       (select r."orderId" from cartlify.returns as r where r.id = $1)
+     ) as sh
+     where sh.return_id = $1
+     order by sh.return_item_id, sh.part desc, sh.source_id`,
+    returnId,
+  );
+  return rows.map((r) => [r.row, r.line, r.part, r.amount]);
+}

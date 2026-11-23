@@ -1,28 +1,35 @@
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 
+import { Prisma } from '@prisma/client';
 import type {
   MoneyPart,
   MoneyPurpose,
   MoneyState,
   OutsideMethod,
-  Prisma,
   RefundFailure,
+  ReturnMoney,
 } from '@prisma/client';
 
 // The money of the statements of return, read from their lines of the money journal (db/05,
 // money_log): the statement and its rows keep only where the money stands (returns.refundedTotal,
 // return_items.money and the line that put it there), the movement itself is the lines. A transfer
 // is written in parts under one key (the goods, the delivery, the deduction for the way back the
-// buyer owes, the way back the shop pays, what money already sent another way covered), money sent
-// outside the app in parts written together, a
+// buyer owes, the way back the shop pays), money sent outside the app in parts written together;
+// what money already sent another way paid of the rows is no line (it moved once): the marks of the
+// rows take it (return_row_shares, db/05), and it is read here as the part covered of a movement; a
 // failure is new lines with the opposite sums; what the shop paid a carrier for a parcel back is a
 // line of the parcel with its corrections
 
+// the parts of a movement of a statement: those of the journal, and covered, what money already
+// with the buyer paid of its rows (no line: the marks of the rows take it)
+export type ReturnMoneyPart = MoneyPart | 'covered';
+
 export type ReturnMoneyLine = {
+  // a part covered has no line of its own: its id is below 0
   id: number;
   event: string;
   purpose: MoneyPurpose;
-  part: MoneyPart;
+  part: ReturnMoneyPart;
   // signed: above 0 to the shop, below 0 from it
   amount: number;
   currency: string | null;
@@ -77,10 +84,11 @@ const LINE_SELECT = {
   meta: true,
 } as const;
 
-// the lines of the statements, oldest first. The money already with the buyer that the parts covered
-// of a statement took (a refund made by hand, what a bank gave for a dispute: lines of the order,
-// not of a statement) comes with it, and so does what became of that money (its failure, money root
-// sent another way instead), so each statement tells the whole of its money
+// the lines of the statements, oldest first. What money already with the buyer paid of the rows of
+// a statement (a refund made by hand, what a bank gave for a dispute: lines of the order, not of a
+// statement; the marks of the rows take it) comes as the part covered of the movement written in the
+// moment the row took it (none, a movement of its own), and so does what became of that money
+// (its failure, money root sent another way instead), so each statement tells the whole of its money
 export async function readReturnMoneyLines(
   db: Prisma.TransactionClient,
   returnIds: number[],
@@ -93,13 +101,38 @@ export async function readReturnMoneyLines(
       })
     : [];
 
-  // the sources each statement took money of
-  const sourcesOf = new Map<number, Set<number>>();
-  for (const line of found) {
-    if (line.part !== 'covered' || line.event === 'money.refund_failed' || line.coversId === null) {
-      continue;
+  // what money already with the buyer pays of the rows by their marks, and the sources each
+  // statement took of (the queries of one transaction one after another)
+  const statements = returnIds.length
+    ? await db.orderReturn.findMany({
+        where: { id: { in: returnIds } },
+        select: { orderId: true },
+      })
+    : [];
+  const shares: Share[] = [];
+  for (const orderId of [...new Set(statements.map((one) => one.orderId))]) {
+    const found = await db.$queryRaw<ShareRow[]>(Prisma.sql`
+      select return_item_id, return_id, source_id, order_item_id, amount::text as amount, at
+      from cartlify.return_row_shares_of(${orderId}::int, true)
+    `);
+    for (const one of found) {
+      if (!returnIds.includes(one.return_id)) continue;
+      shares.push({
+        rowId: one.return_item_id,
+        returnId: one.return_id,
+        moneyLogId: one.source_id,
+        orderItemId: one.order_item_id,
+        amount: Number(one.amount),
+        at: one.at,
+      });
     }
-    sourcesOf.set(line.returnId!, (sourcesOf.get(line.returnId!) ?? new Set()).add(line.coversId));
+  }
+  const sourcesOf = new Map<number, Set<number>>();
+  for (const share of shares) {
+    sourcesOf.set(
+      share.returnId,
+      (sourcesOf.get(share.returnId) ?? new Set()).add(share.moneyLogId),
+    );
   }
   const sourceIds = [...new Set([...sourcesOf.values()].flatMap((ids) => [...ids]))];
   const sources = sourceIds.length
@@ -123,6 +156,52 @@ export async function readReturnMoneyLines(
   for (const { returnId, amount, ...rest } of found) {
     byReturn.get(returnId!)?.push({ ...rest, amount: decimalToNumber(amount) });
   }
+  // each share as the part covered of the movement written in the moment the row took it
+  const kOf = new Map<number, number>();
+  for (const entry of shares) {
+    const lines = byReturn.get(entry.returnId)!;
+    const k = kOf.get(entry.rowId) ?? 0;
+    kOf.set(entry.rowId, k + 1);
+    {
+      // the last movement of the own money of the row (a transfer, money sent outside the app), the
+      // part covered goes with it; none, the moment the row took the share
+      const own =
+        [...lines]
+          .reverse()
+          .find(
+            (one) =>
+              one.id > 0 &&
+              one.part === 'goods' &&
+              (one.event === 'money.refund' || one.event === 'money.outside') &&
+              namesRow(one, entry.rowId),
+          ) ?? null;
+      const at = own?.createdAt ?? entry.at;
+      lines.push({
+        id: -(entry.rowId * 100 + k + 1),
+        event: own?.event ?? 'money.refund',
+        purpose: 'return',
+        part: 'covered',
+        amount: entry.amount,
+        currency: own?.currency ?? null,
+        state: own?.state ?? (own ? null : 'sent'),
+        stateAt: own?.stateAt ?? at,
+        createdAt: at,
+        happenedAt: own?.happenedAt ?? null,
+        refundId: own?.refundId ?? null,
+        bankReference: null,
+        byDashboard: false,
+        transferKey: own?.transferKey ?? null,
+        coversId: entry.moneyLogId,
+        failure: null,
+        failureText: null,
+        method: own?.method ?? null,
+        note: null,
+        actorId: own?.actorId ?? null,
+        orderShipmentId: null,
+        meta: [{ returnItemId: entry.rowId, orderItemId: entry.orderItemId, amount: entry.amount }],
+      });
+    }
+  }
   for (const [returnId, ids] of sourcesOf) {
     const lines = byReturn.get(returnId)!;
     for (const { returnId: _none, amount, ...rest } of sources) {
@@ -130,10 +209,33 @@ export async function readReturnMoneyLines(
         lines.push({ ...rest, amount: decimalToNumber(amount) });
       }
     }
-    lines.sort((a, b) => a.id - b.id);
+  }
+  // in the order they were written; a part covered with its movement
+  for (const lines of byReturn.values()) {
+    lines.sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || Math.abs(a.id) - Math.abs(b.id),
+    );
   }
   return byReturn;
 }
+
+// what money already with the buyer pays of a row by its marks (return_row_shares, db/05)
+type ShareRow = {
+  return_item_id: number;
+  return_id: number;
+  source_id: number;
+  order_item_id: number | null;
+  amount: string;
+  at: Date;
+};
+type Share = {
+  rowId: number;
+  returnId: number;
+  moneyLogId: number;
+  orderItemId: number | null;
+  amount: number;
+  at: Date;
+};
 
 // the lines of the movement a line is part of: the parts of a transfer under its key; the parts of
 // money that has no key (sent outside the app, or a transfer that money already there paid all of)
@@ -155,10 +257,10 @@ export function movementOf(lines: ReturnMoneyLine[], line: ReturnMoneyLine): Ret
 
 // what the parts of a movement gave back, each above 0: the goods, the delivery, what was kept for
 // the way back the buyer owes, the way back the shop paid, what money already sent another way
-// covered; total is what the buyer got (the goods, the delivery and the way back less the
-// deduction), the covered part with it
+// paid of the rows (covered); total is what the buyer got for the rows (the goods, the delivery and
+// the way back less the deduction, with what money already there paid of them)
 export function sumsOf(parts: ReturnMoneyLine[]) {
-  const of = (part: MoneyPart) => parts.filter((one) => one.part === part);
+  const of = (part: ReturnMoneyPart) => parts.filter((one) => one.part === part);
   const goods = -cents(sumOf(of('goods'))) || 0;
   const delivery = -cents(sumOf(of('delivery'))) || 0;
   const deduction = cents(sumOf(of('deduction')));
@@ -171,7 +273,7 @@ export function sumsOf(parts: ReturnMoneyLine[]) {
     deduction: deduction / 100,
     wayBack: wayBack / 100,
     covered: covered / 100,
-    total: (goods + delivery - deduction + wayBack) / 100,
+    total: (goods + delivery - deduction + wayBack + covered) / 100,
   };
 }
 
@@ -226,21 +328,80 @@ export const namesRow = (line: ReturnMoneyLine, rowId: number): boolean =>
   Array.isArray(line.meta) &&
   (line.meta as { returnItemId?: unknown }[]).some((one) => Number(one?.returnItemId) === rowId);
 
+// a row of a statement as its money is read: the lines of the journal name the first row, a row
+// split off it (its units with a result of their own, splitFromId) goes with it
+export type RowOfLines = { id: number; splitFromId: number | null };
+
+// whether a line names the row or a row it was split off
+export function namesRowOrOrigin(
+  line: ReturnMoneyLine,
+  rows: readonly RowOfLines[],
+  rowId: number,
+): boolean {
+  const byId = new Map(rows.map((one) => [one.id, one]));
+  let id: number | null = rowId;
+  for (let n = 0; id !== null && n < 100; n += 1) {
+    if (namesRow(line, id)) return true;
+    id = byId.get(id)?.splitFromId ?? null;
+  }
+  return false;
+}
+
+// the line of the last money of a row (no row names one): while it is failed, the last failure of
+// its goods; else the last line of its goods that went and did not fail (a transfer, money sent
+// outside the app), or the part covered of money already with the buyer when only that paid it
+export function lastLineOfRow(
+  lines: readonly ReturnMoneyLine[],
+  rows: readonly RowOfLines[],
+  row: RowOfLines & { money: ReturnMoney },
+): ReturnMoneyLine | null {
+  const goods = lines.filter(
+    (one) => one.id > 0 && one.part === 'goods' && namesRowOrOrigin(one, rows, row.id),
+  );
+  if (row.money === 'failed') {
+    return goods.filter((one) => one.event === 'money.refund_failed').at(-1) ?? null;
+  }
+  const failed = new Set(
+    lines.filter((one) => one.event === 'money.refund_failed').map((one) => one.coversId),
+  );
+  return (
+    goods
+      .filter(
+        (one) =>
+          (one.event === 'money.refund' || one.event === 'money.outside') && !failed.has(one.id),
+      )
+      .at(-1) ??
+    lines.find((one) => one.part === 'covered' && namesRow(one, row.id)) ??
+    null
+  );
+}
+
 // what each row of a statement has had of its money (the card: "paid X of Y"): the goods of its
 // transfers, sent or on their way, and of the money sent outside the app, [{ returnItemId, amount }]
-// in the meta; a failure takes its part back. A row is paid in parts when the payment held only
-// some of it (the rest went outside the app); a row without any is not in the map
+// in the meta; a failure takes its part back; and what money already with the buyer paid of it (its
+// part covered, but the delivery). A row is paid in parts when the payment held only some of it
+// (the rest went outside the app, or money already there paid some); a row without any is not in
+// the map
 export function rowPaidOf(lines: ReturnMoneyLine[]): Map<number, number> {
   const cents = new Map<number, number>();
 
   for (const line of lines) {
-    if (line.purpose !== 'return' || line.part !== 'goods' || !ROW_PART_EVENTS.has(line.event)) {
+    const covered = line.part === 'covered';
+    if (
+      !covered &&
+      (line.purpose !== 'return' || line.part !== 'goods' || !ROW_PART_EVENTS.has(line.event))
+    ) {
       continue;
     }
     if (!Array.isArray(line.meta)) continue;
 
-    const sign = line.event === 'money.refund_failed' ? -1 : 1;
-    for (const element of line.meta as { returnItemId?: unknown; amount?: unknown }[]) {
+    const sign = line.event === 'money.refund_failed' && !covered ? -1 : 1;
+    for (const element of line.meta as {
+      returnItemId?: unknown;
+      orderItemId?: unknown;
+      amount?: unknown;
+    }[]) {
+      if (covered && element?.orderItemId === null) continue;
       const rowId = Number(element?.returnItemId);
       const amount = Number(element?.amount);
       if (!Number.isInteger(rowId) || !Number.isFinite(amount)) continue;
