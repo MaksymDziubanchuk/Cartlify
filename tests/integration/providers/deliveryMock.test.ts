@@ -36,6 +36,7 @@ const quiet = { warn: () => undefined } as never;
           connection: option.connection,
         },
         customs: null,
+        taxNumber: null,
       },
       quiet,
     );

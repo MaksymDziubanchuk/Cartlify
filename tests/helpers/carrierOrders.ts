@@ -34,7 +34,6 @@ export const CARRIER_SHOP: Partial<ShopSettingsValues> = {
     { name: 'Spain', countries: ['ES'], manualPrice: 5, freeFrom: null },
     { name: 'Test zone', countries: ['UA', 'PL', 'DE', 'GB'], manualPrice: 0, freeFrom: null },
   ],
-  customsFreeCountries: ['ES', 'UA', 'PL', 'DE', 'GB'],
   deliverySender: SENDER,
 };
 
