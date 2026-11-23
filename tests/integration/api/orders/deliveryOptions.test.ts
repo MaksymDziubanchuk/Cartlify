@@ -14,6 +14,7 @@ import {
 import { CARRIERS } from '../../../helpers/carrierOrders.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
+import { customsCountry, setShopCountries } from '../../../helpers/shopCountries.js';
 import {
   breakShippyPro,
   steadyCarrierWords,
@@ -50,16 +51,15 @@ const SENDER = {
   email: 'shop@example.com',
 };
 
-// the shop of these tests: Spain at 5 by hand, free from 60; Germany by carriers only; the rest of
-// the countries of the app by hand at 30; the customs-free countries Spain and Germany
+// the shop of these tests: Spain at 5 by hand, free from 60; Germany by carriers only; France by
+// hand at 30, across customs (its record, beforeAll); Spain and Germany without customs
 const SHOP: Partial<ShopSettingsValues> = {
   deliveryMethods: ['manual', 'pickup', 'carrier'],
   deliveryZones: [
     { name: 'Spain', countries: ['ES'], manualPrice: 5, freeFrom: 60 },
     { name: 'Germany', countries: ['DE'], manualPrice: null, freeFrom: null },
-    { name: 'Rest', countries: 'rest', manualPrice: 30, freeFrom: null },
+    { name: 'Rest', countries: ['FR'], manualPrice: 30, freeFrom: null },
   ],
-  customsFreeCountries: ['ES', 'DE'],
   deliverySender: SENDER,
 };
 
@@ -87,9 +87,19 @@ const PARIS = {
 
 const SHIPPING = { weightGrams: 500, sizesMm: { length: 300, width: 200, height: 100 } };
 
+// the tax of a way of a shop that takes none: the items as they are, no tax, the total
+const untaxed = (total: number) => ({
+  items: [expect.objectContaining({ rate: null, tax: 0 })],
+  totals: [{ rate: null, net: total, tax: 0, gross: total }],
+  total,
+  payOnReceipt: false,
+  refusal: null,
+});
+
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
+  setShopCountries([customsCountry('FR')]);
 });
 
 afterEach(resetShopSettings);
@@ -169,13 +179,14 @@ describe('POST /api/orders/current/delivery-options', () => {
       zone: { name: 'Spain', freeFrom: 60 },
       remainingToFree: 40,
       options: [
-        { method: 'manual', price: 5, carrier: null, label: null, days: null },
-        { method: 'pickup', price: 0, carrier: null, label: null, days: null },
+        { method: 'manual', price: 5, carrier: null, label: null, days: null, tax: untaxed(25) },
+        { method: 'pickup', price: 0, carrier: null, label: null, days: null, tax: untaxed(20) },
         {
           method: 'carrier',
           price: 4,
           carrier: CARRIERS.Generic,
           ...steadyCarrierWords(),
+          tax: untaxed(24),
         },
         {
           method: 'carrier',
@@ -183,6 +194,7 @@ describe('POST /api/orders/current/delivery-options', () => {
           carrier: { name: 'MockExpress', service: 'Express', connection: '7001' },
           label: 'Mock express',
           days: '1-2',
+          tax: untaxed(26.5),
         },
       ],
       carriersUnavailable: null,
@@ -206,7 +218,7 @@ describe('POST /api/orders/current/delivery-options', () => {
     expect(res.json()).toMatchObject({ total: 62.5, delivery: { method: 'carrier', price: 2.5 } });
   });
 
-  it('leaves the manual delivery out of a zone without its price, and asks the price of the rest', async () => {
+  it('leaves the manual delivery out of a zone without its price, and asks the price of another zone', async () => {
     setShopSettings(SHOP);
     // France has customs: the mug has its data
     const mug = await createProduct({

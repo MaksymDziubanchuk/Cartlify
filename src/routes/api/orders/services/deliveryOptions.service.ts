@@ -1,4 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
+import { quoteOrder, taxLinesOf, type CarrierPrice } from './helpers/orderTax.helper.js';
+import type { TaxQuote } from '@providers/tax/index.js';
 
 import { shopSettings } from '@config/shopSettings.js';
 import { tx } from '@db/client.js';
@@ -50,7 +52,9 @@ export async function deliveryOptions(args: {
       orderBy: { id: 'desc' },
       select: { id: true },
     });
-    return order ? cartForDelivery(db, order.id) : null;
+    return order
+      ? { ...(await cartForDelivery(db, order.id)), taxLines: await taxLinesOf(db, order.id) }
+      : null;
   });
   if (!cart || !cart.lines.length) throw new BadRequestError('ORDER_ITEMS_REQUIRED');
 
@@ -62,7 +66,8 @@ export async function deliveryOptions(args: {
   }
 
   const settings = shopSettings();
-  const options: DeliveryOptionDto[] = [];
+  // the ways before their tax; the price of a carrier with the cheapest one of the address
+  const options: (Omit<DeliveryOptionDto, 'tax'> & { carrierPrice?: CarrierPrice })[] = [];
 
   if (settings.deliveryMethods.includes('manual') && zone.manualPrice !== null) {
     options.push({
@@ -113,6 +118,7 @@ export async function deliveryOptions(args: {
           },
           label: carrier.label,
           days: carrier.days,
+          carrierPrice: { price: carrier.price, cheapest },
         });
       }
     } catch (err) {
@@ -124,6 +130,24 @@ export async function deliveryOptions(args: {
     }
   }
 
+  // the tax of the cart each way (docs/taxes.md): the price of the delivery the rule leaves, the
+  // items at their prices, the refusal the confirmation would give
+  const taxed = await tx(async (db) => {
+    await setUserContext(db, { userId: args.actorId, role: 'USER' });
+    const out: DeliveryOptionDto[] = [];
+    for (const { carrierPrice, ...option } of options) {
+      const quote = await quoteOrder(db, {
+        lines: cart.taxLines,
+        method: option.method,
+        country: address.country,
+        carrier: carrierPrice ?? null,
+      });
+      const price = quote ? (quote.delivery?.price ?? 0) : option.price;
+      out.push({ ...option, price, tax: optionTaxOf(quote, cart, price) });
+    }
+    return out;
+  });
+
   return {
     currency: shopCurrency(),
     zone: { name: zone.name, freeFrom: zone.freeFrom },
@@ -131,7 +155,44 @@ export async function deliveryOptions(args: {
       zone.freeFrom === null
         ? null
         : Math.max(0, toCents(zone.freeFrom) - toCents(cart.itemsTotal)) / 100,
-    options,
+    options: taxed,
     carriersUnavailable,
   };
+}
+
+// the tax of one way for the page; without a quote (no country to tax a pickup in) the cart as it
+// is, without a tax
+function optionTaxOf(
+  quote: TaxQuote | null,
+  cart: { lines: readonly { itemId: number; quantity: number; unitPrice: number }[] },
+  deliveryPrice: number,
+): DeliveryOptionDto['tax'] {
+  const maximum = shopSettings().maxOrderTotal;
+  const items = quote
+    ? quote.lines.map((line) => ({
+        itemId: line.key,
+        unitPrice: line.unitPrice,
+        totalPrice: line.total,
+        rate: line.rate,
+        tax: line.tax,
+      }))
+    : cart.lines.map((line) => ({
+        itemId: line.itemId,
+        unitPrice: line.unitPrice,
+        totalPrice: Math.round(line.unitPrice * 100 * line.quantity) / 100,
+        rate: null,
+        tax: 0,
+      }));
+  const total = quote
+    ? quote.total
+    : Math.round(items.reduce((sum, i) => sum + i.totalPrice * 100, 0) + deliveryPrice * 100) / 100;
+  const totals = quote?.totals ?? [{ rate: null, net: total, tax: 0, gross: total }];
+
+  const refusal: DeliveryOptionDto['tax']['refusal'] = quote?.refusal
+    ? quote.refusal
+    : maximum !== null && Math.round(total * 100) > Math.round(maximum * 100)
+      ? { code: 'ORDER_TOTAL_ABOVE_MAXIMUM', maximum }
+      : null;
+
+  return { items, totals, total, payOnReceipt: quote?.payOnReceipt ?? false, refusal };
 }

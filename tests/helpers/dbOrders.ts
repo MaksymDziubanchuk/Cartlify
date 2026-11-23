@@ -69,6 +69,9 @@ export type DeliveryRule = {
   flat?: number | null;
   freeFrom?: number | null;
   expected?: number | null;
+  // the tax the server counted (confirm_order, p_tax) and whether the buyer asked for an invoice
+  tax?: Record<string, unknown> | null;
+  invoice?: boolean;
 };
 
 // a statement the database let through and that touched a row
@@ -161,13 +164,15 @@ export async function confirm(
   await db.as({ role: 'USER', userId });
   return db.attempt(
     `select 1 as done from cartlify.confirm_order(
-       $1::int, $2::interval, $3::numeric, $4::numeric, $5::numeric
+       $1::int, $2::interval, $3::numeric, $4::numeric, $5::numeric, $6::jsonb, $7::boolean
      )`,
     orderId,
     reserveFor,
     rule.flat ?? null,
     rule.freeFrom ?? null,
     rule.expected ?? null,
+    rule.tax ? JSON.stringify(rule.tax) : null,
+    rule.invoice ?? false,
   );
 }
 
