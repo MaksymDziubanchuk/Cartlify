@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       parts:
-        description: 'test parts and real services, for example: unit api:users service:sendgrid service:cloudinary service:stripe service:openai (empty runs all parts, services from their mocks)'
+        description: 'test parts and services, for example: unit api:users service:sendgrid service:stripe service:fiskaly skip:openai (service:<name> real, skip:<name> leaves its own files out; empty runs all parts, services from their mocks)'
         required: false
         type: string
         default: ''
@@ -101,8 +101,10 @@ jobs:
             jest-${{ runner.os }}-${{ hashFiles('package-lock.json', 'jest.config.js', 'tsconfig*.json') }}-
 
       # no terminal here, so the launcher runs every part unless parts are given, and the services
-      # of tests/run.mjs (sendgrid, cloudinary, stripe, openai) answer from their mocks unless parts
-      # name them (service:sendgrid, service:cloudinary, service:stripe, service:openai).
+      # of tests/run.mjs (sendgrid, cloudinary, stripe, openai, turnstile, shippypro, fiskaly) answer
+      # from their mocks unless parts name them (service:<name> real, skip:<name> its own files left
+      # out). Real fiskaly takes the key and the secret of its TEST, each a secret github masks whole;
+      # its receipts reach only the test of the tax authority.
       # Real Stripe takes the key of its test sandbox, real OpenAI its test key, one value each that
       # github masks whole; a real service without its secret stops the run. Real SendGrid takes its
       # test key and the sender, an address of the authenticated domain, each a secret github masks
@@ -116,6 +118,8 @@ jobs:
           OPENAI_API_TEST_KEY: ${{ secrets.OPENAI_API_TEST_KEY }}
           SENDGRID_API_TEST_KEY: ${{ secrets.SENDGRID_API_TEST_KEY }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          FISKALY_API_TEST_KEY: ${{ secrets.FISKALY_API_TEST_KEY }}
+          FISKALY_API_TEST_SECRET: ${{ secrets.FISKALY_API_TEST_SECRET }}
         run: npm test -- $PARTS
 
       - name: Upload coverage report
