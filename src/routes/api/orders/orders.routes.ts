@@ -113,6 +113,21 @@ export default async function ordersRouter(app: FastifyInstance) {
     ordersController.postParcelVoidConfirmation,
   );
 
+  // the commercial invoice of a parcel with the tax number of the shop, to print (docs/taxes.md)
+  app.get(
+    '/:orderId/shipments/:shipmentId/customs-invoice',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('orderId'),
+        validateId('shipmentId'),
+      ],
+      schema: ordersSchema.getParcelCustomsInvoiceSchema,
+    },
+    ordersController.getParcelCustomsInvoice,
+  );
+
   app.post(
     '/current/confirm',
     {
@@ -138,6 +153,43 @@ export default async function ordersRouter(app: FastifyInstance) {
       schema: ordersSchema.getOrderByIdSchema,
     },
     ordersController.getOrderById,
+  );
+
+  // the tax documents of the order and the PDF of an invoice or a credit note (docs/taxes.md)
+  app.get(
+    '/:orderId/documents',
+    {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT']), validateId('orderId')],
+      schema: ordersSchema.getOrderDocumentsSchema,
+    },
+    ordersController.getDocuments,
+  );
+  app.get(
+    '/:orderId/documents/:documentId/pdf',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['USER', 'ADMIN', 'ROOT']),
+        validateId('orderId'),
+        validateId('documentId'),
+      ],
+      schema: ordersSchema.getOrderDocumentPdfSchema,
+    },
+    ordersController.getDocumentPdf,
+  );
+  // a fiscal receipt the admin registered by hand at the fiscal service
+  app.post(
+    '/:orderId/documents/:documentId/receipt-confirmation',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('orderId'),
+        validateId('documentId'),
+      ],
+      schema: ordersSchema.postReceiptConfirmationSchema,
+    },
+    ordersController.confirmReceipt,
   );
 
   app.post(

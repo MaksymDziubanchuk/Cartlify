@@ -15,7 +15,12 @@ import { LIVE_PARCEL_STATES } from './parcelCases.helper.js';
 import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
-import type { FindOrdersDto, OrdersSortBy, OrdersSortDir } from 'types/dto/orders.dto.js';
+import type {
+  FindOrdersDto,
+  OrdersReceiptsFilter,
+  OrdersSortBy,
+  OrdersSortDir,
+} from 'types/dto/orders.dto.js';
 import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
@@ -44,6 +49,8 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
       'shippedTo',
       'holds',
       'fraudWarnedFrom',
+      'receipts',
+      'receiptsMadeTo',
       'parcels',
       'parcelsMadeTo',
     ] as const) {
@@ -144,6 +151,8 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     shippedTo: dto.shippedTo,
     holds,
     fraudWarnedFrom: dto.fraudWarnedFrom,
+    receipts: dto.receipts,
+    receiptsMadeTo: dto.receiptsMadeTo,
     parcels: dto.parcels,
     parcelsMadeTo: dto.parcelsMadeTo,
     sortBy,
@@ -211,6 +220,8 @@ export function buildOrdersWhere(args: {
   shippedTo?: Date | undefined;
   holds?: OrdersHoldsFilter | undefined;
   fraudWarnedFrom?: Date | undefined;
+  receipts?: OrdersReceiptsFilter | undefined;
+  receiptsMadeTo?: Date | undefined;
   // the orders of a case of the parcels, read by the service first (ordersOfParcelCase)
   parcelOrderIds?: number[] | undefined;
   // the paid orders of a carrier with no live parcel yet (parcels=none)
@@ -305,6 +316,19 @@ export function buildOrdersWhere(args: {
   }
   // the provider warned that the payment of the order, already sent, may be fraud
   if (args.fraudWarnedFrom) and.push({ fraudWarnedAt: { gte: args.fraudWarnedFrom } });
+  // a fiscal receipt of the order, of a sale or of money that went back, in the state (made before
+  // the time)
+  if (args.receipts) {
+    and.push({
+      taxDocuments: {
+        some: {
+          kind: { in: ['receipt', 'return_receipt'] },
+          receiptState: args.receipts,
+          ...(args.receiptsMadeTo ? { createdAt: { lt: args.receiptsMadeTo } } : {}),
+        },
+      },
+    });
+  }
   // the parcels of the delivery provider that wait for an admin: the orders of the case
   if (args.parcelOrderIds) and.push({ id: { in: args.parcelOrderIds } });
   if (args.withoutParcels) {

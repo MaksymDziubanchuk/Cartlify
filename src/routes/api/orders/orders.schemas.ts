@@ -418,7 +418,8 @@ const postCurrentConfirmSchema = {
         '`DELIVERY_POSTAL_CODE_INVALID`: not a postal code of that country (a typo, a code of another country). ' +
         '`DELIVERY_CITY_INVALID`, `DELIVERY_STREET_INVALID`: no letter in it. `DELIVERY_HOUSE_INVALID`: a house of only spaces. ' +
         '`ORDER_ITEMS_REQUIRED`: the order is empty. ' +
-        '`ORDER_TOTAL_BELOW_MINIMUM`: the total, the items at the prices of the catalog and the delivery, is below the smallest payment any payment provider takes, nothing is reserved; `details` has the smallest total (`minimum`) and its `currency`.',
+        '`ORDER_TOTAL_BELOW_MINIMUM`: the total, the items at the prices of the tax rule of the country and the delivery, is below the smallest payment any payment provider takes, nothing is reserved; `details` has the smallest total (`minimum`) and its `currency`. ' +
+        '`ORDER_TOTAL_ABOVE_MAXIMUM`: the total is above the largest one the shop takes (maxOrderTotal), `details.maximum` with its `currency`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -443,6 +444,8 @@ const postCurrentConfirmSchema = {
         '`ORDER_PRICES_CHANGED`: the price of an item is not the price its variant sells at now, `details.items` names them `[{ itemId, variantId, unitPrice, price }]` (`price` is the one now); reload the order and confirm again. ' +
         '`DELIVERY_PRICE_CHANGED`: the price of the delivery the page showed (`expectedDeliveryPrice`) is not the price now (for a carrier: the price the delivery provider gives now for the cart), `details.price` is the price now; the page shows it and the buyer confirms again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
         '`DELIVERY_SERVICE_UNAVAILABLE`: the carrier picked is not among the prices of the delivery provider for the cart and the address now; the page asks the prices again. ' +
+        '`TAX_SALES_STOPPED`: the delivery to the country is not available now (the sales there passed the threshold of the tax of a country where the shop is not registered; root is told). ' +
+        '`TAX_PARCEL_LIMIT`: the parcel is within the limit of a country where the shop is not registered for its tax: an order above `details.limit` (`currency`, with the delivery or without, `withDelivery`, with the tax or without, `withVat`) can go, the buyer paying the tax on receipt (docs/taxes.md). ' +
         '`ORDER_ITEMS_NOT_DELIVERABLE`: a carrier and a variant without its weight or sizes, `details.items` `[{ itemId, variantId }]`; the owner takes them out or picks another way. ' +
         '`ORDER_STATUS_NOT_ALLOWED`: the order is not a cart nor an unconfirmed order. ' +
         '`LEGAL_ACCEPTANCE_REQUIRED`: the customer did not accept a version in force of the terms ' +
@@ -474,6 +477,21 @@ const postCurrentConfirmSchema = {
 } satisfies FastifySchema;
 
 // the ways the cart goes to an address, with their prices
+// the tax of the cart of the example (two units at 14.99, Spain at 21 %: 5.20 of it) sent a way
+// whose price holds the tax given
+const exampleTaxOf = (delivery: number, deliveryTax: number) => {
+  const cents = (value: number) => Math.round(value * 100) / 100;
+  const gross = cents(29.98 + delivery);
+  const tax = cents(5.2 + deliveryTax);
+  return {
+    items: [{ itemId: 31, unitPrice: 14.99, totalPrice: 29.98, rate: 21, tax: 5.2 }],
+    totals: [{ rate: 21, net: cents(gross - tax), tax, gross }],
+    total: gross,
+    payOnReceipt: false,
+    refusal: null,
+  };
+};
+
 const postDeliveryOptionsSchema = {
   operationId: 'getDeliveryOptions',
   summary: 'Get the ways the cart goes to an address, with their prices',
@@ -514,14 +532,29 @@ const postDeliveryOptionsSchema = {
           zone: { name: 'Spain', freeFrom: 60 },
           remainingToFree: 30.02,
           options: [
-            { method: 'manual', price: 5, carrier: null, label: null, days: null },
-            { method: 'pickup', price: 0, carrier: null, label: null, days: null },
+            {
+              method: 'manual',
+              price: 5,
+              carrier: null,
+              label: null,
+              days: null,
+              tax: exampleTaxOf(5, 0.87),
+            },
+            {
+              method: 'pickup',
+              price: 0,
+              carrier: null,
+              label: null,
+              days: null,
+              tax: exampleTaxOf(0, 0),
+            },
             {
               method: 'carrier',
               price: 4.2,
               carrier: { name: 'Correos', service: 'Standard', connection: '6001' },
               label: 'Correos',
               days: '1-3',
+              tax: exampleTaxOf(4.2, 0.73),
             },
           ],
           carriersUnavailable: null,
@@ -625,6 +658,10 @@ const postParcelsSchema = {
   description:
     'Makes the parcels of a paid order of a carrier of the delivery provider when the goods are ' +
     'packed: each parcel with its label (`labelUrl` of the shipments of the order, to print), the ' +
+    'tax number of the shop in the country of the recipient when the parcel crosses customs and the ' +
+    'shop took the tax of that country (an IOSS number with the parcel; any other number on a ' +
+    'commercial invoice, sent to the carrier with the parcel when it takes it electronically, else ' +
+    'to print, `customsInvoice` of the shipment), the ' +
     'number and the link of the carrier when it gives them, and what the provider priced it at as ' +
     'the cost of the send (a line of the money journal; correct it with PATCH ' +
     '/api/orders/{orderId}/shipments/{shipmentId} when the carrier charged another sum). An empty ' +
@@ -658,6 +695,9 @@ const postParcelsSchema = {
         '`PARCELS_ALREADY_MADE`: the live parcels hold every unit; void them first (POST /api/orders/{orderId}/parcels/void) to make them again. ' +
         '`DELIVERY_SENDER_REQUIRED`, `DELIVERY_PROVIDER_NOT_CONFIGURED`: the shop has no address the parcels go from, or no key of the delivery provider.' +
         ' ' +
+        '`DELIVERY_TAX_NUMBER_MISSING`: the order crosses customs to a country the shop took the ' +
+        'tax of and its record has no tax number of the shop now (the buyer would pay the tax again ' +
+        'at the border), `details.country`; root writes it (PUT /api/root/countries). ' +
         '`DELIVERY_PARCEL_REFUSED`: the carrier did not make the first parcel, `details.message` its ' +
         'reason (a street it does not know, a weight it does not take): nothing is made, correct the ' +
         'address (PATCH /api/orders/{orderId}/delivery) or the boxes and make them again. ' +
@@ -771,7 +811,7 @@ const getOrdersSchema = {
     'The cart (`pending`) is not an order and is not listed, GET /api/orders/current gives it. ' +
     'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of variants a buyer does not see are removed from it. ' +
     '`paidFrom` and `paidTo` keep the orders paid in that period, from its start and before its end, cancelled ones too (`cancelledAt` says when); `sortBy=paidAt` lists the paid orders by the time of their payment. ' +
-    '`statuses` takes a few statuses, `productId` the orders that hold a variant of a product, `variantId` the orders that hold the variant. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient, the city or the postal code of the address, a tracking number), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages. What holds the orders from their sending: `holds` (reasons through commas, `any` or `none`; `holds=none&statuses=paid` are the paid orders that wait only for the shop) and `fraudWarnedFrom` (the orders the provider warned of after they were sent); each row of an admin has its `holds`, `fraudWarnedAt` and `money` (the lines of the money journal of the order).',
+    '`statuses` takes a few statuses, `productId` the orders that hold a variant of a product, `variantId` the orders that hold the variant. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient, the city or the postal code of the address, a tracking number), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages. What holds the orders from their sending: `holds` (reasons through commas, `any` or `none`; `holds=none&statuses=paid` are the paid orders that wait only for the shop) and `fraudWarnedFrom` (the orders the provider warned of after they were sent). The fiscal receipts: `receipts` (the orders with a receipt that waits or that the provider refused, `receiptsMadeTo` the ones made before a time); each row of an admin has its `holds`, `fraudWarnedAt` and `money` (the lines of the money journal of the order).',
 
   querystring: {
     $ref: 'ordersGetQuerySchema#',
@@ -818,6 +858,188 @@ const getOrdersSchema = {
 } satisfies FastifySchema;
 
 // Schema for single order lookup
+// the tax documents of an order (docs/taxes.md)
+const documentParams = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['orderId', 'documentId'],
+  properties: {
+    orderId: { type: 'string', pattern: '^[1-9][0-9]*$', description: 'Id of the order.' },
+    documentId: { type: 'string', pattern: '^[1-9][0-9]*$', description: 'Id of the document.' },
+  },
+} as const;
+
+// the documents of an order, the oldest first, as both routes of the documents answer them
+const orderDocumentsResponse = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['items'],
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'id',
+          'kind',
+          'number',
+          'correctsId',
+          'documentId',
+          'net',
+          'tax',
+          'gross',
+          'currency',
+          'createdAt',
+          'receipt',
+        ],
+        properties: {
+          id: { type: 'integer' },
+          kind: {
+            type: 'string',
+            enum: ['invoice', 'credit_note', 'receipt', 'return_receipt'],
+          },
+          number: {
+            type: ['string', 'null'],
+            description: 'The series and the number; null for a receipt.',
+          },
+          correctsId: { type: ['integer', 'null'], description: 'The document it corrects.' },
+          documentId: {
+            type: ['integer', 'null'],
+            description: 'The document a receipt registers.',
+          },
+          net: { type: 'number' },
+          tax: { type: 'number' },
+          gross: { type: 'number' },
+          currency: { type: 'string' },
+          createdAt: { type: 'string', format: 'date-time' },
+          receipt: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            required: ['provider', 'state', 'number', 'url', 'text', 'error'],
+            properties: {
+              provider: {
+                type: ['string', 'null'],
+                description: 'The provider that took it; null for a receipt not sent yet.',
+              },
+              state: { type: 'string', enum: ['pending', 'registered', 'refused', 'manual'] },
+              number: { type: ['string', 'null'] },
+              url: { type: ['string', 'null'] },
+              text: { type: ['string', 'null'] },
+              error: {
+                type: ['string', 'null'],
+                description:
+                  'The last answer of the provider that was not a receipt (the code and its details), for an ' +
+                  'admin; always null for the buyer.',
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+const getOrderDocumentsSchema = {
+  operationId: 'getOrderDocuments',
+  summary: 'List the tax documents of an order',
+  description:
+    'The invoices and credit notes the shop made of the order (an invoice at its payment when the ' +
+    'shop makes one of every order or the buyer asked for one, a credit note when money for its ' +
+    'goods went back, an invoice that reverses a credit note when that money came back), each ' +
+    'with its number in its series and its sums (below 0 for a credit note), and the fiscal ' +
+    'receipts registered for them at the provider (its state, number, link and the text the law ' +
+    'asks to print). The buyer reads the documents of their own orders, an admin of any order.',
+  params: { $ref: 'ordersGetByIdParamsSchema#' },
+  response: {
+    200: { description: 'The documents, the oldest first.', ...orderDocumentsResponse },
+    404: {
+      description: '`ORDER_NOT_FOUND`: no order with this id the user may read.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+const getOrderDocumentPdfSchema = {
+  operationId: 'getOrderDocumentPdf',
+  summary: 'Get the PDF of an invoice or a credit note',
+  description:
+    'The document drawn from what the shop keeps of it, in the language of the shop (an official ' +
+    'document), with the code and the text of the fiscal receipt registered for it at the top. ' +
+    'Nothing is stored: the same document always draws the same. A receipt has no PDF of ours (the ' +
+    'link of its provider).',
+  params: documentParams,
+  response: {
+    200: {
+      description: 'The PDF.',
+      content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } },
+    },
+    404: {
+      description:
+        '`ORDER_NOT_FOUND`: no order with this id the user may read. `TAX_DOCUMENT_NOT_FOUND`: ' +
+        'the order has no invoice or credit note of this id.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+const postReceiptConfirmationSchema = {
+  operationId: 'confirmReceiptByHand',
+  summary: 'Confirm a fiscal receipt registered by hand',
+  description:
+    'A fiscal receipt of the order that waits or that the provider refused (docs/taxes.md): the ' +
+    'admin registered it by hand at the fiscal service and gives the number it got there, and the ' +
+    'link to check it when there is one. The receipt is `manual` from then on and is not sent ' +
+    'again; the buyer gets no mail of it. Admin and root only.',
+  params: documentParams,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['number'],
+    properties: {
+      number: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 100,
+        pattern: '\\S',
+        description: 'The number of the receipt at the fiscal service.',
+      },
+      url: {
+        type: ['string', 'null'],
+        format: 'uri',
+        maxLength: 2048,
+        pattern: '^https://\\S+$',
+        description: 'The page of the fiscal service to check it at, on https (the buyer sees it).',
+      },
+    },
+    examples: [{ number: 'A-4AM4GHCNGLVNYA', url: null }],
+  },
+  response: {
+    200: {
+      description: 'The documents of the order, the receipt confirmed.',
+      ...orderDocumentsResponse,
+    },
+    400: { description: 'Invalid body.', $ref: 'errorResponseSchema#' },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    404: {
+      description:
+        '`TAX_DOCUMENT_NOT_FOUND`: the order has no receipt of this id (an invoice or a credit ' +
+        'note is not one).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`RECEIPT_STATE_INVALID`: the receipt is registered or confirmed already ' +
+        '(`details.state`).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
 const getOrderByIdSchema = {
   operationId: 'getOrderById',
   summary: 'Get order by id',
@@ -1628,9 +1850,52 @@ const postHoldDecisionSchema = {
   },
 } satisfies FastifySchema;
 
+const getParcelCustomsInvoiceSchema = {
+  operationId: 'getParcelCustomsInvoice',
+  summary: 'Get the commercial invoice of a parcel with the tax number of the shop',
+  description:
+    'A parcel of the provider that crosses customs with the tax number of the shop in the country ' +
+    'of the recipient on a commercial invoice (`customsInvoice` of the shipment, docs/taxes.md): ' +
+    'the invoice drawn again by the delivery provider from the parcel as it was made (its boxes, ' +
+    'what they hold, the invoice of the order), to print and put on the parcel with the label. The ' +
+    'carrier is not sent it again. Admin and root only.',
+  params: { $ref: 'ordersShipmentParamsSchema#' },
+  response: {
+    200: {
+      description: 'The PDF.',
+      content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } },
+    },
+    401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
+    403: { description: 'Admin and root only.', $ref: 'errorResponseSchema#' },
+    404: {
+      description:
+        '`ORDER_SHIPMENT_NOT_FOUND`: the order has no parcel of the provider of this id.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`CUSTOMS_INVOICE_NONE`: the parcel has no commercial invoice of the tax number. ' +
+        '`PARCEL_STATE_INVALID`: the parcel waits for its void or was voided, `details.state`. ' +
+        '`DELIVERY_PROVIDER_NOT_CONFIGURED`: the server has no key of the delivery provider. ' +
+        '`DELIVERY_TAX_NUMBER_MISSING`: the record of the country has no tax number of the shop ' +
+        'now, `details.country`. `DELIVERY_SENDER_REQUIRED`: the shop has no address the parcels ' +
+        'go from. `DELIVERY_PARCEL_REFUSED`: the provider did not draw it, `details.message`.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+    503: {
+      description: '`DELIVERY_PROVIDER_UNAVAILABLE`: the provider did not answer.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Group order routes under the orders Swagger tag
 const taggedOrdersSchema = withOpenApiTag(
   {
+    getOrderDocumentsSchema,
+    getOrderDocumentPdfSchema,
+    postReceiptConfirmationSchema,
     getCurrentOrderSchema,
     postCurrentItemsSchema,
     patchCurrentItemsSchema,
@@ -1643,6 +1908,7 @@ const taggedOrdersSchema = withOpenApiTag(
     postParcelsBulkSchema,
     postParcelsVoidSchema,
     postParcelVoidConfirmationSchema,
+    getParcelCustomsInvoiceSchema,
     getOrdersSchema,
     getOrderByIdSchema,
     patchOrderStatusSchema,
