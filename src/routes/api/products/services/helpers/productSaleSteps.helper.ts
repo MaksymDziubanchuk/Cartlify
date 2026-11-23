@@ -82,13 +82,19 @@ const saleStepSelect = {
 const DAY_MS = 86_400_000;
 
 // the lowest price of the 30 days before a sale that starts now: the prices of the log of prices of
-// the variant, read in the transaction of the step, and the price it sells at right now. The time
-// is the one of the app, the dates of the log are utc as prisma keeps them
+// the variant, read in the transaction of the step, and the price it sells at right now. Now is the
+// later of two clocks: the one of the app, which the other times of a sale follow, and the one of
+// the database, which the lines of the log take their time from (a column without a time zone, as
+// its default writes it). The app may run behind the database (another machine): by its clock
+// alone a line this transaction wrote, a price changed together with the sale, would be left out
 async function lowestPriorPrice(ctx: SaleStepContext, variant: VariantSaleState) {
-  const to = new Date(Date.now());
+  const [{ now: dbNow }] = await ctx.db.$queryRaw<{ now: Date }[]>`
+    select clock_timestamp()::timestamp(3) as now
+  `;
+  const to = new Date(Math.max(Date.now(), dbNow.getTime()));
   const from = new Date(to.getTime() - SALE_PRIOR_PRICE_DAYS * DAY_MS);
   const lines = await ctx.db.productPriceChangeLog.findMany({
-    where: { variantId: variant.id, createdAt: { lt: to } },
+    where: { variantId: variant.id, createdAt: { lte: to } },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: { oldPrice: true, newPrice: true, endsAt: true, createdAt: true },
   });
