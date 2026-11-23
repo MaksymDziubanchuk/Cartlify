@@ -52,6 +52,18 @@ const realShippyPro = isRealService('shippypro');
 const SHIPPYPRO_KEY = 'SHIPPYPRO_API_KEY';
 const SHIPPYPRO_TEST_KEY = 'SHIPPYPRO_API_TEST_KEY';
 
+// fiskaly: a mock unless the run takes it for real (service:fiskaly; tests/helpers/fiskaly.ts). For
+// real the tests take FISKALY_API_TEST_KEY and FISKALY_API_TEST_SECRET of .env (the key of the
+// managed organization of the tests in TEST, the secrets of the same names in ci), never the key of
+// the app; the environment is TEST in both modes. The mock takes made-up keys
+const realFiskaly = isRealService('fiskaly');
+const FISKALY_KEYS = ['FISKALY_API_KEY', 'FISKALY_API_SECRET'] as const;
+const FISKALY_TEST_KEYS = ['FISKALY_API_TEST_KEY', 'FISKALY_API_TEST_SECRET'] as const;
+const MOCK_FISKALY = {
+  FISKALY_API_KEY: 'cartlify-tests-fiskaly-mock-key',
+  FISKALY_API_SECRET: 'cartlify-tests-fiskaly-mock-secret',
+};
+
 // docker test stack from docker-compose.test.yml, built by npm run db:test:up
 isolateEnv(
   {
@@ -96,6 +108,8 @@ isolateEnv(
     // a characteristic of a choice holds 5 values at most here, so a test of the limit stays short
     ATTRIBUTE_OPTIONS_MAX: '5',
     SHIPPYPRO_WEBHOOK_SECRET: SHIPPYPRO_TEST_WEBHOOK_SECRET,
+    FISKALY_ENVIRONMENT: 'test',
+    ...(realFiskaly ? {} : MOCK_FISKALY),
     ...(realShippyPro ? {} : { [SHIPPYPRO_KEY]: 'cartlify-tests-shippypro-mock' }),
     ...(realSendGrid ? {} : MOCK_SENDGRID),
     ...(realCloudinary ? {} : MOCK_CLOUDINARY),
@@ -107,6 +121,7 @@ isolateEnv(
       ...(realSendGrid ? [SENDGRID_TEST_KEY, SENDER_KEY] : []),
       ...(realOpenAi ? [OPENAI_TEST_KEY] : []),
       ...(realShippyPro ? [SHIPPYPRO_TEST_KEY] : []),
+      ...(realFiskaly ? FISKALY_TEST_KEYS : []),
     ],
   },
 );
@@ -158,6 +173,19 @@ if (realShippyPro) {
     throw new Error(`service:shippypro takes ${SHIPPYPRO_TEST_KEY} from .env or the environment`);
   }
   process.env[SHIPPYPRO_KEY] = process.env[SHIPPYPRO_TEST_KEY]!.trim();
+}
+
+// the same for fiskaly: the keys of the app in the tests are the test keys of TEST
+if (realFiskaly) {
+  const missing = FISKALY_TEST_KEYS.filter((key) => !process.env[key]?.trim());
+  if (missing.length) {
+    throw new Error(
+      `service:fiskaly takes these from .env or the environment: ${missing.join(', ')}`,
+    );
+  }
+  FISKALY_KEYS.forEach((key, i) => {
+    process.env[key] = process.env[FISKALY_TEST_KEYS[i]!]!.trim();
+  });
 }
 
 // stop before any test file imports the app

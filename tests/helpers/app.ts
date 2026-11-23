@@ -9,6 +9,11 @@ import { prisma } from '@db/client.js';
 import { captureLogs } from './logs.js';
 import { installContractCheck } from './contract.js';
 import { applyTestShopSettingsBaseline, INTEGRATION_SHOP_BASELINE } from './shopSettings.js';
+import {
+  applyTestShopCountriesBaseline,
+  ensureBaselineCountriesInDb,
+  INTEGRATION_COUNTRIES_BASELINE,
+} from './shopCountries.js';
 
 // the server builds a serializer for every answer of every route when it starts, about 3 s of
 // every test file; a file calls a few routes, so here each one is built on its first use. It is
@@ -54,6 +59,10 @@ export async function startApp(
   // the server defaults alone give no delivery and no seller; the shop every integration test
   // starts with (tests/helpers/shopSettings.ts)
   applyTestShopSettingsBaseline(INTEGRATION_SHOP_BASELINE);
+  // the records of the countries of the test zone, without customs or a tax, in the memory and in
+  // the database (tests/helpers/shopCountries.ts)
+  await ensureBaselineCountriesInDb();
+  applyTestShopCountriesBaseline(INTEGRATION_COUNTRIES_BASELINE);
   await app.ready();
 
   return app;
