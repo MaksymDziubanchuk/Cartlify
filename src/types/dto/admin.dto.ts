@@ -170,8 +170,8 @@ export interface AdminDeliveryMoneyDto {
   // the order was paid in keeps it
   refunded: { orders: number; revenue: number };
   // the sends the shop owes the carriers for, by the time they were sent (shippedAt); the cost is
-  // the lines of their costs with the corrections, by the time they were written; the ones without
-  // a cost count apart
+  // the lines of their costs as written (and what a carrier gave back for a label voided), by the
+  // time they were written; the ones without a cost count apart
   shipping: { sends: number; cost: number; withoutCost: number };
   // the parcels the shop paid to carry goods back from buyers, by the time they were sent (the time
   // the admin gave), the cost as for the sends; the ones without a cost count apart. deducted: the
@@ -185,7 +185,11 @@ export interface AdminDeliveryMoneyDto {
     deducted: number;
     reimbursed: number;
   };
-  // the income less what went back and less what the carriers cost, the parcels back too
+  // the corrections of the costs of the sends and of the parcels back written in the period: a
+  // person changed a sum they wrote, the difference (above 0 more spent)
+  corrections: number;
+  // the income less what went back and less what the carriers cost, the parcels back and the
+  // corrections too
   result: number;
 }
 
@@ -779,7 +783,7 @@ export type AdminStockLogGroupDto = Record<string, string | number | null> & {
 // THE MONEY LOG: every movement of money, a line for each part of it
 export type AdminMoneyPurpose =
   'order' | 'return' | 'late_payment' | 'hand' | 'dispute' | 'shipping' | 'compensation';
-export type AdminMoneyPart = 'goods' | 'delivery' | 'deduction' | 'way_back' | 'covered' | 'whole';
+export type AdminMoneyPart = 'goods' | 'delivery' | 'deduction' | 'way_back' | 'whole';
 export type AdminMoneyState = 'in_transit' | 'sent';
 
 export interface AdminMoneyLogQueryDto extends AdminLogQueryDto {
@@ -970,7 +974,6 @@ export type AdminAlertKind =
   | 'compensation_refunds_failed'
   | 'bank_money_to_decide'
   | 'returns_money_short'
-  | 'returns_money_overpaid'
   | 'disputes_to_answer'
   | 'disputes_lost'
   | 'returns_manual_check'
@@ -994,19 +997,28 @@ export type AdminAlertKind =
   | 'fraud_warnings'
   | 'fraud_warnings_shipped'
   | 'payment_reviews'
-  | 'admin_actions';
+  | 'receipts_not_issued'
+  | 'receipts_refused'
+  | 'admin_actions'
+  | 'tax_threshold_near'
+  | 'tax_threshold_passed'
+  | 'tax_threshold_dropped'
+  | 'tax_sales_stopped'
+  | 'tax_parcel_limit_refusals'
+  | 'tax_rate_soon'
+  | 'tax_threshold_period_ended';
 
 export type AdminAlertThresholdUnit =
-  'days' | 'units' | 'seconds' | 'hours' | 'percent' | 'permille';
+  'days' | 'units' | 'seconds' | 'minutes' | 'hours' | 'percent' | 'permille' | 'refusals';
 
-// the threshold of a kind: the one the admin set (custom) or the one the server gives
+// the numbers of a kind as the person wrote them (value null: not written, the kind does not work
+// for them yet), with their bounds; a kind with a second number has its window
 export interface AdminAlertThresholdDto {
-  value: number;
-  default: number;
+  value: number | null;
   min: number;
   max: number;
   unit: AdminAlertThresholdUnit;
-  custom: boolean;
+  window: { value: number | null; min: number; max: number; unit: AdminAlertThresholdUnit } | null;
 }
 
 // the request to the list of the app that shows the cases of a kind: its path and query
@@ -1030,6 +1042,12 @@ export interface AdminAlertDto {
   // sending worker, the time the delivery provider stopped answering); null for the others, and
   // while it has not happened
   occurredAt: string | null;
+  // the second number the kind is counted with (the days of a window), null for a kind without one
+  window: number | null;
+  // a kind that only informs: Close puts away what the person saw (seenUntil, null before the
+  // first time)
+  informational: boolean;
+  seenUntil: string | null;
 }
 
 export interface GetAdminAlertsQueryDto {
@@ -1055,6 +1073,14 @@ export interface AdminAlertSubscriptionDto {
 
 export interface AdminAlertThresholdBodyDto {
   value: number;
+  // the days of the window, for a kind that takes one
+  window?: number;
+}
+
+// PUT /admin/alerts/seen/:kind: what a person saw of a kind that informs is put away
+export interface AdminAlertSeenDto {
+  kind: AdminAlertKind;
+  seenUntil: string;
 }
 
 export interface AdminAlertDismissalParamsDto {
@@ -1076,4 +1102,29 @@ export interface AdminAlertDismissalItemDto {
 
 export interface AdminAlertKindParamsDto {
   kind: string;
+}
+
+// GET /admin/reports/vat: one row of the report of the tax, by the rule of the tax, the country it is
+// taxed in and the rate (null: the part without a tax); the tax number root wrote for a country taxed
+// by the rule recipient
+export interface AdminVatRowDto {
+  rule: 'seller' | 'recipient' | 'none' | 'buyer_at_receipt' | null;
+  country: string | null;
+  taxNumber: string | null;
+  rate: number | null;
+  net: number;
+  tax: number;
+  gross: number;
+}
+
+export interface GetAdminVatReportResponseDto {
+  from: string;
+  to: string;
+  currency: string;
+  // the payments, the money that went back to the buyers (below 0), the money that came back to the
+  // shop after it, and all of them together
+  sales: AdminVatRowDto[];
+  returns: AdminVatRowDto[];
+  failures: AdminVatRowDto[];
+  total: AdminVatRowDto[];
 }

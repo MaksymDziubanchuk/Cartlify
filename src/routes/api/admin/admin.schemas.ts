@@ -173,6 +173,7 @@ const deliveryExample = {
   refunded: { orders: 1, revenue: 5 },
   shipping: { sends: 10, cost: 36.5, withoutCost: 2 },
   returnShipping: { sends: 1, cost: 4.5, withoutCost: 0, deducted: 0, reimbursed: 0 },
+  corrections: 0,
   result: 3.5,
 };
 
@@ -534,6 +535,93 @@ const getAccountingTimelineSchema = {
   },
 } satisfies FastifySchema;
 
+// the report of the tax for the declarations (docs/taxes.md)
+const vatRowSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['rule', 'country', 'taxNumber', 'rate', 'net', 'tax', 'gross'],
+  properties: {
+    rule: {
+      type: ['string', 'null'],
+      enum: ['seller', 'recipient', 'none', 'buyer_at_receipt', null],
+      description:
+        'The rule of the tax: the tax of the country of the shop, the tax of the country of the ' +
+        'recipient, no tax, the tax the buyer pays on receipt; null for a sale of a shop that took ' +
+        'no tax.',
+    },
+    country: { type: ['string', 'null'], description: 'The country the sale is taxed in.' },
+    taxNumber: {
+      type: ['string', 'null'],
+      description: 'The tax number root wrote for a country taxed by the rule recipient.',
+    },
+    rate: { type: ['number', 'null'], description: 'The rate; null: the part without a tax.' },
+    net: { type: 'number' },
+    tax: { type: 'number' },
+    gross: { type: 'number' },
+  },
+} as const;
+
+const vatRowsSchema = { type: 'array', items: vatRowSchema } as const;
+
+const getVatReportSchema = {
+  operationId: 'getVatReport',
+  summary: 'Get the report of the tax for the declarations',
+  description:
+    'The tax of the money of a period, from `from` (taken in) to `to` (left out), from the ' +
+    'money journal: each line of money of an order holds its tax share by share of the copy of ' +
+    'the order (each item and the delivery with the rule, the country and the rate the ' +
+    'confirmation fixed). By the rule, the country and the rate: `sales`, the payments; ' +
+    '`returns`, the money that went back to the buyers (a refund when it was sent, money sent ' +
+    'outside the app, and money given back by hand or taken by a bank once root or the system ' +
+    'decided what it was for, in the moment of the decision; a decision made again turns the ' +
+    'old shares round here; below 0); `failures`, the money that came back to the shop after it ' +
+    '(a refund that failed after it was sent, money the buyer gave back); ' +
+    '`total`, all of them together. A refund in parts meets the tax of its items to the cent (the ' +
+    'rule of the remainder), the same as the credit notes. Every event is in the period it ' +
+    'happened in: a period that is over never changes. A country taxed by the rule recipient ' +
+    'names the tax number root wrote for it. The tax of the purchases is not kept. In the money ' +
+    'of the shop. This operation is restricted to privileged users.',
+  querystring: {
+    $ref: 'adminStatsQuerySchema#',
+    examples: [{ from: '2026-10-01T00:00:00.000Z', to: '2027-01-01T00:00:00.000Z' }],
+  },
+  response: {
+    200: {
+      description: 'The tax of the period.',
+      type: 'object',
+      additionalProperties: false,
+      required: ['from', 'to', 'currency', 'sales', 'returns', 'failures', 'total'],
+      properties: {
+        from: { type: 'string', format: 'date-time' },
+        to: { type: 'string', format: 'date-time' },
+        currency: { type: 'string', description: 'The currency of the shop, ISO 4217.' },
+        sales: vatRowsSchema,
+        returns: vatRowsSchema,
+        failures: vatRowsSchema,
+        total: vatRowsSchema,
+      },
+    },
+    400: {
+      description:
+        'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
+        '(INVALID_STATS_PERIOD).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to read the report of the tax.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while counting the report of the tax.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // period: the list is filtered by from and to; expiresBy: by the last good day of a batch
 const stockErrors = (what: string, filter: 'period' | 'expiresBy') => ({
   400: {
@@ -767,12 +855,12 @@ const getMoneyLogSchema = {
     'in `coversId`, the reason in `failure` and `failureText`; the line of the refund stays in ' +
     'transit), the money sent to the buyer outside the app (`money.outside`, with `method`, ' +
     '`note` and the day it really happened, `happenedAt`), money that came to the shop outside ' +
-    'the app (`money.received`: from the buyer, or from a carrier for a send), what a share of ' +
-    'money already with the buyer became (`money.share_moved`, a sum of 0), what the shop paid ' +
-    'a carrier (`money.return_parcel_cost`, ' +
-    '`money.shipping_cost`), what the bank took and gave back for a dispute ' +
+    'the app (`money.received`: from the buyer, or from a carrier for a send), what the shop paid ' +
+    'a carrier (`money.return_parcel_cost`, `money.shipping_cost`) and what a carrier gave back ' +
+    'for a label voided (`money.shipping_refund`), what the bank took and gave back for a dispute ' +
     '(`money.dispute_withdrawn`, `money.dispute_reinstated`, with `disputeId`) and the correction ' +
-    'of a sum (`money.correction`). `amount` is to the cent, above 0 to the shop and below 0 ' +
+    'of a sum a person wrote (`money.correction`). A line is a movement of money, never 0: what it ' +
+    'was for is written into it. `amount` is to the cent, above 0 to the shop and below 0 ' +
     'from it; the line names what it is about (`orderId`, the buyer `userId` and `user`, ' +
     '`returnId`, the parcel or the send, `disputeId`), the payment at the provider (`paymentId`), ' +
     'who did it (none for the work of the system: the webhook, the worker), the address and the ' +
@@ -1015,8 +1103,22 @@ const getAlertsSchema = {
     'sent an early warning of fraud holds (`fraud_warnings`; the list of orders puts the order ' +
     'paid first first, each row says since when it is held), the orders sent the provider ' +
     'warned of in some last days (`fraud_warnings_shipped`) and the orders a review of the ' +
-    'provider holds (`payment_reviews`); the cases of the last four are orders. Root alone gets ' +
-    'the lines the admins wrote in some last hours (`admin_actions`). Each kind names the request to the list of the app with its cases ' +
+    'provider holds (`payment_reviews`); the cases of the last four are orders; and the fiscal ' +
+    'receipts (docs/taxes.md) the provider has not registered for some minutes ' +
+    '(`receipts_not_issued`) or refused (`receipts_refused`: make it by hand and confirm it, ' +
+    'POST /api/orders/:orderId/documents/:documentId/receipt-confirmation), each case a receipt. ' +
+    'Root alone gets the lines the admins wrote in some last hours (`admin_actions`) and the tax ' +
+    'of the countries: the sales of a threshold (of a country, or of its group) at some per cent ' +
+    'of it (`tax_threshold_near`), a threshold passed where the shop is registered, the tax of ' +
+    'the country taken now (`tax_threshold_passed`), an order refused for a threshold where it is ' +
+    'not, in the period (`tax_sales_stopped`), each case a threshold; and what only informs ' +
+    '(`informational`, Close: PUT /api/admin/alerts/seen/:kind): some orders to a country refused ' +
+    'within the limit of a parcel in some last days (`tax_parcel_limit_refusals`, two numbers: the ' +
+    'refusals and the days of the window, up to 30; counted only while a root follows it with ' +
+    'both, more than 1000 counts as 1001), a rate of a country that starts in some days ' +
+    '(`tax_rate_soon`), the period of a threshold that ended, its sales counted from 0 ' +
+    '(`tax_threshold_period_ended`). A kind with numbers counts nothing (count 0, threshold ' +
+    'null) until the actor writes them: the server gives none. Each kind names the request to the list of the app with its cases ' +
     '(`list`): the page of an admin shows a few of its rows and sorts them the way that list ' +
     'sorts, a click leads to the list or to a case. The cases the actor put aside are left out ' +
     'of `count` and counted in `dismissed`. The frontend asks again at the interval the admin ' +
@@ -1049,9 +1151,11 @@ const getAlertSubscriptionsSchema = {
   operationId: 'getAdminAlertSubscriptions',
   summary: 'Get the settings of the alerts',
   description:
-    'Each kind of alerts of the actor: whether they follow it and its threshold (the one they ' +
-    'set or the one the server gives, its bounds and unit; null for a kind without one). Every ' +
-    'kind is followed until the actor turns it off. Each admin and each root has their own. The ' +
+    'Each kind of alerts of the actor: whether they follow it and its numbers (the ones they ' +
+    'wrote, null while not written, with the bounds and the unit, and the window of a kind that ' +
+    'takes a second number; null for a kind without one). No kind is followed until the actor ' +
+    'follows it, and a kind with numbers is followed only with them written: the server gives ' +
+    'none. Each admin and each root has their own. The ' +
     'kinds of the newsletters are listed for root and for an admin root allowed to run the ' +
     'newsletters only, the kinds of the decisions on the money for root and for an admin root ' +
     'allowed to handle the money only (the rights are read from the database at every request).',
@@ -1081,8 +1185,9 @@ const alertSubscriptionSchema = (on: boolean) =>
     operationId: on ? 'subscribeAdminAlert' : 'unsubscribeAdminAlert',
     summary: on ? 'Follow a kind of alerts' : 'Stop following a kind of alerts',
     description: on
-      ? 'The actor follows the kind again: GET /api/admin/alerts?subscribed=true names it. Its ' +
-        'threshold stays. One followed stays so.'
+      ? 'The actor follows the kind: GET /api/admin/alerts?subscribed=true names it. A kind with ' +
+        'numbers needs them written first (ALERT_THRESHOLD_REQUIRED). Its numbers stay. One ' +
+        'followed stays so.'
       : 'The actor alone stops following the kind: GET /api/admin/alerts?subscribed=true leaves ' +
         'it out, GET /api/admin/alerts still names it. Its threshold stays. One not followed ' +
         'stays so.',
@@ -1095,7 +1200,9 @@ const alertSubscriptionSchema = (on: boolean) =>
         $ref: 'adminAlertSubscriptionSchema#',
       },
       400: {
-        description: 'A kind that is not a name of a kind (VALIDATION_ERROR).',
+        description:
+          'A kind that is not a name of a kind (VALIDATION_ERROR); a kind with numbers followed ' +
+          'before they are written (ALERT_THRESHOLD_REQUIRED, details.kind).',
         $ref: 'errorResponseSchema#',
       },
       401: {
@@ -1108,7 +1215,8 @@ const alertSubscriptionSchema = (on: boolean) =>
       },
       404: {
         description:
-          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root, ' +
+          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions and the tax_* kinds ' +
+          'are kinds of root, ' +
           'the newsletter_* kinds are for root and for an admin root allowed to run the newsletters, ' +
           'the kinds of the decisions on the money (hand_refunds_to_*, fraud_warnings*, ' +
           'payment_reviews) for root and for an admin root allowed to handle the money.',
@@ -1127,13 +1235,14 @@ const deleteAlertSubscriptionSchema = alertSubscriptionSchema(false);
 const alertThresholdSchema = (set: boolean) =>
   ({
     operationId: set ? 'setAdminAlertThreshold' : 'resetAdminAlertThreshold',
-    summary: set ? 'Set the threshold of a kind of alerts' : 'Give the threshold back',
+    summary: set ? 'Set the numbers of a kind of alerts' : 'Take the numbers away',
     description: set
-      ? 'Sets the threshold of the kind for the actor only, within the bounds of the kind (GET ' +
-        '/api/admin/alerts/subscriptions names them): the alerts count with it and its list is ' +
-        'asked with it. Whether the actor follows the kind stays.'
-      : 'The kind is counted with the threshold the server gives again, for the actor only. ' +
-        'Whether the actor follows the kind stays.',
+      ? 'Writes the threshold of the kind for the actor only, and the window of a kind that takes ' +
+        'one (both at once), within the bounds of the kind (GET /api/admin/alerts/subscriptions ' +
+        'names them): the alerts count with them and its list is asked with them. Whether the ' +
+        'actor follows the kind stays.'
+      : 'The numbers of the kind go, for the actor only: it counts nothing for them until they ' +
+        'write numbers again. Only of a kind the actor does not follow (ALERT_THRESHOLD_REQUIRED).',
 
     params: { $ref: 'adminAlertKindParamsSchema#' },
     ...(set ? { body: { $ref: 'adminAlertThresholdBodySchema#' } } : {}),
@@ -1147,8 +1256,11 @@ const alertThresholdSchema = (set: boolean) =>
         description: set
           ? 'A kind that is not a name of a kind, a threshold that is not a whole number from 1 ' +
             '(VALIDATION_ERROR); a threshold out of the bounds of the kind ' +
-            '(ALERT_THRESHOLD_INVALID, details.min and details.max).'
-          : 'A kind that is not a name of a kind (VALIDATION_ERROR).',
+            '(ALERT_THRESHOLD_INVALID, details.min and details.max); a window out of its bounds or ' +
+            'missing for a kind that takes one (ALERT_WINDOW_INVALID), a window for a kind that ' +
+            'takes none (ALERT_WINDOW_NOT_TAKEN).'
+          : 'A kind that is not a name of a kind (VALIDATION_ERROR); the numbers of a kind the ' +
+            'actor follows (ALERT_THRESHOLD_REQUIRED: stop following it first).',
         $ref: 'errorResponseSchema#',
       },
       401: {
@@ -1176,6 +1288,46 @@ const alertThresholdSchema = (set: boolean) =>
 
 const putAlertThresholdSchema = alertThresholdSchema(true);
 const deleteAlertThresholdSchema = alertThresholdSchema(false);
+
+// Close of a kind that only informs
+const putAlertSeenSchema = {
+  operationId: 'closeAdminAlert',
+  summary: 'Close a kind of alerts that only informs',
+  description:
+    'What the actor saw of a kind that only informs (tax_parcel_limit_refusals, tax_rate_soon, ' +
+    'tax_threshold_period_ended) is put away, for the actor only: the kind counts what comes ' +
+    'after now, a later event alerts again. It is no stop of following: the setting stays. It ' +
+    'lives in Redis.',
+  params: { $ref: 'adminAlertKindParamsSchema#' },
+  response: {
+    200: { description: 'The kind and the time it was closed.', $ref: 'adminAlertSeenSchema#' },
+    400: {
+      description: 'A kind that is not a name of a kind (VALIDATION_ERROR).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to close a kind.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        'No such kind for the actor, or a kind that does not only inform (ALERT_KIND_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while closing the kind.',
+      $ref: 'errorResponseSchema#',
+    },
+    503: {
+      description: 'Redis is down (REDIS_UNAVAILABLE): nothing is closed.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
 
 // Schema for the cases an actor put aside
 const getAlertDismissalsSchema = {
@@ -1278,6 +1430,7 @@ const taggedAdminSchema = withOpenApiTag(
     getAccountingVariantsSchema,
     getAccountingCategoriesSchema,
     getAccountingTimelineSchema,
+    getVatReportSchema,
     getStockBatchesSchema,
     getStockMovementsSchema,
     getAuditLogSchema,
@@ -1295,6 +1448,7 @@ const taggedAdminSchema = withOpenApiTag(
     deleteAlertSubscriptionSchema,
     putAlertThresholdSchema,
     deleteAlertThresholdSchema,
+    putAlertSeenSchema,
     getAlertDismissalsSchema,
     putAlertDismissalSchema,
     deleteAlertDismissalSchema,
