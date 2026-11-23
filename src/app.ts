@@ -34,6 +34,7 @@ import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
 import { legalDtoSchemas } from '@schemas/dto/legal.dtoSchemas.js';
 import { deliveryDtoSchemas } from '@schemas/dto/delivery.dtoSchemas.js';
 import { shopSettingsDtoSchemas } from '@schemas/dto/shopSettings.dtoSchemas.js';
+import { taxesDtoSchemas } from '@schemas/dto/taxes.dtoSchemas.js';
 import { newslettersDtoSchemas } from '@schemas/dto/newsletters.dtoSchemas.js';
 import { newslettersAdminDtoSchemas } from '@schemas/dto/newslettersAdmin.dtoSchemas.js';
 import { newslettersCampaignDtoSchemas } from '@schemas/dto/newslettersCampaign.dtoSchemas.js';
@@ -162,6 +163,7 @@ for (const schema of [
   ...legalDtoSchemas,
   ...deliveryDtoSchemas,
   ...shopSettingsDtoSchemas,
+  ...taxesDtoSchemas,
   ...newslettersDtoSchemas,
   ...newslettersAdminDtoSchemas,
   ...newslettersCampaignDtoSchemas,

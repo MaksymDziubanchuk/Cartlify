@@ -1,0 +1,14 @@
+{{greeting}}
+
+{{body}}
+{{#numberLine}}{{numberLine}}
+{{/numberLine}}{{#checkUrl}}{{checkLine}}
+{{checkUrl}}
+{{/checkUrl}}{{#lawLines}}{{line}}
+{{/lawLines}}
+{{seeOrderTxt}}
+{{orderUrl}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

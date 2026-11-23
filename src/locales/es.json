@@ -173,6 +173,18 @@
     "heading": "Compensación enviada",
     "body": "Te enviamos {{amount}} como compensación de tu pedido #{{orderId}}."
   },
+  "orderReceipt": {
+    "subjectSale": "{{appName}} — Tu ticket del pedido n.º {{orderId}}",
+    "subjectReturn": "{{appName}} — Tu ticket de devolución del pedido n.º {{orderId}}",
+    "previewSale": "El ticket del pedido n.º {{orderId}} ({{amount}}) está registrado.",
+    "previewReturn": "El ticket de la devolución del pedido n.º {{orderId}} ({{amount}}) está registrado.",
+    "headingSale": "Tu ticket",
+    "headingReturn": "Tu ticket de devolución",
+    "bodySale": "El ticket de tu pedido n.º {{orderId}} por {{amount}} está registrado en la Agencia Tributaria.",
+    "bodyReturn": "El ticket del dinero devuelto de tu pedido n.º {{orderId}} ({{amount}}) está registrado en la Agencia Tributaria.",
+    "numberLine": "Número del ticket: {{number}}",
+    "checkLine": "Puedes comprobarlo en la Agencia Tributaria aquí:"
+  },
   "orderCancelledRefunded": {
     "subject": "{{appName}} — El pedido #{{orderId}} está cancelado y tu dinero va de vuelta",
     "preview": "El pedido #{{orderId}} está cancelado, {{amount}} vuelve a ti.",
@@ -431,5 +443,30 @@
     "adminUnconfirmedFallback": "Solo los clientes con un correo confirmado pueden hablar con un administrador. Confirma tu correo con el enlace que te enviamos y luego pregunta de nuevo.",
     "adminAllowedFallback": "Describe tu problema para el administrador. Un administrador podrá responder aquí más tarde. El asistente dejará de responder en este chat ahora.",
     "loopAssistance": "Puede que esté repitiéndome. ¿Podrías aclarar qué quieres saber exactamente, o quieres ayuda de un administrador?"
+  },
+  "taxDocument": {
+    "invoice": "Factura",
+    "credit_note": "Factura rectificativa",
+    "number": "Número",
+    "issuedAt": "Fecha de expedición",
+    "soldAt": "Fecha de la operación",
+    "order": "Pedido",
+    "seller": "Vendedor",
+    "buyer": "Comprador",
+    "taxedIn": "Lugar de tributación",
+    "item": "Descripción",
+    "delivery": "Envío",
+    "quantity": "Cant.",
+    "unitNet": "Precio unitario sin impuesto",
+    "rate": "Tipo",
+    "net": "Base",
+    "tax": "Impuesto",
+    "gross": "Total",
+    "totals": "Totales por tipo",
+    "noTax": "sin impuesto",
+    "totalNet": "Base imponible",
+    "totalTax": "Total impuesto",
+    "totalGross": "Total con impuesto",
+    "corrects": "Rectifica la factura"
   }
 }
