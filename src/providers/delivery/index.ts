@@ -60,6 +60,8 @@ export const deliveryProvider: DeliveryProvider = {
   createParcel: watched(picked.createParcel.bind(picked)),
   findParcel: watched(picked.findParcel.bind(picked)),
   voidParcel: watched(picked.voidParcel.bind(picked)),
+  takesDocuments: watched(picked.takesDocuments.bind(picked)),
+  customsInvoice: watched(picked.customsInvoice.bind(picked)),
 };
 
 // where the provider reports the parcels (the route lives in src/routes/api/delivery); outside the

@@ -30,8 +30,8 @@ const zone = (over: Partial<DeliveryZone>): DeliveryZone => ({
   ...over,
 });
 
-// the example of the owner: Spain 5, the EU 12 (free from 100), the rest 30 (no manual delivery
-// to a zone of carriers only)
+// the example of the owner: Spain 5, the EU 12 (free from 100), Poland 30 (no manual delivery to
+// a zone of carriers only)
 const shop = (
   zones: DeliveryZone[],
   methods: DeliveryMethodName[] = ['manual', 'pickup', 'carrier'],
@@ -42,11 +42,11 @@ const shop = (
 const OWNER_ZONES = [
   zone({}),
   zone({ name: 'EU', countries: ['FR', 'DE'], manualPrice: 12, freeFrom: 100 }),
-  zone({ name: 'Rest', countries: 'rest', manualPrice: 30 }),
+  zone({ name: 'Rest', countries: ['PL'], manualPrice: 30 }),
 ];
 
 describe('shopZoneOf', () => {
-  it('finds the zone that names the country, else the zone of the rest', () => {
+  it('finds the zone that names the country', () => {
     shop(OWNER_ZONES);
 
     expect(shopZoneOf('ES')!.name).toBe('Spain');
@@ -61,7 +61,7 @@ describe('shopZoneOf', () => {
     expect(shopZoneOf(null)).toBeNull();
   });
 
-  it('has no zone for a country outside the zones when none is of the rest', () => {
+  it('has no zone for a country outside the zones', () => {
     shop([zone({})]);
 
     expect(shopZoneOf('FR')).toBeNull();

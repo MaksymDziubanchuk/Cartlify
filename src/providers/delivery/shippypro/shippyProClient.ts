@@ -1,7 +1,11 @@
 import env from '@config/env.js';
-import { AppError, InternalError, ServiceUnavailableError } from '@utils/errors.js';
+import { AppError, ConflictError, InternalError, ServiceUnavailableError } from '@utils/errors.js';
 
-import { DELIVERY_PROVIDER_NOT_CONFIGURED, DELIVERY_PROVIDER_UNAVAILABLE } from '../types.js';
+import {
+  DELIVERY_PARCEL_REFUSED,
+  DELIVERY_PROVIDER_NOT_CONFIGURED,
+  DELIVERY_PROVIDER_UNAVAILABLE,
+} from '../types.js';
 
 // The requests to ShippyPro, their time limits and the way a silence becomes our error.
 // v1: every method is POST /v1/<Method> with the body {"Method", "Params"}; v2: a REST api of the
@@ -69,11 +73,14 @@ async function request(path: string, init: RequestInit, timeoutMs: number): Prom
 }
 
 // a method of v1. An answer that is an error of the request as a whole ({"Error": "..."}: a feature
-// the account has not, a request it could not read) is DELIVERY_PROVIDER_UNAVAILABLE too
+// the account has not, a request it could not read) is DELIVERY_PROVIDER_UNAVAILABLE too, but the
+// errors the caller names as the words of a carrier (refusal), a refusal of the carrier
+// (DELIVERY_PARCEL_REFUSED with them)
 export async function callShippyPro(
   method: string,
   params: Record<string, unknown>,
   timeoutMs: number = SHIPPYPRO_TIMEOUTS_MS.other,
+  refusal?: RegExp,
 ): Promise<ShippyProBody> {
   const body = await request(
     `/v1/${method}`,
@@ -82,6 +89,9 @@ export async function callShippyPro(
   );
 
   if (typeof body.Error === 'string' && body.Error) {
+    if (refusal?.test(body.Error)) {
+      throw new ConflictError(DELIVERY_PARCEL_REFUSED, { message: body.Error.slice(0, 500) });
+    }
     throw unavailable({ method, reason: 'error_answer' });
   }
 

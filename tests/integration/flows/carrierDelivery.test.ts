@@ -429,7 +429,6 @@ describe('a delivery by hand', () => {
         { name: 'Spain', countries: ['ES'], manualPrice: 5, freeFrom: null },
         { name: 'Poland', countries: ['PL'], manualPrice: 12, freeFrom: null },
       ],
-      customsFreeCountries: ['ES', 'PL'],
     });
     const lamp = await sized(30);
     const warsaw = {

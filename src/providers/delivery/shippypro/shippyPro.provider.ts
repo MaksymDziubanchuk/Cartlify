@@ -19,9 +19,9 @@ import {
   shippyProConfigured,
   type ShippyProBody,
 } from './shippyProClient.js';
+import { carrierTakesDocuments, carrierVoids } from './shippyProCapabilities.js';
 import { readShippyProEvents } from './shippyProEvents.js';
-import { currency, customsOf, shipmentOf } from './shippyProShapes.js';
-import { carrierVoids } from './shippyProVoid.js';
+import { crossBorderInvoiceOf, currency, customsOf, shipmentOf } from './shippyProShapes.js';
 
 // ShippyPro (api.shippypro.com): one account of the owner with the carriers connected to it, each
 // with its contract and the table of prices of the owner (zones and ranges of weight). The prices
@@ -53,6 +53,10 @@ const https = (value: unknown): string | null => {
 };
 
 const money = (value: number): number => Math.round(value * 100) / 100;
+
+// the words ShippyPro answers a commercial invoice with when the carrier did not take it
+// electronically ("Upload Paperless Failed with error: ...", checked with the test key)
+const PAPERLESS_REFUSED = /^Upload Paperless Failed/i;
 
 // the suggestions of the check of the fields: none must come (each is a mail to the owner); the
 // field names only, never what they hold
@@ -209,6 +213,11 @@ export const shippyProProvider: DeliveryProvider = {
               Incoterm: 'DAP',
             }
           : {}),
+        // the number of the import scheme of the shop goes with the parcel (any other number on the
+        // commercial invoice, customsInvoice)
+        ...(request.taxNumber?.kind === 'ioss'
+          ? { Attributes: { sp_ioss: request.taxNumber.number } }
+          : {}),
       },
       SHIPPYPRO_TIMEOUTS_MS.ship,
     );
@@ -286,6 +295,26 @@ export const shippyProProvider: DeliveryProvider = {
       CarrierName: carrierName,
     });
     return 'voided';
+  },
+
+  takesDocuments: carrierTakesDocuments,
+
+  async customsInvoice(request, electronic, log) {
+    const body = await callShippyPro(
+      'CreateCrossBorderInvoice',
+      crossBorderInvoiceOf(request, electronic),
+      SHIPPYPRO_TIMEOUTS_MS.ship,
+      PAPERLESS_REFUSED,
+    );
+    warnValidation(body, 'CreateCrossBorderInvoice', log);
+
+    // the field is CrossBorderInvoice (the documentation names it CrossborderInvoice)
+    const pdf = text(body.CrossBorderInvoice) ?? text(body.CrossborderInvoice);
+    const file = pdf ? Buffer.from(pdf, 'base64') : null;
+    if (text(body.Result) !== 'OK' || !file || file.subarray(0, 5).toString('latin1') !== '%PDF-') {
+      throw unavailable({ method: 'CreateCrossBorderInvoice', keys: Object.keys(body) });
+    }
+    return file;
   },
 
   webhook: {

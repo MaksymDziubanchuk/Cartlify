@@ -1,4 +1,4 @@
-import { shopSettings } from '@config/shopSettings.js';
+import { shopCountry } from '@config/shopCountries.js';
 import { BadRequestError } from '@utils/errors.js';
 
 // What customs need of a product for a parcel that crosses a border: the code of the goods (HS, 6
@@ -31,11 +31,11 @@ export function normalizeOriginCountry(input: unknown): string | null {
   return country;
 }
 
-// a parcel to the country crosses customs: the shop named the countries without customs
-// (customsFreeCountries) and this one is not among them. Not named: nothing is checked
+// a parcel to the country crosses customs: its record says so (docs/taxes.md). A country without a
+// record is one the shop does not deliver to, refused before this is asked
 export function customsNeededFor(country: string | null): boolean {
-  const free = shopSettings().customsFreeCountries;
-  return free !== null && country !== null && !free.includes(country);
+  const record = shopCountry(country);
+  return record !== null && !record.customsFree;
 }
 
 export type CustomsProduct = {

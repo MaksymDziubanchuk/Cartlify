@@ -1,6 +1,8 @@
-import type { Prisma, Role } from '@prisma/client';
+import { taxDocumentNumberOf } from '@helpers/taxDocumentNumber.js';
+import type { CustomsInvoiceMode, Prisma, Role } from '@prisma/client';
 import type { FastifyBaseLogger } from 'fastify';
 
+import { shopCountry } from '@config/shopCountries.js';
 import { tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -15,6 +17,8 @@ import {
   type DeliveryBox,
   type DeliveryCustomsLine,
   type DeliveryParcel,
+  type DeliveryParcelRequest,
+  type DeliveryTaxNumber,
 } from '@providers/delivery/index.js';
 import { takeRedisLock } from '@redis/lock.js';
 import {
@@ -72,6 +76,7 @@ async function parcelOrderOf(db: Prisma.TransactionClient, orderId: number) {
       userId: true,
       status: true,
       holds: true,
+      paidAt: true,
       user: { select: { email: true } },
       delivery: {
         select: {
@@ -127,14 +132,26 @@ async function parcelOrderOf(db: Prisma.TransactionClient, orderId: number) {
       id: true,
       productId: true,
       productName: true,
+      quantity: true,
       unitPrice: true,
+      taxRule: true,
+      taxCountry: true,
+      taxAmount: true,
       product: { select: { name: true, hsCode: true, originCountry: true } },
-      variant: { select: { sku: true } },
+      variant: { select: { sku: true, weightGrams: true } },
     },
+  });
+
+  // the invoice of the order the commercial invoice of a parcel names
+  const invoice = await db.taxDocument.findFirst({
+    where: { orderId, kind: 'invoice' },
+    orderBy: { id: 'asc' },
+    select: { series: true, number: true, createdAt: true },
   });
 
   return {
     order,
+    invoice,
     // every parcel of the provider the order ever had, for the number of the next one
     providerParcels: parcels.filter((one) => one.providerParcelId !== null).length,
     live,
@@ -304,9 +321,33 @@ const boxOfData = (box: BoxData): DeliveryBox => {
   };
 };
 
+// the tax number a parcel crossing customs goes with: of the country of the recipient, when the
+// shop took the tax of that country on an item in it (the rule recipient at the confirmation), the
+// number root wrote for the country. A country that has none now refuses the parcel
+// (DELIVERY_TAX_NUMBER_MISSING): without it the buyer would pay the tax again at the border
+function taxNumberOf(
+  read: Pick<ParcelOrder, 'order'>,
+  lines: readonly { line: { taxRule: string | null; taxCountry: string | null } }[],
+): DeliveryTaxNumber | null {
+  const country = read.order.delivery!.country!;
+  if (!customsNeededFor(country)) return null;
+  if (!lines.some(({ line }) => line.taxRule === 'recipient' && line.taxCountry === country)) {
+    return null;
+  }
+  const record = shopCountry(country);
+  if (!record?.taxNumber || !record.taxNumberKind) {
+    throw new ConflictError('DELIVERY_TAX_NUMBER_MISSING', { country });
+  }
+  return { kind: record.taxNumberKind, number: record.taxNumber };
+}
+
 // the request of one parcel: the recipient, its boxes, what it holds and what that is worth, the
-// lines of the declaration for a country with customs
-function parcelRequestOf(read: ParcelOrder, boxes: readonly BoxData[], number: number) {
+// lines of the declaration for a country with customs and the tax number it goes with
+function parcelRequestOf(
+  read: Pick<ParcelOrder, 'order' | 'lineOf'>,
+  boxes: readonly BoxData[],
+  number: number,
+): DeliveryParcelRequest {
   const d = read.order.delivery!;
   const sender = senderAddressOf();
   if (!sender) throw new ConflictError('DELIVERY_SENDER_REQUIRED');
@@ -317,28 +358,35 @@ function parcelRequestOf(read: ParcelOrder, boxes: readonly BoxData[], number: n
       units.set(item.orderItemId, (units.get(item.orderItemId) ?? 0) + item.quantity);
     }
   }
-  const lines = [...units].map(([orderItemId, quantity]) => {
-    const line = read.lineOf.get(orderItemId)!;
-    return { line, quantity, item: read.items.find((one) => one.orderItemId === orderItemId)! };
-  });
+  const lines = [...units].map(([orderItemId, quantity]) => ({
+    line: read.lineOf.get(orderItemId)!,
+    quantity,
+  }));
 
-  const declaredValue =
+  const gross =
     lines.reduce(
       (sum, { line, quantity }) =>
         sum + Math.round(decimalToNumber(line.unitPrice) * 100) * quantity,
       0,
     ) / 100;
   const customs: DeliveryCustomsLine[] | null = customsNeededFor(d.country)
-    ? lines.map(({ line, quantity, item }) => ({
+    ? lines.map(({ line, quantity }) => ({
         description: line.productName ?? line.product.name,
         quantity,
         unitValue: decimalToNumber(line.unitPrice),
-        weightGrams: item.weightGrams ?? 0,
+        weightGrams: line.variant.weightGrams ?? 0,
         hsCode: line.product.hsCode ?? '',
         originCountry: line.product.originCountry ?? '',
         sku: line.variant.sku,
+        // the tax of the line, for the units of this parcel
+        tax: line.taxAmount
+          ? Math.round((decimalToNumber(line.taxAmount) * 100 * quantity) / line.quantity) / 100
+          : 0,
       }))
     : null;
+  // the customs value: without the tax of the country of the recipient the shop took
+  const declaredValue =
+    Math.round((gross - (customs ?? []).reduce((sum, line) => sum + line.tax, 0)) * 100) / 100;
 
   return {
     reference: `${read.order.id}-${number}`,
@@ -368,8 +416,50 @@ function parcelRequestOf(read: ParcelOrder, boxes: readonly BoxData[], number: n
     ),
     declaredValue,
     customs,
+    taxNumber: taxNumberOf(read, lines),
   };
 }
+
+// the commercial invoice of a parcel with a tax number that is not of the import scheme: sent to
+// the carrier with the parcel when it takes it electronically, else the admin prints it (GET
+// .../customs-invoice); none for any other parcel. A carrier that refuses it electronically, or a
+// provider that does not answer, leaves it to print: the parcel is kept all the same
+async function customsInvoiceOf(
+  read: Pick<ParcelOrder, 'order' | 'invoice'>,
+  request: DeliveryParcelRequest,
+  parcel: DeliveryParcel,
+  log: FastifyBaseLogger,
+): Promise<CustomsInvoiceMode | null> {
+  if (request.taxNumber?.kind !== 'other') return null;
+  try {
+    if (!(await deliveryProvider.takesDocuments(request.option.carrierName))) return 'print';
+    await deliveryProvider.customsInvoice(
+      { ...request, parcelId: parcel.parcelId, invoice: invoiceOf(read, request) },
+      true,
+      log,
+    );
+    return 'electronic';
+  } catch (err) {
+    log.warn(
+      { ...failureOf(err), orderId: read.order.id, parcelId: parcel.parcelId },
+      'the commercial invoice of a parcel was not sent with it: the admin prints it',
+    );
+    return 'print';
+  }
+}
+
+// the invoice a commercial invoice names: the invoice of the order, else the number of the parcel
+// on the day the order was paid for (a shop that makes invoices on request)
+const invoiceOf = (
+  read: Pick<ParcelOrder, 'order' | 'invoice'>,
+  request: Pick<DeliveryParcelRequest, 'reference'>,
+): { number: string; date: Date } =>
+  read.invoice?.series && read.invoice.number
+    ? {
+        number: taxDocumentNumberOf(read.invoice.series, read.invoice.number)!,
+        date: read.invoice.createdAt,
+      }
+    : { number: request.reference, date: read.order.paidAt ?? new Date() };
 
 // writes a parcel the provider made, with its boxes and its cost, in the name of the admin. The
 // order may have changed while the provider made the parcel (a statement took units back or
@@ -378,7 +468,7 @@ function parcelRequestOf(read: ParcelOrder, boxes: readonly BoxData[], number: n
 async function writeParcel(
   actor: Actor,
   orderId: number,
-  parcel: DeliveryParcel,
+  parcel: DeliveryParcel & { customsInvoice: CustomsInvoiceMode | null },
   boxes: readonly BoxData[],
   carrierLabel: string,
   bulk: boolean,
@@ -418,6 +508,7 @@ async function writeParcel(
         labelUrl,
         state: 'created',
         shippedAt: null,
+        customsInvoice: parcel.customsInvoice,
       },
       select: { id: true },
     });
@@ -448,6 +539,7 @@ async function writeParcel(
             providerParcelId: parcel.parcelId,
             boxes: boxes.length,
             cost: parcel.cost,
+            customsInvoice: parcel.customsInvoice,
           },
         },
       ],
@@ -503,12 +595,13 @@ export async function createParcels(
           parcel = null;
         }
         parcel ??= await deliveryProvider.createParcel(request, log);
+        const customsInvoice = await customsInvoiceOf(read, request, parcel, log);
         try {
           made.push(
             await writeParcel(
               args,
               args.orderId,
-              parcel,
+              { ...parcel, customsInvoice },
               boxes,
               request.option.carrierName,
               args.bulk === true,
@@ -591,6 +684,69 @@ async function readAdminOrder(actor: Actor, orderId: number): Promise<OrderRespo
     if (!row) throw new NotFoundError('ORDER_NOT_FOUND', { orderId });
     return mapOrderRowToResponse(row, await orderContextOf(db, [row], 'admin'), 'admin');
   });
+}
+
+// GET /api/orders/:orderId/shipments/:shipmentId/customs-invoice: the commercial invoice of a parcel
+// that carries the tax number of the shop on it, drawn again by the provider from the parcel as it
+// was made (its boxes and what they hold); the carrier is not sent it again
+export async function parcelCustomsInvoice(
+  args: Actor & { orderId: number; shipmentId: number },
+  log: FastifyBaseLogger,
+): Promise<{ pdf: Buffer; fileName: string }> {
+  assertStaff(args.actorRole);
+  const read = await tx(async (db) => {
+    await setUserContext(db, { userId: args.actorId, role: args.actorRole });
+    const shipment = await db.orderShipment.findFirst({
+      where: { id: args.shipmentId, orderId: args.orderId, providerParcelId: { not: null } },
+      select: { id: true, providerParcelId: true, customsInvoice: true, state: true },
+    });
+    if (!shipment) {
+      throw new NotFoundError('ORDER_SHIPMENT_NOT_FOUND', {
+        orderId: args.orderId,
+        shipmentId: args.shipmentId,
+      });
+    }
+    const order = await parcelOrderOf(db, args.orderId);
+    const boxes = await db.shipmentBox.findMany({
+      where: { shipmentId: shipment.id },
+      orderBy: { number: 'asc' },
+      select: { weightGrams: true, lengthMm: true, widthMm: true, heightMm: true, items: true },
+    });
+    // its number among the parcels of the provider of the order, as it was made with
+    const number = await db.orderShipment.count({
+      where: { orderId: args.orderId, providerParcelId: { not: null }, id: { lte: shipment.id } },
+    });
+    return { shipment, order, boxes, number };
+  });
+
+  const { shipment } = read;
+  if (!shipment.customsInvoice) throw new ConflictError('CUSTOMS_INVOICE_NONE');
+  if (shipment.state === 'void_pending' || shipment.state === 'voided') {
+    throw new ConflictError('PARCEL_STATE_INVALID', { state: shipment.state });
+  }
+  if (!deliveryProvider.isConfigured()) throw new ConflictError('DELIVERY_PROVIDER_NOT_CONFIGURED');
+
+  const request = parcelRequestOf(
+    read.order,
+    read.boxes.map((box) => ({ ...box, items: box.items as BoxItem[] })),
+    read.number,
+  );
+  // the country of the recipient no longer has the number the parcel was made with
+  if (!request.taxNumber) {
+    throw new ConflictError('DELIVERY_TAX_NUMBER_MISSING', {
+      country: read.order.order.delivery!.country,
+    });
+  }
+  const pdf = await deliveryProvider.customsInvoice(
+    {
+      ...request,
+      parcelId: shipment.providerParcelId!,
+      invoice: invoiceOf(read.order, request),
+    },
+    false,
+    log,
+  );
+  return { pdf, fileName: `customs-invoice-${request.reference}.pdf` };
 }
 
 // the routes of the parcels are of the staff

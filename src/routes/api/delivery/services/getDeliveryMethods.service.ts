@@ -1,4 +1,3 @@
-import { countriesOfZone } from '@config/deliveryZones.js';
 import { shopSettings } from '@config/shopSettings.js';
 import { shopCurrency } from '@providers/payments/index.js';
 
@@ -20,7 +19,7 @@ export async function getDeliveryMethods(): Promise<GetDeliveryMethodsResponseDt
     })),
     zones: zones.map((zone) => ({
       name: zone.name,
-      countries: countriesOfZone(zones, zone),
+      countries: [...zone.countries],
       manualPrice: zone.manualPrice,
       freeFrom: zone.freeFrom,
     })),

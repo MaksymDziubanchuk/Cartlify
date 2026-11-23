@@ -45,7 +45,16 @@ export type DeliveryCustomsLine = {
   // two letters, upper case
   originCountry: string;
   sku: string | null;
+  // the tax the units of the line hold together in their price (the tax of the country of the
+  // recipient the shop took), 0 when none: the customs are given the value without it
+  tax: number;
 };
+
+// the tax number of the shop in the country of the recipient, given with a parcel that crosses
+// customs when the shop took the tax of that country on its items: ioss, the number of the import
+// scheme, goes with the parcel; other, any other number, goes on a commercial invoice made after
+// the parcel (customsInvoice)
+export type DeliveryTaxNumber = { kind: 'ioss' | 'other'; number: string };
 
 // what the prices of the carriers are asked for: the boxes of one parcel from the sender to the
 // recipient, what is in it and what it is worth (in the currency of the shop)
@@ -54,6 +63,8 @@ export type DeliveryQuoteRequest = {
   to: DeliveryAddress;
   boxes: DeliveryBox[];
   contents: string;
+  // the value of what is in it; of a parcel that crosses customs, without the tax of the country of
+  // the recipient the shop took (the customs value)
   declaredValue: number;
 };
 
@@ -83,6 +94,15 @@ export type DeliveryParcelRequest = DeliveryQuoteRequest & {
   option: DeliveryCarrierChoice;
   // the lines of the declaration when the parcel crosses a border, null when it does not
   customs: DeliveryCustomsLine[] | null;
+  taxNumber: DeliveryTaxNumber | null;
+};
+
+// a commercial invoice of a parcel made: the parcel as it was asked for, its id at the provider and
+// the invoice it names (the number of the invoice of the order, else the number of the parcel, and
+// the day it was made)
+export type DeliveryCustomsInvoiceRequest = DeliveryParcelRequest & {
+  parcelId: string;
+  invoice: { number: string; date: Date };
 };
 
 // a parcel the provider made, with its label
@@ -191,5 +211,16 @@ export interface DeliveryProvider extends Provider<DeliveryProviderName> {
   // asked to (or the provider cannot tell): the shop cancels it in the dashboard of the carrier.
   // The parcel as the shop keeps it: its number at the provider and the name of its carrier
   voidParcel(parcel: { parcelId: string; carrierName: string }): Promise<'voided' | 'unsupported'>;
+  // whether the carrier takes the customs papers of a parcel electronically (ETD); false when the
+  // provider cannot tell
+  takesDocuments(carrierName: string): Promise<boolean>;
+  // the commercial invoice of a parcel made, with the tax number of the shop the request carries, a
+  // pdf; electronic: the carrier is sent it with the parcel too. A carrier that does not take it
+  // refuses with DELIVERY_PARCEL_REFUSED
+  customsInvoice(
+    request: DeliveryCustomsInvoiceRequest,
+    electronic: boolean,
+    log: DeliveryLog,
+  ): Promise<Buffer>;
   webhook: DeliveryWebhook;
 }
