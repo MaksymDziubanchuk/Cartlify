@@ -158,6 +158,17 @@ export default async function productsRouter(app: FastifyInstance) {
     productController.updateProductsBulkPrice,
   );
 
+  // the tax group and the classes of the countries of many products (docs/taxes.md); a path of its
+  // own wins over :productId
+  app.patch(
+    '/tax',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.patchProductsTaxRouterSchema,
+    },
+    productController.updateProductsTax,
+  );
+
   app.post(
     '/stock/deliveries',
     {

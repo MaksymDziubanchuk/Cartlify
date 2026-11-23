@@ -688,7 +688,9 @@ const postProductRouterSchema = {
         '(PARTY_FIELDS_REQUIRED, `details.fields`) or wrong (PARTY_FIELDS_INVALID, ' +
         '`details.fields`), warnings over 2000 signs (PRODUCT_WARNINGS_TOO_LONG, `details.max`), a ' +
         'customs code that is not 6 to 10 digits (PRODUCT_HS_CODE_INVALID), a country of origin ' +
-        'that is not two letters (PRODUCT_ORIGIN_COUNTRY_INVALID), a ' +
+        'that is not two letters (PRODUCT_ORIGIN_COUNTRY_INVALID), a tax group that is not an id ' +
+        '(PRODUCT_TAX_GROUP_INVALID) or not there (TAX_GROUP_NOT_FOUND, `details.groupIds`), ' +
+        'classes of the countries that are no such object (PRODUCT_TAX_EXCEPTIONS_INVALID), a ' +
         'rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, `details.allowed`), a ' +
         'manufacturer outside the EU without a person responsible in the EU ' +
         '(PRODUCT_EU_RESPONSIBLE_REQUIRED), a person that is not in the EU ' +
@@ -878,7 +880,10 @@ const updateProductByIdRouterSchema = {
         'POPULARITY_OVERRIDE_INVALID, an id of a party that is not a whole number ' +
         '(PARTY_ID_INVALID, `details.field`), warnings over 2000 signs (PRODUCT_WARNINGS_TOO_LONG, ' +
         '`details.max`), a customs code that is not 6 to 10 digits (PRODUCT_HS_CODE_INVALID), a ' +
-        'country of origin that is not two letters (PRODUCT_ORIGIN_COUNTRY_INVALID), a rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, ' +
+        'country of origin that is not two letters (PRODUCT_ORIGIN_COUNTRY_INVALID), a tax group ' +
+        'that is not an id (PRODUCT_TAX_GROUP_INVALID) or not there (TAX_GROUP_NOT_FOUND, ' +
+        '`details.groupIds`), classes of the countries that are no such object ' +
+        '(PRODUCT_TAX_EXCEPTIONS_INVALID), a rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, ' +
         '`details.allowed`), a manufacturer outside the EU without a person responsible in the EU ' +
         '(PRODUCT_EU_RESPONSIBLE_REQUIRED), a person that is not in the EU ' +
         '(EU_RESPONSIBLE_NOT_IN_EU), ' +
@@ -956,7 +961,8 @@ const patchProductsBatchRouterSchema = {
         'wrong field (PRODUCT_NAME_INVALID, CATEGORY_ID_INVALID, ' +
         'POPULARITY_OVERRIDE_INVALID, POPULARITY_OVERRIDE_UNTIL_INVALID, ' +
         'PARTY_ID_INVALID, PRODUCT_WARNINGS_TOO_LONG, PRODUCT_HS_CODE_INVALID, ' +
-        'PRODUCT_ORIGIN_COUNTRY_INVALID, WITHDRAWAL_RULE_INVALID, ' +
+        'PRODUCT_ORIGIN_COUNTRY_INVALID, PRODUCT_TAX_GROUP_INVALID, TAX_GROUP_NOT_FOUND, ' +
+        'PRODUCT_TAX_EXCEPTIONS_INVALID, WITHDRAWAL_RULE_INVALID, ' +
         'PRODUCT_EU_RESPONSIBLE_REQUIRED, ' +
         'EU_RESPONSIBLE_NOT_IN_EU, DOCUMENT_ID_INVALID, DOCUMENT_IDS_REPEATED, ' +
         'PRODUCT_DOCUMENTS_TOO_MANY), a popularity override without its end ' +
@@ -1077,6 +1083,117 @@ const patchProductSaleRouterSchema = {
 } satisfies FastifySchema;
 
 // Schema for admin bulk variant price update
+// the tax group and the classes of the countries of many products (docs/taxes.md)
+const patchProductsTaxRouterSchema = {
+  operationId: 'bulkUpdateProductTax',
+  summary: 'Set the tax group and the classes of the countries of many products',
+  description:
+    'The products of the scope (the ids, the category, the group they are in, a country that ' +
+    'classes them in a group of its own or does not; not the deleted ones) get the group ' +
+    '(taxGroupId, null for the main rate; not sent: as it is) and the classes given ' +
+    '(exceptions, over what they had for those countries), and lose the classes of ' +
+    'removeExceptions. A help for root adding a country: `dryRun: true` changes nothing and ' +
+    'lists the products of the scope with what they would have. All of it or nothing; a line of ' +
+    'the admin log for each product that changes.',
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['scope'],
+    properties: {
+      scope: {
+        type: 'object',
+        additionalProperties: false,
+        minProperties: 1,
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            uniqueItems: true,
+            items: { type: 'integer', minimum: 1, maximum: 2147483647 },
+          },
+          categoryId: { type: 'integer', minimum: 1, maximum: 2147483647 },
+          taxGroupId: {
+            type: ['integer', 'null'],
+            minimum: 1,
+            description: 'The products in this group; null: the products without a group.',
+          },
+          exceptionOf: {
+            type: 'string',
+            pattern: '^[A-Z]{2}$',
+            description: 'The products this country classes in a group of its own.',
+          },
+          withoutExceptionOf: {
+            type: 'string',
+            pattern: '^[A-Z]{2}$',
+            description: 'The products this country does not class.',
+          },
+        },
+        description: 'Which products: every filter given holds; at least one.',
+      },
+      taxGroupId: {
+        type: ['integer', 'null'],
+        minimum: 1,
+        description: 'The group of the products; null: the main rate.',
+      },
+      exceptions: {
+        type: 'object',
+        maxProperties: 300,
+        propertyNames: { pattern: '^[A-Z]{2}$' },
+        additionalProperties: { type: ['integer', 'null'], minimum: 1 },
+        description: 'The classes given, { country: group id, or null for the main rate }.',
+      },
+      removeExceptions: {
+        type: 'array',
+        maxItems: 300,
+        uniqueItems: true,
+        items: { type: 'string', pattern: '^[A-Z]{2}$' },
+        description: 'The countries whose class the products lose.',
+      },
+      dryRun: { type: 'boolean', description: 'Write nothing, list the products.' },
+    },
+  },
+  response: {
+    200: {
+      description: 'The products of the scope with their group and classes after the change.',
+      type: 'object',
+      additionalProperties: false,
+      required: ['dryRun', 'count', 'products'],
+      properties: {
+        dryRun: { type: 'boolean' },
+        count: { type: 'integer', minimum: 0 },
+        products: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'name', 'taxGroupId', 'taxExceptions'],
+            properties: {
+              id: { type: 'integer' },
+              name: { type: 'string' },
+              taxGroupId: { type: ['integer', 'null'] },
+              taxExceptions: {
+                type: 'object',
+                additionalProperties: { type: ['integer', 'null'] },
+              },
+            },
+          },
+        },
+      },
+    },
+    400: {
+      description:
+        'Nothing is written. `VALIDATION_ERROR`: a field out of its shape. ' +
+        '`NO_FIELDS_TO_UPDATE`: nothing to change and no dry run. ' +
+        '`PRODUCT_TAX_EXCEPTION_TWICE`: a country given a class and losing it at once ' +
+        '(`details.countries`). `TAX_GROUP_NOT_FOUND`: a group that is not there ' +
+        '(`details.groupIds`).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: { description: 'Unexpected server error.', $ref: 'errorResponseSchema#' },
+  },
+} as const;
+
 const patchProductsBulkPriceRouterSchema = {
   operationId: 'bulkUpdateProductPrices',
   summary: 'Bulk update variant prices',
@@ -1748,6 +1865,7 @@ const taggedProductSchemas = withOpenApiTag(
     patchProductSaleRouterSchema,
     postProductSalesRouterSchema,
     patchProductsBulkPriceRouterSchema,
+    patchProductsTaxRouterSchema,
     deleteProductByIdRouterSchema,
     deleteProductReviewRouterSchema,
     patchProductCategorySchema,

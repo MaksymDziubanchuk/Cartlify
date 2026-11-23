@@ -1,4 +1,9 @@
 import { prisma } from '@db/client.js';
+import {
+  assertTaxGroupsExist,
+  normalizeTaxExceptions,
+  normalizeTaxGroupId,
+} from './helpers/productTax.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
@@ -66,6 +71,8 @@ export async function createProduct({
   warnings,
   hsCode,
   originCountry,
+  taxGroupId,
+  taxExceptions,
   withdrawal,
   documentIds,
   categoryId,
@@ -97,6 +104,9 @@ export async function createProduct({
   // what customs need of it, both optional
   const hsCodeNorm = normalizeHsCode(hsCode);
   const originCountryNorm = normalizeOriginCountry(originCountry);
+  // the tax group and the classes of the countries, none when not sent
+  const taxGroupIdNorm = normalizeTaxGroupId(taxGroupId) ?? null;
+  const taxExceptionsNorm = normalizeTaxExceptions(taxExceptions) ?? {};
   // the rule of withdrawal of its own, none when the field is empty or not sent
   const withdrawalNorm = parseWithdrawalRule(withdrawal) ?? null;
   // the documents of the directory the product names, in their order
@@ -154,6 +164,8 @@ export async function createProduct({
         const resolved = resolveNewVariants(valueCtx, plans);
 
         // create product row with reserved id from controller flow
+        await assertTaxGroupsExist(tx, taxGroupIdNorm, taxExceptionsNorm);
+
         const product = await tx.product.create({
           data: {
             id: productId,
@@ -164,6 +176,8 @@ export async function createProduct({
             warnings: warningsNorm,
             hsCode: hsCodeNorm,
             originCountry: originCountryNorm,
+            taxGroupId: taxGroupIdNorm,
+            taxExceptions: taxExceptionsNorm,
             withdrawal: withdrawalNorm,
             categoryId: categoryIdRaw,
           },
@@ -195,6 +209,10 @@ export async function createProduct({
             ...(hsCodeNorm ? [{ field: 'hsCode', old: null, new: hsCodeNorm }] : []),
             ...(originCountryNorm
               ? [{ field: 'originCountry', old: null, new: originCountryNorm }]
+              : []),
+            ...(taxGroupIdNorm ? [{ field: 'taxGroupId', old: null, new: taxGroupIdNorm }] : []),
+            ...(Object.keys(taxExceptionsNorm).length
+              ? [{ field: 'taxExceptions', old: null, new: taxExceptionsNorm }]
               : []),
             ...(withdrawalNorm ? [{ field: 'withdrawal', old: null, new: withdrawalNorm }] : []),
             ...(documentIdsNorm.length

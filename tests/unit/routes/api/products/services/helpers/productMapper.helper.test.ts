@@ -27,6 +27,8 @@ const product: ProductResponseRow = {
   warnings: null,
   hsCode: null,
   originCountry: null,
+  taxGroupId: null,
+  taxExceptions: {},
   withdrawal: null,
   deletedAt: null,
   createdAt: new Date('2026-01-01T10:00:00.000Z'),
