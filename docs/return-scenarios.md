@@ -133,11 +133,11 @@ The buyer sent the parcel and the shop does not want to make them wait.
 
 ## 10. Goods that come back damaged or used
 
-1. `POST /api/returns/:returnId/receive` with `not_accepted` and the reason (`unsealed`, `mixed`, `used`, `damaged`, `other`) for the units concerned. Their money is refused and the stock does not move. Money already on its way or back cannot be refused (`RETURN_ITEM_MONEY_SETTLED`), nor goods whose item money already with the buyer pays (a refund made by hand or what a bank took, given to it): those are taken in or written off.
+1. `POST /api/returns/:returnId/receive` with `not_accepted` and the reason (`unsealed`, `mixed`, `used`, `damaged`, `other`) for the units concerned. Their money is refused and the stock does not move. Money already on its way or back cannot be refused (`RETURN_ITEM_MONEY_SETTLED`), nor the units the admin marks as the ones money already with the buyer paid (`paidUnits`: a refund made by hand or what a bank took, given to them): the shop bought them already, they are taken in or written off.
 2. The shop sends them back to the buyer: `POST /api/returns/:returnId/shipments` with `direction: to_buyer`, the rows and their units (`items`), the carrier, the number and the cost. The buyer is mailed the units and the parcel. Goods the shop keeps, as the buyer agreed, need no step.
 3. The buyer is mailed the end with the reason of each refusal.
 
-When the bank or a refund made by hand had paid the buyer for the goods after the shop refused them, the buyer has both: root keeps the goods that are still in the shop (`POST /api/returns/:returnId/keep`, they come in or are written off and that money pays their row), records what the buyer gives back (`POST /api/returns/:returnId/overpaid/received`), or gives it up (`POST /api/returns/:returnId/overpaid/lost`); [Returns](returns.md#money-already-with-the-buyer-for-goods-not-taken).
+When a refund made by hand or what a bank took gave a part of the price of a unit (a scratch) and the unit comes back used, it is taken back (written off if the admin decides so) and the sum of its row lowered down to what the buyer has already; a unit that money paid all of is never lowered ([Returns](returns.md#money-already-with-the-buyer-for-goods)).
 
 When the goods only lost some value (used more than needed to check them), they are taken back and the money lowered instead: root gives `reductions` (the row and its new sum, a note) to `POST /api/returns/:returnId/refund`. The mail says how much was kept for the value the goods lost and for which goods, never the note.
 
@@ -183,7 +183,7 @@ The buyer of an order with a statement disputed the payment at the bank. The app
 2. The alert `disputes_to_answer` lists the dispute, the date its evidence is due nearest first (`evidenceDueBy`), and marks that the order has a statement (`returnOpen`). A person reads the draft in the dashboard of Stripe, adds to it and submits it there (once).
 3. The bank decides, and the app does the rest:
    - **won**: the bank gives the money back (`money.dispute_reinstated`), and the app sends the money of the statement at once by an ordinary transfer, with the usual mails ("money sent");
-   - **lost**: what the bank took is tied to the earliest statement of the order that waits for money; the app's transfer of the statement uses it first (a part `covered`) and asks Stripe only for what is left, or for nothing when the bank gave all of it. The bank gave more than the statement owed: the difference is a loss of the shop, plain in the journal. The returned total of the statement counts the money of the bank.
+   - **lost**: what the bank took is tied to the earliest statement of the order that waits for money; the units of the statement it paid (marked at the reception, or by themselves when no other unit can come) take it first (a part `covered` on the card) and the transfer asks Stripe only for what is left, or for nothing when the bank gave all of it. The bank gave more than the statement owed: the difference is a loss of the shop, plain in the journal. The returned total of the statement counts the money of the bank.
 4. A step that could not be taken when the event came (Stripe or the database busy) is taken by the worker within minutes. The buyer is never mailed that a dispute opened or was won.
 
 A dispute of a paid order not sent and without a statement holds the order instead; a lost one cancels it by a statement of the system and sends the rest: [Disputes](disputes.md#case-by-case).

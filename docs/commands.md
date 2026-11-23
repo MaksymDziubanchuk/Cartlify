@@ -176,14 +176,22 @@ npm test -- api:chat api:products service:openai
 # service by tests/integration/api/auth/turnstileAnswers.test.ts in both modes
 npm test -- api:auth service:turnstile
 
-# the delivery provider (ShippyPro) answers from a mock unless the run takes it for real, and the
-# run names it every time (it is never kept in a saved selection). For real every test asks the
+# the delivery provider (ShippyPro) answers from a mock unless the run takes it for real (by the
+# words, or in the list like every other service). For real every test asks the
 # account whatever costs no label: the prices of its Generic carrier, the search and the void of
 # the parcels it made, the catalog of the carriers; the mock adds a carrier that voids (MockExpress)
 # and answers the outages, the refusals and the events of the webhook. A parcel is never made at the
-# account (each takes a label, and the account has no sandbox): the mock makes every parcel. SHIPPYPRO_API_TEST_KEY comes from .env (never SHIPPYPRO_API_KEY); the requests of every file keep below the limit of the
-# account (20 in 10 seconds) through the test redis, so a real run takes few files at a time
-npm test -- providers api:orders api:delivery flows service:shippypro --workers=2
+# account (each takes a label, and the account has no sandbox): the mock makes every parcel.
+# SHIPPYPRO_API_TEST_KEY comes from .env (never SHIPPYPRO_API_KEY), the key of an account with the
+# carrier Generic connected (service Standard, its table for the whole world: 0-5 kg 4 EUR, up to
+# 500 kg 10 EUR, the account in EUR), as the mock has it.
+# The limit of the requests is of the plan of the account: the requests of the whole run go one at
+# a time through the test redis, at first at the pace of the documentation (20 in 10 seconds); a
+# 429 closes the account for every file as long as it says (Retry-After), the request goes again
+# and the pace halves for the rest of the run, so any plan ends at the pace it takes (the trial
+# account: about one request in 2-3 seconds). A request waits for its turn outside the time the app
+# gives the service, and a test has 5 minutes in this mode: a real run of the delivery is slow
+npm test -- providers api:orders api:delivery flows service:shippypro
 
 # unit or integration tests only
 npm run test:unit
