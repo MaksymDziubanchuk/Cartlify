@@ -396,6 +396,21 @@ describe('without a context', () => {
         // before the version of the terms: its confirmation waits for the lock of the contract,
         // and a file that publishes a contract and then the terms in one transaction
         // (db/withdrawal) would wait for the lock of the terms this one holds (a deadlock)
+        // the shop makes an invoice of every order, in this transaction only: the payment makes one
+        await db.as({ role: 'ROOT', userId: admin.id });
+        for (const [key, value] of [
+          ['invoiceMode', 'every_order'],
+          ['invoicePrefix', 'CTX'],
+          ['creditNotePrefix', 'CTXR'],
+          ['invoiceYearly', false],
+        ] as const) {
+          await db.rows(
+            'insert into cartlify.shop_settings (key, value, "setById") values ($1, $2::jsonb, $3)',
+            key,
+            JSON.stringify(value),
+            admin.id,
+          );
+        }
         const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
 
         // a version of the terms and a consent to it, the same way: a version committed would be
@@ -445,6 +460,14 @@ describe('without a context', () => {
           `dp_context_${randomUUID()}`,
           `pi_db_${orderId}`,
         );
+        // a country the shop sells to and a tax group, written by root: every actor reads them
+        await db.as({ role: 'ROOT', userId: admin.id });
+        await db.rows(
+          `insert into cartlify.shop_countries (country, "customsFree") values ('XC', true)`,
+        );
+        await db.rows(
+          `insert into cartlify.tax_groups (name) values ('Group of the context test')`,
+        );
         await db.as(null);
 
         const tables = await tablesOf(db);
@@ -472,7 +495,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(44);
+    expect(Object.keys(hidden)).toHaveLength(47);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

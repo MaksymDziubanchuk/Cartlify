@@ -273,7 +273,6 @@ WITH
         WHERE
             l.purpose = 'return'::cartlify."MoneyPurpose"
             AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
-            AND l.part <> 'covered'::cartlify."MoneyPart"
     ),
     -- The lines of the sales of the period, a row each: the items of the orders paid in it, and,
     -- with the opposite sign, the goods the returns sent the money for in it (the rows a line of the

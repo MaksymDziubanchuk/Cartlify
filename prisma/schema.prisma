@@ -119,6 +119,8 @@ model User {
   newsletterCampaignsMade NewsletterCampaign[]          @relation("NewsletterCampaignCreator")
   newsletterCampaignsEdit NewsletterCampaign[]          @relation("NewsletterCampaignEditor")
   newsletterBlocks        NewsletterFormBlock[]
+  // the fiscal receipts this account confirmed as made by hand at the provider
+  receiptsConfirmed       TaxDocument[]                 @relation("TaxDocumentReceiptConfirmedBy")
 
   // the unique index also serves a search by authProvider alone
   @@unique([authProvider, providerSub])
@@ -414,6 +416,13 @@ model Product {
   hsCode          String? @db.VarChar(10)
   originCountry   String? @db.VarChar(2)
 
+  // the tax group of the product (a reduced rate), empty for the main rate of a country; and the
+  // countries that class it in another group, { country: group id, or null for the main rate }
+  // (db/05 checks the countries and the groups)
+  taxGroupId    Int?
+  taxGroup      TaxGroup? @relation(fields: [taxGroupId], references: [id], onDelete: Restrict)
+  taxExceptions Json      @default("{}")
+
   // the rule of withdrawal of its own; empty follows its category, and the nearest category above
   // it that has one, and by default allowed (product_withdrawals, db/05)
   withdrawal WithdrawalRule?
@@ -453,6 +462,7 @@ model Product {
   @@index([categoryId])
   @@index([manufacturerId])
   @@index([euResponsibleId])
+  @@index([taxGroupId])
   @@index([createdAt, id])
   @@index([name, id])
   @@index([popularity, id])
@@ -848,6 +858,14 @@ enum DeliveryMethod {
   carrier
 }
 
+// How the commercial invoice of a parcel with the tax number of the shop (a number that is not of the
+// import scheme) reaches the customs: sent to the carrier with the parcel (electronic), or printed by
+// the admin and put on the parcel with the label (print)
+enum CustomsInvoiceMode {
+  electronic
+  print
+}
+
 // Where a parcel of the delivery provider stands: made with its label (created), waiting for its
 // void after the order was cancelled or the admin made it wrong (void_pending), voided at the
 // carrier or by hand (voided), taken by the carrier (sent), delivered, going back to the shop
@@ -914,6 +932,9 @@ model Order {
   holds                Json                 @default("[]")
   // the provider warned the payment of an order already sent may be fraud: only for the alert
   fraudWarnedAt        DateTime?
+  // the buyer asked for an invoice at the confirmation (the shop makes one on request,
+  // invoiceMode on_request); set by confirm_order only (db/05)
+  invoiceRequested     Boolean              @default(false)
 
   createdAt DateTime @default(now())
   // a trigger sets it on every change, also a change made by a database function (db/05)
@@ -921,6 +942,7 @@ model Order {
 
   // where and to whom the order goes, written with the confirmation
   delivery         OrderDelivery?
+  taxDocuments     TaxDocument[]
   // the sends of the order; the one with rolledBackAt empty is the current send
   shipments        OrderShipment[]
   items            OrderItem[]
@@ -987,6 +1009,13 @@ model OrderDelivery {
   // pickup costs nothing (db/06)
   price Decimal @default(0) @db.Decimal(10, 2)
 
+  // the tax the price of the delivery holds, as the confirmation fixed it (db/05, confirm_order):
+  // the rule, and the parts by rate, [{ rate, gross, tax }] (one part, or one for each rate of the
+  // items when root shares it in proportion); empty while the order is a cart and with no tax
+  taxRule   TaxRule?
+  taxLines  Json?
+  taxAmount Decimal? @db.Decimal(10, 2)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
@@ -1048,6 +1077,11 @@ model OrderShipment {
   providerParcelId String?     @unique @db.VarChar(100)
   labelUrl         String?     @db.VarChar(500)
   state            ParcelState @default(sent)
+
+  // the commercial invoice of a parcel of the provider that carries the tax number of the shop on it
+  // (taxNumberKind other of the country), set when the parcel is made; empty for every other parcel
+  // (db/06)
+  customsInvoice CustomsInvoiceMode?
 
   // when the parcel was sent (a parcel refused at the door: the moment of the refusal); empty while
   // the carrier has not taken a parcel of the provider (created, void_pending, voided)
@@ -1127,6 +1161,19 @@ model OrderItem {
   // the rule of withdrawal of the product: set by the database on every write of the item, the
   // confirmation keeps the rule of that moment (db/05); allowed on old items
   withdrawal  WithdrawalRule @default(allowed)
+
+  // the tax of the item as the confirmation fixed it (db/05, confirm_order): the rule, the country
+  // it is taxed in, the group, the rate and the tax the price of the line holds (taxed at the line,
+  // half up to the cent); all empty while the order is a cart, on old items and for a shop that takes
+  // no tax
+  taxRule       TaxRule?
+  taxCountry    String?  @db.VarChar(2)
+  taxGroupId    Int?
+  taxRate       Decimal? @db.Decimal(5, 2)
+  taxAmount     Decimal? @db.Decimal(10, 2)
+  // the price of the catalog when the rule of the sale took the tax of the seller out of the unit
+  // price (exportPrice without_seller_vat); a new confirmation compares it with the price now
+  listUnitPrice Decimal? @db.Decimal(10, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -1351,8 +1398,8 @@ model OrderReturn {
 
   // how much of the money went back to the buyer by this statement in all: what the transfers sent
   // less what failed, the money sent outside the app, what the compensation of the way back paid,
-  // what the refunds by hand and the bank covered. The database counts it from the money journal
-  // at every line of the statement (db/05); it is never written by the app
+  // what money already with the buyer (by hand, the bank) paid of its rows. The database counts it
+  // from the money journal and the rows at every change of them (db/05); never written by the app
   refundedTotal Decimal @default(0) @db.Decimal(10, 2)
 
   createdAt DateTime @default(now())
@@ -1401,11 +1448,21 @@ model OrderReturnItem {
   // why root closed the row without a refund
   refusedCode ReturnCloseCode?
 
-  // the line of the money journal that put the money of the row where it is: the goods of its
-  // transfer (pending, refunded), the line of the failure (failed), the money sent outside the app
-  // (refunded)
-  moneyLogId Int?
-  moneyLog   MoneyLog? @relation("ReturnItemMoney", fields: [moneyLogId], references: [id], onDelete: Restrict)
+  // the units of the row that money already with the buyer was given for (a refund made by hand, what
+  // a bank took, by the decision of what it was for: a unit bought back at its price, or a part of it
+  // off): the admin marks them as the goods come in, a decision marks the units of a row that waits
+  // for its money, and they are all marked when no other units of the item are left. The shares of
+  // the decisions go to them (db/05: return_row_shares); the money journal holds the rest, no row
+  // names a line of it
+  paidUnits    Int               @default(0)
+  // the delivery of the order went back with this row, paid by money already with the buyer (the
+  // last row of the transfer that gave the delivery back)
+  paidDelivery Boolean           @default(false)
+  // the row this one was split off, its units with a result of their own (the lines of the money
+  // journal name the first row; the rows split off it go with it)
+  splitFromId  Int?
+  splitFrom    OrderReturnItem?  @relation("ReturnItemSplit", fields: [splitFromId], references: [id], onDelete: Restrict)
+  splits       OrderReturnItem[] @relation("ReturnItemSplit")
 
   // the parcel that carried the units of a row not accepted back to the buyer (db/05)
   backShipmentId Int?
@@ -1424,8 +1481,8 @@ model OrderReturnItem {
 
   @@index([returnId])
   @@index([orderItemId])
-  @@index([moneyLogId])
   @@index([backShipmentId])
+  @@index([splitFromId])
   @@map("return_items")
 }
 
@@ -1452,15 +1509,14 @@ enum MoneyPurpose {
 // The part of a movement a line is: a payment or a transfer is written in parts. goods and
 // delivery are the two parts of what the buyer pays and of what goes back; deduction is what the
 // shop keeps of a transfer for the way back the buyer owes (above 0); way_back is what the shop
-// gives the buyer back for the way back it pays, the sum of the receipt (below 0); covered is the
-// part of a transfer that money already sent the buyer another way covers (above 0, the provider
-// is asked for the rest); whole is a movement that has no parts.
+// gives the buyer back for the way back it pays, the sum of the receipt (below 0); whole is a
+// movement that has no parts. What money already with the buyer pays of the rows of a statement is
+// no line (it moved once): the rows record it (return_items.paidBy).
 enum MoneyPart {
   goods
   delivery
   deduction
   way_back
-  covered
   whole
 }
 
@@ -1561,7 +1617,8 @@ model MoneyLog {
   orderShipment   OrderShipment?  @relation(fields: [orderShipmentId], references: [id], onDelete: Restrict)
   disputeId       Int?
   dispute         PaymentDispute? @relation(fields: [disputeId], references: [id], onDelete: Restrict)
-  // the line this one reverses (a failed refund), corrects (a correction) or uses (a covered part)
+  // the line this one reverses (a failed refund), corrects (a correction) or is about (money sent
+  // another way, money that came back, a share given up)
   coversId        Int?
   covers          MoneyLog?       @relation("MoneyLogCovers", fields: [coversId], references: [id], onDelete: Restrict)
   coveredBy       MoneyLog[]      @relation("MoneyLogCovers")
@@ -1596,6 +1653,12 @@ model MoneyLog {
   // what root, or the system, decided a refund by hand was (written once)
   moneyUse MoneyUse?
 
+  // the tax the line holds, share by share of the copy of its order ({ kind, orderItemId, name,
+  // rate, rule, country, net, tax, gross }, signed as the line): a payment, money that went back
+  // once it went, money that came back; null for a line of no sale. Written by the database
+  // (money_log_tax_shares, db/05); the credit notes and the report of the tax read it
+  taxShares Json?
+
   // what the line is made of, a list of objects: for the goods of a transfer of a statement the
   // rows it paid, [{ returnItemId, variantId, amount }], so the reports share the money by product
   // and the past does not change when a row changes later
@@ -1609,7 +1672,8 @@ model MoneyLog {
 
   // the rows of a statement whose money this line is (the goods of a transfer, a line of the money
   // sent outside the app, or the line of the failure)
-  returnItems OrderReturnItem[] @relation("ReturnItemMoney")
+  // the tax documents the line made
+  taxDocuments TaxDocument[]
 
   @@index([orderId, createdAt])
   @@index([returnId])
@@ -1828,10 +1892,13 @@ model AdminAlertSetting {
   user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   // the kind of the alert (the list is src/routes/api/admin/services/helpers/alertKinds.helper.ts)
   kind       String  @db.VarChar(64)
-  subscribed Boolean @default(true)
-  // the limit the kind counts against, its unit depends on the kind; empty means the default of
-  // the server, a number is at least 1 (db/06)
+  // a new row is not subscribed: a person subscribes to the kinds they need
+  subscribed Boolean @default(false)
+  // the numbers a kind counts against, their units depend on the kind (a limit, and for some kinds
+  // a window of days); a kind with a number works for the person only once they wrote it, a number
+  // is at least 1 (db/06)
   threshold  Int?
+  window     Int?
 
   createdAt DateTime @default(now())
 
@@ -1970,6 +2037,9 @@ model LegalDocument {
   retentionNewsletterConsentDays    Int?
   // the rows of the recipients of a newsletter campaign, from the end of the campaign
   retentionNewsletterRecipientsDays Int?
+  // the copy of the buyer an invoice, a credit note or a receipt keeps, from the document (the law
+  // of the taxes keeps it years; the document itself stays)
+  retentionTaxDocumentsDays         Int?
 
   createdAt DateTime @default(now())
 
@@ -2031,6 +2101,230 @@ model ShopSetting {
   createdAt DateTime @default(now())
 
   @@map("shop_settings")
+}
+
+// -----------------------------------------------------------------------------
+// Taxes
+// -----------------------------------------------------------------------------
+
+// The rule of the tax of a sale to a country, picked by root in the record of the country
+// (docs/taxes.md): the tax of the country of the seller, the tax of the country of the recipient
+// (while every condition root wrote holds: a threshold of sales, a limit of a parcel), no tax, or the
+// buyer pays it on receipt (a country with customs; the duty is always the buyer's).
+enum TaxRule {
+  seller
+  recipient
+  none
+  buyer_at_receipt
+}
+
+// What the tax number of the shop in a country is for the customs papers of a parcel: the number of
+// the import scheme (IOSS) goes with the parcel, any other number on a commercial invoice.
+enum TaxNumberKind {
+  ioss
+  other
+}
+
+// How the tax is taken out of the price of the delivery when the items have several rates: always at
+// the main rate of the country, or shared in proportion to the items of each rate.
+// The period the sales of a threshold of the tax are counted in: a year from the 1st of a month, or
+// the last 12 months.
+enum ThresholdPeriod {
+  year
+  rolling_12
+}
+
+enum DeliveryVatRule {
+  main
+  proportional
+}
+
+// The price of a sale on which no tax of the seller is taken (no tax, the buyer pays on receipt):
+// the same price, or the price less the tax of the seller it holds.
+enum ExportPriceRule {
+  same
+  without_seller_vat
+}
+
+// A tax document: an invoice, a credit note (it lowers an invoice), a fiscal receipt of a sale and
+// of a return.
+enum TaxDocumentKind {
+  invoice
+  credit_note
+  receipt
+  return_receipt
+}
+
+// Where a fiscal receipt stands at its provider: waiting (to be sent, or sent again after a
+// failure), registered, refused by the provider (the data needs a person), or confirmed by hand by a
+// person who made it in the dashboard of the provider.
+enum ReceiptState {
+  pending
+  registered
+  refused
+  manual
+}
+
+// A country the shop sells to, its own included, with what root wrote for it at once (one route
+// writes it with the zone of the delivery, docs/taxes.md): whether a parcel there crosses customs,
+// the rule of the tax and what the rule needs. Read by the app, written by root (db/03); the shape
+// and the rules between the fields are checked by the database (db/05, shop_countries_before_write;
+// db/06). The current rate of a group is the entry of its group with the latest start that has come.
+model ShopCountry {
+  // two capital letters
+  country String @id @db.VarChar(2)
+
+  // the parcel does not cross a customs border (the own country, the rest of a customs union)
+  customsFree Boolean
+
+  // the rule of the tax; empty only for a country without customs of a shop that takes no tax in its
+  // own country (no tax there)
+  rule TaxRule?
+
+  // the shop is registered for the tax in this country (rule recipient only), with its number there,
+  // the words printed before the number and what the number is for the customs papers
+  registered     Boolean        @default(false)
+  taxNumber      String?        @db.VarChar(50)
+  taxNumberLabel String?        @db.VarChar(30)
+  taxNumberKind  TaxNumberKind?
+
+  // the rule recipient holds up to this price of a parcel, the delivery counted in or not, the price
+  // with the tax or without (all three or none)
+  parcelLimit             Decimal? @db.Decimal(10, 2)
+  parcelLimitWithDelivery Boolean?
+  parcelLimitWithVat      Boolean?
+
+  // the rule recipient holds once the sales of the period pass this sum, the sales with the tax or
+  // without; countries of the same group share one threshold (the same sum and period everywhere,
+  // db/05). The period: a year from the 1st of a month (thresholdStartMonth, in the time zone of the
+  // shop), or the last 12 months. A year that passed it starts the next one with the tax of the
+  // recipient, unless root chose the start of that year with the first rule (thresholdInitialFrom);
+  // over the last 12 months the tax of the recipient holds from the moment the sum passed it
+  // (thresholdHeldAt, the database writes it) until root goes back to the first rule
+  // (thresholdInitialFrom, then)
+  thresholdAmount      Decimal?         @db.Decimal(10, 2)
+  thresholdWithVat     Boolean?
+  thresholdGroup       String?          @db.VarChar(50)
+  thresholdPeriod      ThresholdPeriod?
+  thresholdStartMonth  Int?
+  thresholdInitialFrom DateTime?
+  thresholdHeldAt      DateTime?
+
+  // how the tax comes out of the price of the delivery; required with a rule that takes a tax
+  deliveryVat   DeliveryVatRule?
+  // the price on which the tax of the seller is not taken; required with the rules none and
+  // buyer_at_receipt, and with recipient across customs (its conditions may not hold)
+  exportPrice   ExportPriceRule?
+  // why a document of a sale without tax has none (a reference to the law), in the language of the
+  // shop; required where exportPrice is
+  exemptionText String?          @db.VarChar(500)
+
+  // the rates of the country (the rule recipient, and the own country of a shop that takes the
+  // tax): a list of { group, rate, from }, group null for the main rate, from null for a rate in force
+  // from the start; a planned rate is an entry with a later start, an old one stays as history
+  rates Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([thresholdGroup])
+  @@map("shop_countries")
+}
+
+// A group of products with a rate of their own (books, medicines), named by root; a country gives
+// every group a rate (ShopCountry.rates). A group in use by a product cannot be deleted.
+model TaxGroup {
+  id   Int    @id @default(autoincrement())
+  name String @unique @db.VarChar(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  products Product[]
+
+  @@map("tax_groups")
+}
+
+// A tax document of an order: an invoice, a credit note, a fiscal receipt of a sale or of a return.
+// The database makes it in the transaction of the line of money it comes from (db/05) and keeps it
+// as it was made: the copies of the seller and the buyer, the lines and the sums by rate. A row is
+// never removed and never changed, but for the state of a receipt at its provider and the personal
+// data the retention term empties (db/05, tax_documents_append_only). The PDF is drawn from the row
+// on request.
+model TaxDocument {
+  id Int @id @default(autoincrement())
+
+  kind TaxDocumentKind
+
+  // the series (the prefix of the kind, with the year when root asked for a series a year) and the
+  // number in it, without gaps (db/05, tax_document_number); a receipt has none of its own
+  series String? @db.VarChar(20)
+  number Int?
+
+  orderId    Int
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  // the line of money that made it
+  moneyLogId Int
+  moneyLog   MoneyLog @relation(fields: [moneyLogId], references: [id], onDelete: Restrict)
+
+  // the document it corrects: a credit note its invoice, a return receipt its receipt, an invoice
+  // that reverses a credit note that credit note
+  correctsId  Int?
+  corrects    TaxDocument?  @relation("TaxDocumentCorrects", fields: [correctsId], references: [id], onDelete: Restrict)
+  correctedBy TaxDocument[] @relation("TaxDocumentCorrects")
+  // the invoice or credit note a receipt registers at a provider that takes our documents
+  documentId  Int?
+  document    TaxDocument?  @relation("TaxDocumentReceipt", fields: [documentId], references: [id], onDelete: Restrict)
+  receipts    TaxDocument[] @relation("TaxDocumentReceipt")
+
+  // the language of the shop and the currency of the order
+  locale   String @db.VarChar(2)
+  currency String @db.VarChar(3)
+
+  // the copies at the moment it was made: the seller (name, address, tax number with its label, the
+  // country), the buyer (name, address), the lines ({ orderItemId, text, quantity, unitNet, rate,
+  // net, tax, gross }, the delivery a line with no item) and the sums by rate ({ rate, net, tax,
+  // gross }); the rest a document prints (the order, the payment, the reason of a return, the text
+  // of a sale without tax, the text at the foot) in details
+  seller  Json
+  buyer   Json
+  lines   Json
+  totals  Json
+  details Json @default("{}")
+
+  // the sums of the document, below 0 for a credit note and a return receipt
+  net   Decimal @db.Decimal(10, 2)
+  tax   Decimal @db.Decimal(10, 2)
+  gross Decimal @db.Decimal(10, 2)
+
+  // where the sale is taxed and by which rule (the report of the tax groups by them); empty for a
+  // shop that takes no tax
+  taxCountry String?  @db.VarChar(2)
+  taxRule    TaxRule?
+
+  // a receipt at its provider: which provider, the state and since when, the number, the link, the
+  // code to print (a picture, base64) and the text the law asks to print, the tries and the last
+  // error, the time of the next try, the person who confirmed a receipt made by hand
+  provider             String?       @db.VarChar(30)
+  receiptState         ReceiptState?
+  receiptStateAt       DateTime?
+  receiptNumber        String?       @db.VarChar(100)
+  receiptUrl           String?       @db.VarChar(2048)
+  receiptCode          String?
+  receiptText          String?       @db.VarChar(500)
+  receiptAttempts      Int           @default(0)
+  receiptError         String?       @db.VarChar(500)
+  receiptNextAt        DateTime?
+  receiptConfirmedById Int?
+  receiptConfirmedBy   User?         @relation("TaxDocumentReceiptConfirmedBy", fields: [receiptConfirmedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@unique([series, number])
+  @@index([orderId])
+  @@index([moneyLogId])
+  @@index([kind, createdAt])
+  @@map("tax_documents")
 }
 
 // -----------------------------------------------------------------------------

@@ -34,15 +34,21 @@ const as = (user: TestUser): Actor => ({ role: user.role, userId: user.id });
 const keep = (
   db: DbSession,
   userId: number,
-  opts: { kind?: string; subscribed?: boolean; threshold?: number | null } = {},
+  opts: {
+    kind?: string;
+    subscribed?: boolean;
+    threshold?: number | null;
+    window?: number | null;
+  } = {},
 ) =>
   db.attempt(
-    `insert into cartlify.admin_alert_settings ("userId", kind, subscribed, threshold)
-     values ($1, $2, $3, $4) returning "userId"`,
+    `insert into cartlify.admin_alert_settings ("userId", kind, subscribed, threshold, "window")
+     values ($1, $2, $3, $4, $5) returning "userId"`,
     userId,
     opts.kind ?? 'low_stock',
     opts.subscribed ?? false,
     opts.threshold ?? null,
+    opts.window ?? null,
   );
 
 const settingsSeen = async (db: DbSession) =>
@@ -102,7 +108,7 @@ describe('admin_alert_settings', () => {
     expect(outcome).toMatchObject({ ok: false, code: '23505' });
   });
 
-  it('turns a kind on when nothing says otherwise', async () => {
+  it('keeps a kind off when nothing says otherwise: a person subscribes by themselves', async () => {
     const rows = await inRolledBackTx(async (db) => {
       await db.as(as(admin));
       await db.attempt(
@@ -110,13 +116,13 @@ describe('admin_alert_settings', () => {
         admin.id,
         'low_stock',
       );
-      return db.rows<{ subscribed: boolean; threshold: number | null }>(
-        'select subscribed, threshold from cartlify.admin_alert_settings where "userId" = $1',
+      return db.rows<{ subscribed: boolean; threshold: number | null; window: number | null }>(
+        'select subscribed, threshold, "window" from cartlify.admin_alert_settings where "userId" = $1',
         admin.id,
       );
     });
 
-    expect(rows).toEqual([{ subscribed: true, threshold: null }]);
+    expect(rows).toEqual([{ subscribed: false, threshold: null, window: null }]);
   });
 
   it.each([
@@ -134,11 +140,25 @@ describe('admin_alert_settings', () => {
     if (!ok) expect(outcome).toMatchObject({ code: '23514' });
   });
 
-  it('lets an admin change whether their kind is on and its threshold', async () => {
+  it.each([
+    [0, false],
+    [1, true],
+    [30, true],
+  ])('takes a window of %p days: %p', async (window, ok) => {
+    const outcome = await inRolledBackTx(async (db) => {
+      await db.as(as(admin));
+      return keep(db, admin.id, { threshold: 5, window });
+    });
+
+    expect(outcome.ok).toBe(ok);
+    if (!ok) expect(outcome).toMatchObject({ code: '23514' });
+  });
+
+  it('lets an admin change whether their kind is on and its numbers', async () => {
     const { changed, rows } = await inRolledBackTx(async (db) => {
       await db.as(as(admin));
       await keep(db, admin.id);
-      const changed = await update(db, 'subscribed = true, threshold = 20', admin.id);
+      const changed = await update(db, 'subscribed = true, threshold = 20, "window" = 7', admin.id);
       const rows = await db.rows<{ subscribed: boolean; threshold: number | null }>(
         'select subscribed, threshold from cartlify.admin_alert_settings where "userId" = $1',
         admin.id,

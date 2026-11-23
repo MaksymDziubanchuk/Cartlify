@@ -56,7 +56,7 @@ BEGIN
       ('orders', 'reservationExpiresAt'), ('orders', 'paymentId'), ('orders', 'paymentProvider'),
       ('orders', 'cancelledAt'), ('orders', 'paidAt'), ('orders', 'deliveredAt'),
       ('orders', 'withdrawalDays'), ('orders', 'returnShippingPaidBy'), ('orders', 'returnStatus'),
-      ('orders', 'holds'), ('orders', 'fraudWarnedAt'),
+      ('orders', 'holds'), ('orders', 'fraudWarnedAt'), ('orders', 'invoiceRequested'),
       -- the number and the link of a parcel (a send of the order, a parcel of a statement) lead to
       -- the person it goes to or comes from, they change below; what the buyer paid the carrier is
       -- a sum, no personal data
@@ -87,6 +87,9 @@ BEGIN
       -- the carrier the buyer picked: a carrier of the shop, it names no one
       ('order_deliveries', 'carrierName'), ('order_deliveries', 'carrierService'),
       ('order_deliveries', 'carrierConnection'),
+      -- the tax the price of the delivery holds
+      ('order_deliveries', 'taxRule'), ('order_deliveries', 'taxLines'),
+      ('order_deliveries', 'taxAmount'),
       ('chat_threads', 'id'), ('chat_threads', 'userId'), ('chat_threads', 'type'),
       ('chat_threads', 'status'), ('chat_threads', 'lastMessageAt'),
       ('chat_threads', 'unreadCount'), ('chat_threads', 'lastMessagePreview'),
@@ -119,7 +122,7 @@ BEGIN
       ('money_log', 'failure'), ('money_log', 'failureText'), ('money_log', 'method'),
       ('money_log', 'note'), ('money_log', 'happenedAt'), ('money_log', 'moneyUse'),
       ('money_log', 'meta'), ('money_log', 'ip'), ('money_log', 'userAgent'),
-      ('money_log', 'createdAt'),
+      ('money_log', 'createdAt'), ('money_log', 'taxShares'),
       -- a statement of return keeps the name and the email of whoever made it, the words of the
       -- buyer, and the address and the browser of the request: they change below; the rows hold
       -- the goods and the money, no personal data
@@ -191,7 +194,12 @@ BEGIN
       -- the disputes of the payments: ids, states and dates
       ('payment_disputes', '*'),
       -- the data of the shop (its name, its contacts, the languages): the shop's, not a person's
-      ('shop_settings', '*')
+      ('shop_settings', '*'),
+      -- the countries the shop sells to with their tax, and the tax groups: the shop's
+      ('shop_countries', '*'),
+      ('tax_groups', '*'),
+      -- the tax documents: the copy of the buyer is made up below, the rest names the sale
+      ('tax_documents', '*')
   )
   SELECT string_agg(c.table_name || '.' || c.column_name, ', ' ORDER BY c.table_name, c.column_name)
   INTO v_unknown
@@ -306,6 +314,12 @@ SET
 ------------------------------------------------------------
 -- 3. ORDERS
 ------------------------------------------------------------
+-- the copy of the buyer a tax document keeps is made up like the recipient of the order; the
+-- guard of the table lets the owner change the copy only, the superuser of this script is not held
+UPDATE cartlify.tax_documents
+SET buyer = jsonb_build_object('name', 'Recipient Customer', 'country', buyer -> 'country')
+WHERE buyer <> '{}'::jsonb;
+
 -- the recipient and the address of an order are made up (the method and the country stay: they
 -- name no one; the check of the table needs the whole address of a manual delivery); the note of
 -- the buyer goes
@@ -525,6 +539,13 @@ BEGIN
       SELECT 1
       FROM cartlify.return_items
       WHERE "amountNote" IS NOT NULL AND "amountNote" <> 'Lowered by the shop'
+    )
+    UNION ALL
+    SELECT 'tax_documents'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.tax_documents
+      WHERE buyer <> '{}'::jsonb AND buyer ->> 'name' IS DISTINCT FROM 'Recipient Customer'
     )
     UNION ALL
     SELECT 'order_deliveries'

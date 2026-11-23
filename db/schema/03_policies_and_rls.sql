@@ -2298,6 +2298,7 @@ ALTER TABLE cartlify.money_log FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS money_log_select ON cartlify.money_log;
 
+
 DROP POLICY IF EXISTS money_log_insert_owner ON cartlify.money_log;
 
 DROP POLICY IF EXISTS money_log_update_deny ON cartlify.money_log;
@@ -2451,6 +2452,149 @@ WITH
 
 -- DELETE: denied to every role
 CREATE POLICY shop_settings_delete_deny ON cartlify.shop_settings FOR DELETE USING (false);
+
+----------------------------------------
+-- SHOP COUNTRIES AND TAX GROUPS
+----------------------------------------
+-- The countries the shop sells to with the rule of their tax, and the tax groups of the products
+-- (docs/taxes.md). Every actor reads them, a guest too (the app counts the tax of a cart under the
+-- context of its buyer; nothing in them is personal), nobody without a context. Root writes them in
+-- their own name; what a record may hold is checked by db/05 (shop_countries_before_write,
+-- tax_groups_before_delete).
+ALTER TABLE cartlify.shop_countries ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.shop_countries FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS shop_countries_select ON cartlify.shop_countries;
+
+DROP POLICY IF EXISTS shop_countries_insert ON cartlify.shop_countries;
+
+DROP POLICY IF EXISTS shop_countries_update ON cartlify.shop_countries;
+
+DROP POLICY IF EXISTS shop_countries_delete ON cartlify.shop_countries;
+
+DROP POLICY IF EXISTS shop_countries_update_owner ON cartlify.shop_countries;
+
+CREATE POLICY shop_countries_select ON cartlify.shop_countries FOR
+SELECT
+  USING (cartlify.current_actor_role () IS NOT NULL);
+
+CREATE POLICY shop_countries_insert ON cartlify.shop_countries FOR INSERT
+WITH
+  CHECK (cartlify.is_root ());
+
+-- UPDATE: root; the columns the database owns (the start of the period of a threshold, the time of
+-- the row) are set by shop_countries_before_write whatever the update says
+CREATE POLICY shop_countries_update ON cartlify.shop_countries
+FOR UPDATE
+  USING (cartlify.is_root ())
+WITH
+  CHECK (cartlify.is_root ());
+
+CREATE POLICY shop_countries_delete ON cartlify.shop_countries FOR DELETE USING (cartlify.is_root ());
+
+-- UPDATE for the functions of the database: the moment the sales of the last 12 months passed the
+-- threshold (hold_tax_threshold, as the owner whoever confirms)
+CREATE POLICY shop_countries_update_owner ON cartlify.shop_countries
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (true);
+
+ALTER TABLE cartlify.tax_groups ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.tax_groups FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tax_groups_select ON cartlify.tax_groups;
+
+DROP POLICY IF EXISTS tax_groups_insert ON cartlify.tax_groups;
+
+DROP POLICY IF EXISTS tax_groups_update ON cartlify.tax_groups;
+
+DROP POLICY IF EXISTS tax_groups_delete ON cartlify.tax_groups;
+
+CREATE POLICY tax_groups_select ON cartlify.tax_groups FOR
+SELECT
+  USING (cartlify.current_actor_role () IS NOT NULL);
+
+CREATE POLICY tax_groups_insert ON cartlify.tax_groups FOR INSERT
+WITH
+  CHECK (cartlify.is_root ());
+
+-- UPDATE: root renames a group; nothing else is in it
+CREATE POLICY tax_groups_update ON cartlify.tax_groups
+FOR UPDATE
+  USING (cartlify.is_root ())
+WITH
+  CHECK (cartlify.is_root ());
+
+CREATE POLICY tax_groups_delete ON cartlify.tax_groups FOR DELETE USING (cartlify.is_root ());
+
+----------------------------------------
+-- TAX DOCUMENTS
+----------------------------------------
+-- The invoices, credit notes and fiscal receipts of the orders. Read: admin/root, and a buyer reads
+-- the documents of their own orders. A document is made by the functions of the database in the
+-- transaction of the line of money it comes from (they run as the owner) and never removed; the
+-- owner changes only what db/05 names (tax_documents_append_only: the state of a receipt at its
+-- provider, the copy of the buyer the retention term empties). The owner reads every row: the
+-- number of a series is the next one after all the documents of the series, whoever acts.
+ALTER TABLE cartlify.tax_documents ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.tax_documents FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tax_documents_select ON cartlify.tax_documents;
+
+DROP POLICY IF EXISTS tax_documents_select_owner ON cartlify.tax_documents;
+
+DROP POLICY IF EXISTS tax_documents_insert_owner ON cartlify.tax_documents;
+
+DROP POLICY IF EXISTS tax_documents_update_deny ON cartlify.tax_documents;
+
+DROP POLICY IF EXISTS tax_documents_update_owner ON cartlify.tax_documents;
+
+DROP POLICY IF EXISTS tax_documents_delete_deny ON cartlify.tax_documents;
+
+CREATE POLICY tax_documents_select ON cartlify.tax_documents FOR
+SELECT
+  USING (
+    cartlify.is_admin ()
+    OR (
+      cartlify.current_actor_role () = 'USER'
+      AND EXISTS (
+        SELECT 1
+        FROM cartlify.orders AS o
+        WHERE o.id = "orderId"
+          AND o."userId" = cartlify.current_actor_id ()
+      )
+    )
+  );
+
+CREATE POLICY tax_documents_select_owner ON cartlify.tax_documents FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+-- INSERT: the functions of the database only; the app role has no insert policy
+CREATE POLICY tax_documents_insert_owner ON cartlify.tax_documents FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+-- UPDATE: denied to every role but the owner (trg_tax_documents_append_only, db/05, says what is
+-- allowed)
+CREATE POLICY tax_documents_update_deny ON cartlify.tax_documents
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+CREATE POLICY tax_documents_update_owner ON cartlify.tax_documents
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (true);
+
+-- DELETE: denied to every role
+CREATE POLICY tax_documents_delete_deny ON cartlify.tax_documents FOR DELETE USING (false);
 
 ----------------------------------------
 -- NEWSLETTER SUBSCRIPTIONS

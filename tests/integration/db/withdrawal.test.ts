@@ -54,6 +54,7 @@ const PRIVACY: Fields = {
   retentionRecipientDays: 3650,
   retentionNewsletterConsentDays: 3650,
   retentionNewsletterRecipientsDays: 365,
+  retentionTaxDocumentsDays: 3650,
 };
 
 const ENUMS: Record<string, string> = { returnShippingPaidBy: 'cartlify."ReturnShippingPayer"' };
@@ -187,7 +188,8 @@ describe('a privacy policy', () => {
       const rows = await db.rows<Fields>(
         `select "retentionLoginAddressesDays", "retentionGuestDataDays", "retentionDeletedChatsDays",
                 "retentionReturnAddressesDays", "retentionReturnPersonalDays", "retentionRecipientDays",
-                "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays"
+                "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays",
+                "retentionTaxDocumentsDays"
          from cartlify.legal_documents where id = $1`,
         published.rows[0]!.id,
       );

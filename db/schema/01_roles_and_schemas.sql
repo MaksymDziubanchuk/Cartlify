@@ -292,7 +292,7 @@ BEGIN
     'cartlify.newsletter_release_recipients(integer[])',
     -- orders and payments: the same; unconfirm_order, pay_order and expire_order_reservation
     -- answer to the system only
-    'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
+    'cartlify.confirm_order(integer, interval, numeric, numeric, numeric, jsonb, boolean)',
     'cartlify.unconfirm_order(integer)',
     'cartlify.cancel_order_payment(integer)',
     'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric, text)',
@@ -311,15 +311,21 @@ BEGIN
     'cartlify.begin_compensation(integer, text, numeric, text)',
     'cartlify.record_money_received(integer, jsonb, cartlify."OutsideMethod", text, timestamp without time zone)',
     'cartlify.record_carrier_money(integer, numeric, cartlify."OutsideMethod", text, timestamp without time zone)',
-    -- what a statement still owes and what money already with the buyer gave too much, for the card
-    -- and the alerts: admin and root, checked by each one
+    -- what a statement still owes, for the card and the alerts: admin and root, checked by each one
     'cartlify.return_money_left(integer)',
-    'cartlify.order_money_overpaid(integer)',
-    -- what is overpaid: the money the buyer gave back, the rest given up, the goods kept; each one
-    -- checks the actor itself
-    'cartlify.record_overpaid_received(integer, numeric, cartlify."OutsideMethod", text, timestamp without time zone)',
-    'cartlify.lose_overpaid(integer)',
-    'cartlify.keep_return_goods(integer, jsonb)',
+    -- what money already with the buyer pays of the rows of the statements of an order by their marks,
+    -- and the units of an item it may still pay: read under the policies of the reader (the card, the
+    -- refunds of the buyer, the reports)
+    'cartlify.return_row_shares(integer)',
+    'cartlify.return_row_shares_of(integer, boolean)',
+    'cartlify.money_item_units_left(integer, integer)',
+    -- whether the money of a line never reached the buyer (read under the policies of the reader: a
+    -- step of the shares above)
+    'cartlify.money_source_lost(integer)',
+    -- the last line of its own money that paid a row, and the rows a line is about (the rows it names
+    -- and the rows split off them): the lines name the rows, no row names a line
+    'cartlify.return_row_line(integer)',
+    'cartlify.money_line_return_rows(integer)',
     -- the disputes, the holds of an order and what root decides on them, the cost of a send to a
     -- buyer: each one checks the actor itself (add_order_hold and remove_order_hold stay closed)
     'cartlify.sync_payment_dispute(cartlify."PaymentProvider", text, text, cartlify."DisputeStatus", text, timestamp without time zone, boolean, integer, boolean, timestamp without time zone, timestamp without time zone, jsonb)',
@@ -344,6 +350,7 @@ BEGIN
     'cartlify.cleanup_return_addresses()',
     'cartlify.cleanup_return_personal()',
     'cartlify.cleanup_deleted_accounts_recipients()',
+    'cartlify.cleanup_tax_document_buyers()',
     'cartlify.cleanup_newsletter_pending()',
     'cartlify.cleanup_newsletter_consent()',
     'cartlify.cleanup_newsletter_recipients()',
@@ -391,7 +398,19 @@ BEGIN
     'cartlify.shop_setting_zones_valid(jsonb)',
     'cartlify.shop_setting_sender_valid(jsonb)',
     -- the items of a box (db/06, shipment_boxes_items_chk), as the role that writes the box
-    'cartlify.shipment_box_items_valid(jsonb)'
+    'cartlify.shipment_box_items_valid(jsonb)',
+    -- the sales of the period of a threshold of the tax, which the app counts for a cart under the
+    -- context of its buyer (src/providers/tax/own)
+    'cartlify.tax_threshold_sales(text[], timestamp without time zone, timestamp without time zone, boolean)',
+    -- the sales of the last 12 months passed a threshold: the tax of the recipient holds (the
+    -- confirmation, src/routes/api/orders/services/confirmOrder.service.ts)
+    'cartlify.hold_tax_threshold(text)',
+    -- the fiscal receipts: the answer of the provider the worker writes, and a receipt an admin
+    -- made by hand (src/routes/api/orders/services/receipts.service.ts)
+    'cartlify.record_receipt_result(integer, text, text, text, text, text, text, text, timestamp without time zone)',
+    'cartlify.confirm_receipt_manual(integer, text, text, text)',
+    -- whether a root follows a kind of alerts with its numbers (src/routes/api/admin/services)
+    'cartlify.alert_kind_followed(text)'
   ]
   LOOP
     IF to_regprocedure(v_fn) IS NOT NULL THEN

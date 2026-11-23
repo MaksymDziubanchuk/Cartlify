@@ -1,6 +1,6 @@
 import pg from 'pg';
 
-import type { Actor, Outcome } from './db.js';
+import type { Actor, DbSession, Outcome } from './db.js';
 
 // a connection to the test database as cartlify_owner, the role the functions of the database run
 // as (security definer) and the owner of every table. The tests of the app connect as cartlify_app,
@@ -19,8 +19,9 @@ export type OwnerSession = {
   attempt<T = Record<string, unknown>>(query: string, ...values: unknown[]): Promise<Outcome<T>>;
 };
 
-// the roles of the test database whose password is their name
-type SessionRole = 'cartlify_owner' | 'cartlify_readonly';
+// the roles of the test database whose password is their name (postgres: the superuser of the test
+// container, docker-compose.test.yml)
+type SessionRole = 'cartlify_owner' | 'cartlify_readonly' | 'postgres';
 
 function roleClient(role: SessionRole): pg.Client {
   const url = new URL(process.env.DATABASE_URL ?? '');
@@ -89,6 +90,22 @@ export const inOwnerTx = <T>(
   fn: (db: OwnerSession) => Promise<T>,
   opts: { commit?: boolean } = {},
 ): Promise<T> => inRoleTx('cartlify_owner', fn, opts);
+
+// the same as the superuser of the test container, for the steps no role of the app or of the
+// database may take: a row the database dates itself dated back, to test a term that ended; a row of
+// any shape past the policies, to try the checks of a table. The
+// superuser passes the policies of rls and the guards that let it (db/05); the rest of the rules
+// hold. Nothing commits
+export const inSuperuserTx = <T>(fn: (db: OwnerSession) => Promise<T>): Promise<T> =>
+  inRoleTx('postgres', fn);
+
+// a session of a role as the helpers of the database tests take it: they never reach for Prisma
+export const asDbSession = (db: OwnerSession): DbSession => ({
+  ...db,
+  get tx(): never {
+    throw new Error('a session of a role of the database has no transaction of Prisma');
+  },
+});
 
 // the same as cartlify_readonly, the role for reading by hand: it has no actor, so it sets no context
 export const inReadonlyTx = <T>(fn: (db: OwnerSession) => Promise<T>): Promise<T> =>
