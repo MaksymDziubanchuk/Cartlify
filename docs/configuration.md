@@ -170,6 +170,8 @@ FISKALY_ENVIRONMENT=test
 # header X-Webhook-Secret of the webhook in the dashboard of ShippyPro, a random text such as
 # openssl rand -base64 32
 SHIPPYPRO_API_KEY=
+# the key the tests take for the real ShippyPro (npm test -- service:shippypro), never the one of
+# the app: an account with the carrier Generic as the mock has it (commands.md)
 SHIPPYPRO_API_TEST_KEY=
 SHIPPYPRO_WEBHOOK_SECRET=
 
