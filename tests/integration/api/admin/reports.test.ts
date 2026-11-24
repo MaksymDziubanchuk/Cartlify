@@ -132,6 +132,7 @@ describe('GET /api/admin/reports/accounting', () => {
       refunded: { orders: 0, revenue: 0 },
       shipping: { sends: 0, cost: 0, withoutCost: 0 },
       returnShipping: { sends: 0, cost: 0, withoutCost: 0, deducted: 0, reimbursed: 0 },
+      corrections: 0,
       result: 0,
     });
     expect(whole.json().payments).toEqual({

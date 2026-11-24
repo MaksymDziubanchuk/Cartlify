@@ -9,6 +9,7 @@ import {
 } from '@routes/api/newsletters/services/helpers/sendingHalt.helper.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
+import { writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
@@ -44,8 +45,11 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   api = campaignApi(app, csrf);
   root = await createUser({ role: 'ROOT' });
+  await writeAlertNumbers(root);
   manager = await createUser({ role: 'ADMIN' });
+  await writeAlertNumbers(manager);
   plainAdmin = await createUser({ role: 'ADMIN' });
+  await writeAlertNumbers(plainAdmin);
   userIds.push(root.id, manager.id, plainAdmin.id);
   await giveNewsletterRight(root.id, manager.id);
 });
@@ -182,7 +186,9 @@ describe.each(SHARE_CASES)('the alert $kind', ({ kind, over, under }) => {
 
   it('counts for each admin by the threshold of that admin, and its list agrees', async () => {
     const strict = await createUser({ role: 'ADMIN' });
+    await writeAlertNumbers(strict);
     const lenient = await createUser({ role: 'ADMIN' });
+    await writeAlertNumbers(lenient);
     userIds.push(strict.id, lenient.id);
     await giveNewsletterRight(root.id, strict.id);
     await giveNewsletterRight(root.id, lenient.id);
@@ -222,6 +228,7 @@ describe('the alert of a campaign that goes out for too long', () => {
 
   it('counts for each admin by the threshold of that admin, and its list agrees', async () => {
     const strict = await createUser({ role: 'ADMIN' });
+    await writeAlertNumbers(strict);
     userIds.push(strict.id);
     await giveNewsletterRight(root.id, strict.id);
     await wentOut({}, 'sending', 2);
@@ -283,6 +290,7 @@ describe('the alert of a campaign the limit of the campaigns called off', () => 
 
   it('counts for each admin by the days of that admin, and its list agrees', async () => {
     const tight = await createUser({ role: 'ADMIN' });
+    await writeAlertNumbers(tight);
     userIds.push(tight.id);
     await giveNewsletterRight(root.id, tight.id);
     await cancelledCampaign(root, { by: 'limit', endedAt: utc(-4 * DAY) });
@@ -316,7 +324,7 @@ describe('the alert of the stop of the sending worker', () => {
       expect(await alertOf(actor)).toMatchObject({
         count: 0,
         occurredAt: null,
-        subscribed: true,
+        subscribed: false,
         list: null,
       });
     }
@@ -375,6 +383,7 @@ describe('the alert of the stop of the sending worker', () => {
 
   it('is left out of the alerts an admin who turned the kind off follows', async () => {
     const admin = await createUser({ role: 'ADMIN' });
+    await writeAlertNumbers(admin);
     userIds.push(admin.id);
     await giveNewsletterRight(root.id, admin.id);
     await markSendingHalted('stream_broken', new Date());

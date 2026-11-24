@@ -126,6 +126,23 @@ describe('the managers of the newsletters watch a campaign that went out', () =>
     expect(given.statusCode).toBe(200);
     const desk = newsletterDesk(app, csrf, sessionCookie(managerSession));
 
+    // root and the admin write the numbers of the alerts of the newsletters they watch (the server
+    // gives none): the per cent of the mails that did not arrive, of the complaints in a thousand,
+    // the hours before a campaign starts
+    for (const session of [rootSession, managerSession]) {
+      for (const [kind, value] of [
+        ['newsletter_undelivered', 5],
+        ['newsletter_rejected', 5],
+        ['newsletter_complaints', 3],
+        ['newsletter_starting_soon', 24],
+      ] as const) {
+        const res = await put(session, `/api/admin/alerts/subscriptions/${kind}/threshold`, {
+          value,
+        });
+        expect(res.statusCode).toBe(200);
+      }
+    }
+
     // the crowd of readers of the shop and the campaign that goes out to them
     const readers = [];
     for (let index = 0; index < READERS; index++) {
@@ -179,7 +196,7 @@ describe('the managers of the newsletters watch a campaign that went out', () =>
     ]);
 
     // the admin sets a threshold above the share of this campaign: it leaves the alert of the admin,
-    // not the one of root, and comes back when the threshold is taken back
+    // not the one of root, and comes back when the threshold comes down again
     const share = (bounced * 100) / total;
     const above = Math.ceil(share);
     const raised = await put(
@@ -194,9 +211,10 @@ describe('the managers of the newsletters watch a campaign that went out', () =>
     expect(await casesOf(managerSession, 'newsletter_undelivered')).not.toContain(first.id);
     expect(await casesOf(rootSession, 'newsletter_undelivered')).toContain(first.id);
 
-    const taken = await api.delete(
+    const taken = await put(
+      managerSession,
       '/api/admin/alerts/subscriptions/newsletter_undelivered/threshold',
-      as(managerSession),
+      { value: 5 },
     );
     expect(taken.statusCode).toBe(200);
     expect(await casesOf(managerSession, 'newsletter_undelivered')).toContain(first.id);

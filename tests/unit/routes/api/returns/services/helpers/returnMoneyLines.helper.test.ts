@@ -14,7 +14,7 @@ import {
 
 // the money of a statement read from its lines of the money journal: a transfer is written in parts
 // under one key (the goods, the delivery, the deduction for the way back, the way back the shop
-// pays, what other money covered), money sent outside the app in parts written together, a failure is new lines with the
+// pays), money sent outside the app in parts written together, a failure is new lines with the
 // opposite sums; the parcels back cost what their lines say, corrections with the difference
 
 const T1 = new Date('2026-11-11T10:00:00.000Z');
@@ -106,10 +106,12 @@ describe('sumsOf', () => {
     ).toEqual({ goods: 100, delivery: 10, deduction: 8, wayBack: 0, covered: 0, total: 102 });
   });
 
-  it('counts what other money covered as part of what the buyer got', () => {
+  // the lines of a movement are what it sent; what money already with the buyer paid of the rows
+  // is its part covered, which the buyer got too
+  it('counts what other money paid of the rows as part of what the buyer got', () => {
     expect(
-      sumsOf([line({ part: 'goods', amount: -30 }), line({ part: 'covered', amount: 20 })]),
-    ).toEqual({ goods: 30, delivery: 0, deduction: 0, wayBack: 0, covered: 20, total: 30 });
+      sumsOf([line({ part: 'goods', amount: -10 }), line({ part: 'covered', amount: 20 })]),
+    ).toEqual({ goods: 10, delivery: 0, deduction: 0, wayBack: 0, covered: 20, total: 30 });
   });
 
   it('adds the cents without float math', () => {
@@ -373,16 +375,22 @@ describe('rowPaidOf', () => {
     expect(paid.get(7)).toBe(10);
   });
 
-  it('takes back what a failed transfer paid, and counts no other part', () => {
+  it('takes back what a failed transfer paid, counts what money already with the buyer paid of a row, and no other part', () => {
     const paid = rowPaidOf([
       goods({}),
       goods({ event: 'money.refund_failed', amount: 15 }),
       line({ part: 'delivery', amount: -5, meta: [{ returnItemId: 7, amount: 5 }] }),
-      line({ part: 'covered', amount: 3, meta: [{ returnItemId: 7, amount: 3 }] }),
+      line({ part: 'covered', amount: 3, meta: [{ returnItemId: 7, orderItemId: 1, amount: 3 }] }),
+      line({
+        part: 'covered',
+        amount: 2,
+        meta: [{ returnItemId: 7, orderItemId: null, amount: 2 }],
+      }),
     ]);
 
     expect(paid.get(6)).toBe(0);
-    expect(paid.get(7)).toBe(0);
+    // the goods money already there paid, not the delivery
+    expect(paid.get(7)).toBe(3);
   });
 
   it('adds the money in cents', () => {

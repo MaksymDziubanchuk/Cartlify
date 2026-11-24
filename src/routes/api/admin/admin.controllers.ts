@@ -8,7 +8,9 @@ import type {
   AdminAlertKindParamsDto,
   AdminAlertSubscriptionDto,
   AdminAlertThresholdBodyDto,
+  AdminAlertSeenDto,
   GetAdminAlertsQueryDto,
+  GetAdminVatReportResponseDto,
   AdminAuditLogQueryDto,
   AdminStockLogQueryDto,
   AdminMoneyLogQueryDto,
@@ -57,6 +59,7 @@ import { moneyGroupsArgsOf, moneyLogArgsOf } from './services/moneyLog.service.j
 import { priceLogArgsOf } from './services/priceLog.service.js';
 import { loginLogArgsOf } from './services/loginLog.service.js';
 import { consentLogArgsOf } from './services/consentLog.service.js';
+import { buildVatReport } from './services/vatReport.service.js';
 
 const ALL_TIME_FROM_MS = 0;
 
@@ -139,6 +142,21 @@ const getAccountingReport: ControllerRouter<
   });
 
   return reply.code(200).send(result);
+};
+
+// GET /api/admin/reports/vat: the tax of the money of a period, for the declarations
+const getVatReport: ControllerRouter<
+  {},
+  {},
+  AdminStatsQueryDto,
+  GetAdminVatReportResponseDto
+> = async (req, reply) => {
+  if (!req.user) {
+    throw new UnauthorizedError('LOGIN_REQUIRED');
+  }
+
+  const period = normalizeStatsQuery(req.query, req.user);
+  return reply.code(200).send(await buildVatReport(period));
 };
 
 // the products of a report: a category with its whole branch unless branch is false
@@ -502,6 +520,22 @@ const putAlertThreshold: ControllerRouter<
     actorRole: req.user.role,
     kind: req.params.kind,
     value: req.body.value,
+    window: req.body.window ?? null,
+  });
+  return reply.code(200).send(result);
+};
+
+// Close of a kind of alerts that only informs: what the actor saw of it is put away
+const putAlertSeen: ControllerRouter<AdminAlertKindParamsDto, {}, {}, AdminAlertSeenDto> = async (
+  req,
+  reply,
+) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const result = await adminServices.closeInformationalAlert({
+    actorId: req.user.id,
+    actorRole: req.user.role,
+    kind: req.params.kind,
   });
   return reply.code(200).send(result);
 };
@@ -563,6 +597,7 @@ export const adminController = {
   getAccountingVariants,
   getAccountingCategories,
   getAccountingTimeline,
+  getVatReport,
   getStockBatches,
   getStockMovements,
   getAuditLog,
@@ -579,6 +614,7 @@ export const adminController = {
   putAlertSubscription: alertSubscription(true),
   deleteAlertSubscription: alertSubscription(false),
   putAlertThreshold,
+  putAlertSeen,
   deleteAlertThreshold,
   getAlertDismissals,
   putAlertDismissal: alertDismissal(true),

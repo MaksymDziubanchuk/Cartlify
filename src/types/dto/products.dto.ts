@@ -272,6 +272,10 @@ export type ProductCardDto = Omit<ProductResponseDto, 'category'> & {
   // what customs need of it: the code of the goods (HS) and the country of origin, null when none
   hsCode: string | null;
   originCountry: string | null;
+  // an admin only: the tax group (null: the main rate) and the countries that class it in another
+  // one, { country: group id, or null for the main rate } (docs/taxes.md)
+  taxGroupId?: number | null;
+  taxExceptions?: Record<string, number | null>;
   documents: ProductDocumentDto[];
   withdrawal: ProductWithdrawalDto;
   // admin and root only
@@ -387,6 +391,10 @@ export interface CreateProductDto {
   // what customs need of it, both optional; checked by the service
   hsCode?: unknown;
   originCountry?: unknown;
+  // the tax group and the classes of the countries (a form: the id as text, the classes as json);
+  // checked by the service
+  taxGroupId?: unknown;
+  taxExceptions?: unknown;
   // the rule of withdrawal of its own: one of the rules, or none (the product follows its category);
   // checked by the service
   withdrawal?: unknown;
@@ -422,6 +430,10 @@ export interface UpdateProductBodyDto {
   // each away
   hsCode?: string | null;
   originCountry?: string | null;
+  // the tax group (null takes it away: the main rate) and the classes of the countries, written
+  // whole ({} takes them away); a form gives the id as text and the classes as json
+  taxGroupId?: number | string | null;
+  taxExceptions?: Record<string, number | null> | string;
   // the rule of withdrawal of its own; null or empty gives it up and the product follows its
   // category. Checked by the service (WITHDRAWAL_RULE_INVALID)
   withdrawal?: string | null;
@@ -888,4 +900,44 @@ export interface WriteOffStockResponseDto {
   writeOffId: string;
   items: Array<StockLineRefDto & { quantity: number; batches: WriteOffTakenDto[] }>;
   variants: StockVariantSummaryDto[];
+}
+
+// PATCH /api/products/tax: the tax group and the classes of the countries of the products of a
+// scope (docs/taxes.md)
+export interface UpdateProductsTaxScopeDto {
+  productIds?: number[];
+  categoryId?: number;
+  // in this group; null: without a group
+  taxGroupId?: number | null;
+  // a country classes the product in a group of its own, or does not
+  exceptionOf?: string;
+  withoutExceptionOf?: string;
+}
+
+export interface UpdateProductsTaxBodyDto {
+  scope: UpdateProductsTaxScopeDto;
+  // the new group (null: the main rate); not sent: as it is
+  taxGroupId?: number | null;
+  // the classes given or changed, { country: group id, or null for the main rate }
+  exceptions?: Record<string, number | null>;
+  // the countries whose class goes
+  removeExceptions?: string[];
+  // nothing written: the products of the scope with what they would have
+  dryRun?: boolean;
+}
+
+export type UpdateProductsTaxDto = UpdateProductsTaxBodyDto & {
+  actorId: UserId;
+  actorRole: Role;
+};
+
+export interface UpdateProductsTaxResponseDto {
+  dryRun: boolean;
+  count: number;
+  products: {
+    id: number;
+    name: string;
+    taxGroupId: number | null;
+    taxExceptions: Record<string, number | null>;
+  }[];
 }

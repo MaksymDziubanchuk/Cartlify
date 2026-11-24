@@ -77,47 +77,6 @@ export default async function returnsRouter(app: FastifyInstance) {
     },
     returnsController.postMoneyReceived,
   );
-  // money already with the buyer for goods no statement of the order owes any more: the buyer gave
-  // it back, the shop gives it up, or the shop keeps the goods it did not accept
-  app.post(
-    '/:returnId/overpaid/received',
-    {
-      preHandler: [
-        authGuard,
-        requireRole(['ADMIN', 'ROOT']),
-        requireMoneyManager,
-        validateId('returnId'),
-      ],
-      schema: returnsSchema.postOverpaidReceivedSchema,
-    },
-    returnsController.postOverpaidReceived,
-  );
-  app.post(
-    '/:returnId/overpaid/lost',
-    {
-      preHandler: [
-        authGuard,
-        requireRole(['ADMIN', 'ROOT']),
-        requireMoneyManager,
-        validateId('returnId'),
-      ],
-      schema: returnsSchema.postOverpaidLostSchema,
-    },
-    returnsController.postOverpaidLost,
-  );
-  app.post(
-    '/:returnId/keep',
-    {
-      preHandler: [
-        authGuard,
-        requireRole(['ADMIN', 'ROOT']),
-        requireMoneyManager,
-        validateId('returnId'),
-      ],
-      schema: returnsSchema.postKeepSchema,
-    },
-    returnsController.postKeep,
-  );
   app.post(
     '/:returnId/close',
     {

@@ -426,8 +426,8 @@ const adminDeliveryMoneySchema = {
         cost: {
           type: 'number',
           description:
-            'The costs of the sends the shop owes for, written in the period, with the ' +
-            'corrections in theirs, to the cent.',
+            'The costs of the sends the shop owes for, written in the period as they were first ' +
+            'written (a carrier giving back the cost of a label voided takes it off), to the cent.',
         },
         withoutCost: nonNegativeIntegerSchema,
       },
@@ -445,8 +445,8 @@ const adminDeliveryMoneySchema = {
         cost: {
           type: 'number',
           description:
-            'The costs of the parcels written in the period, with the corrections in theirs, to ' +
-            'the cent.',
+            'The costs of the parcels written in the period as they were first written, to the ' +
+            'cent.',
         },
         withoutCost: nonNegativeIntegerSchema,
         deducted: {
@@ -464,14 +464,21 @@ const adminDeliveryMoneySchema = {
       },
       required: ['sends', 'cost', 'withoutCost', 'deducted', 'reimbursed'],
     },
+    corrections: {
+      type: 'number',
+      description:
+        'The corrections of the costs of the sends and of the parcels back written in the period: ' +
+        'a person changed a sum they wrote (money.correction), the difference, apart from the ' +
+        'costs so every one of them shows; above 0 more spent, to the cent.',
+    },
     result: {
       type: 'number',
       description:
-        'The income less what went back and less what the carriers cost, the parcels back too: ' +
-        'what the delivery earned.',
+        'The income less what went back and less what the carriers cost, the parcels back and the ' +
+        'corrections too: what the delivery earned.',
     },
   },
-  required: ['income', 'refunded', 'shipping', 'returnShipping', 'result'],
+  required: ['income', 'refunded', 'shipping', 'returnShipping', 'corrections', 'result'],
 } as const;
 
 const signedMoney = (description: string) => ({ type: 'number', description }) as const;
@@ -2062,7 +2069,7 @@ const MONEY_PURPOSES = [
   'shipping',
   'compensation',
 ] as const;
-const MONEY_PARTS = ['goods', 'delivery', 'deduction', 'way_back', 'covered', 'whole'] as const;
+const MONEY_PARTS = ['goods', 'delivery', 'deduction', 'way_back', 'whole'] as const;
 const MONEY_STATES = ['in_transit', 'sent'] as const;
 const MONEY_FAILURES = [
   'card_unavailable',
@@ -2322,11 +2329,11 @@ const adminMoneyLogPageSchema = journalPageSchema(
       type: 'array',
       description:
         'What the line is made of: for the goods of a transfer the rows of the statement it pays ' +
-        '(returnItemId, variantId, amount), for a part covered the row and the item of the order ' +
-        'it covers (returnItemId, orderItemId, amount), for money given back by hand or taken by a ' +
-        'bank the shares of the decision (orderItemId, productId, variantId, quantity, unitPrice, ' +
-        'amount; delivery), for a late payment the reason and the number of the order. Empty for ' +
-        'a line without it.',
+        '(returnItemId, variantId, amount), for money given back by hand or taken by a bank the ' +
+        'shares of the decision (orderItemId, productId, variantId, quantity, unitPrice, amount, ' +
+        'at; delivery, at) and the losses of the shop a reception found (lost, lostOrderItemId, ' +
+        'lostReturnItemId: a unit the money paid that a transfer ahead of the goods paid too), ' +
+        'for a late payment the reason and the number of the order. Empty for a line without it.',
       items: { type: 'object', additionalProperties: true },
     },
   },
@@ -2743,7 +2750,6 @@ const ALERT_KINDS = [
   'returns_money_late',
   'returns_goods_late',
   'returns_money_short',
-  'returns_money_overpaid',
   'worker_stalled',
   'delivery_provider_down',
   'shop_settings_incomplete',
@@ -2760,10 +2766,28 @@ const ALERT_KINDS = [
   'fraud_warnings',
   'fraud_warnings_shipped',
   'payment_reviews',
+  'receipts_not_issued',
+  'receipts_refused',
   'admin_actions',
+  'tax_threshold_near',
+  'tax_threshold_passed',
+  'tax_threshold_dropped',
+  'tax_sales_stopped',
+  'tax_parcel_limit_refusals',
+  'tax_rate_soon',
+  'tax_threshold_period_ended',
 ] as const;
 
-const ALERT_THRESHOLD_UNITS = ['days', 'units', 'seconds', 'hours', 'percent', 'permille'] as const;
+const ALERT_THRESHOLD_UNITS = [
+  'days',
+  'units',
+  'seconds',
+  'minutes',
+  'hours',
+  'percent',
+  'permille',
+  'refusals',
+] as const;
 
 const adminAlertsQuerySchema = {
   $id: 'adminAlertsQuerySchema',
@@ -2844,8 +2868,37 @@ const adminAlertsResponseSchema = {
               'through), the time the delivery provider stopped answering (while the alert ' +
               'counts it). null for every other kind, and for these while nothing happened.',
           },
+          window: {
+            type: ['integer', 'null'],
+            description:
+              'The second number the kind is counted with (the days of the window of ' +
+              'tax_parcel_limit_refusals); null for a kind without one, and while it is not written.',
+          },
+          informational: {
+            type: 'boolean',
+            description:
+              'A kind that only informs and waits for no action: Close (PUT ' +
+              '/api/admin/alerts/seen/:kind) puts what the actor saw away, a later event alerts again.',
+          },
+          seenUntil: {
+            anyOf: [dateTimeSchema, { type: 'null' }],
+            description:
+              'When the actor last closed the kind (it counts what came after); null before the ' +
+              'first time, and for a kind that does not only inform.',
+          },
         },
-        required: ['kind', 'subscribed', 'count', 'dismissed', 'threshold', 'list', 'occurredAt'],
+        required: [
+          'kind',
+          'subscribed',
+          'count',
+          'dismissed',
+          'threshold',
+          'list',
+          'occurredAt',
+          'window',
+          'informational',
+          'seenUntil',
+        ],
       },
     },
     total: { type: 'integer', minimum: 0, description: 'The counts of every alert together.' },
@@ -2873,14 +2926,36 @@ const adminAlertSubscriptionSchema = {
           type: 'object',
           additionalProperties: false,
           properties: {
-            value: { type: 'integer', description: 'The threshold the kind is counted with.' },
-            default: { type: 'integer', description: 'The one the server gives.' },
+            value: {
+              type: ['integer', 'null'],
+              description:
+                'The number the actor wrote; null: not written, the kind counts nothing for the ' +
+                'actor and cannot be followed until it is (the server gives none).',
+            },
             min: { type: 'integer' },
             max: { type: 'integer' },
             unit: { type: 'string', enum: ALERT_THRESHOLD_UNITS },
-            custom: { type: 'boolean', description: 'Whether the actor set it.' },
+            window: {
+              anyOf: [
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    value: { type: ['integer', 'null'] },
+                    min: { type: 'integer' },
+                    max: { type: 'integer' },
+                    unit: { type: 'string', enum: ALERT_THRESHOLD_UNITS },
+                  },
+                  required: ['value', 'min', 'max', 'unit'],
+                },
+                { type: 'null' },
+              ],
+              description:
+                'The second number of a kind that takes one (the days of a window), written ' +
+                'with the first; null for the others.',
+            },
           },
-          required: ['value', 'default', 'min', 'max', 'unit', 'custom'],
+          required: ['value', 'min', 'max', 'unit', 'window'],
         },
         { type: 'null' },
       ],
@@ -2927,8 +3002,27 @@ const adminAlertThresholdBodySchema = {
       maximum: 100_000,
       description: 'The threshold, within the bounds of its kind.',
     },
+    window: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100_000,
+      description:
+        'The days of the window, for a kind that takes one (tax_parcel_limit_refusals), within ' +
+        'its bounds; none for the others.',
+    },
   },
   required: ['value'],
+} as const;
+
+const adminAlertSeenSchema = {
+  $id: 'adminAlertSeenSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', enum: ALERT_KINDS },
+    seenUntil: dateTimeSchema,
+  },
+  required: ['kind', 'seenUntil'],
 } as const;
 
 const adminAlertDismissalParamsSchema = {
@@ -3041,6 +3135,7 @@ export const adminDtoSchemas = [
   adminAlertSubscriptionsResponseSchema,
   adminAlertKindParamsSchema,
   adminAlertThresholdBodySchema,
+  adminAlertSeenSchema,
   adminAlertDismissalParamsSchema,
   adminAlertDismissalSchema,
   adminAlertDismissalsResponseSchema,

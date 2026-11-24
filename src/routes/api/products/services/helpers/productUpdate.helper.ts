@@ -1,4 +1,10 @@
 import { Prisma } from '@prisma/client';
+import {
+  assertTaxGroupsExist,
+  normalizeTaxExceptions,
+  normalizeTaxGroupId,
+  sameExceptions,
+} from './productTax.helper.js';
 
 import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { normalizeWarnings } from '@helpers/party.js';
@@ -54,6 +60,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     warnings,
     hsCode,
     originCountry,
+    taxGroupId,
+    taxExceptions,
     withdrawal,
     documentIds,
     stock,
@@ -84,6 +92,9 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
   const hsCodeNorm = hsCode !== undefined ? normalizeHsCode(hsCode) : undefined;
   const originCountryNorm =
     originCountry !== undefined ? normalizeOriginCountry(originCountry) : undefined;
+  // the tax group and the classes of the countries
+  const taxGroupIdNorm = normalizeTaxGroupId(taxGroupId);
+  const taxExceptionsNorm = normalizeTaxExceptions(taxExceptions);
   // the rule of withdrawal: one of the rules, or none (null) when the product gives it up
   const withdrawalNorm = parseWithdrawalRule(withdrawal);
   // the documents by their ids, the list written whole; null or none is an empty list
@@ -99,6 +110,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     warnings !== undefined ||
     hsCode !== undefined ||
     originCountry !== undefined ||
+    taxGroupId !== undefined ||
+    taxExceptions !== undefined ||
     withdrawal !== undefined ||
     documentIds !== undefined ||
     categoryId !== undefined ||
@@ -119,6 +132,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     warningsNorm,
     hsCodeNorm,
     originCountryNorm,
+    taxGroupIdNorm,
+    taxExceptionsNorm,
     withdrawalNorm,
     documentIdsNorm,
   };
@@ -135,6 +150,8 @@ export const productBeforeUpdateSelect = {
   warnings: true,
   hsCode: true,
   originCountry: true,
+  taxGroupId: true,
+  taxExceptions: true,
   withdrawal: true,
   popularityOverride: true,
   popularityOverrideUntil: true,
@@ -161,6 +178,9 @@ export async function checkProductUpdate(
 
   // the documents named are in the directory of documents
   if (plan.documentIdsNorm) await assertDocumentsExist(db, plan.documentIdsNorm);
+
+  // the tax groups named are there
+  await assertTaxGroupsExist(db, plan.taxGroupIdNorm, plan.taxExceptionsNorm);
 
   // the parties after the change: in the directory, and by the rule of the EU
   if (Object.keys(plan.partyChanges).length > 0) {
@@ -204,6 +224,15 @@ export async function writeProductUpdate(
     ...(plan.warningsNorm !== undefined ? { warnings: plan.warningsNorm } : {}),
     ...(plan.hsCodeNorm !== undefined ? { hsCode: plan.hsCodeNorm } : {}),
     ...(plan.originCountryNorm !== undefined ? { originCountry: plan.originCountryNorm } : {}),
+    ...(plan.taxGroupIdNorm !== undefined
+      ? {
+          taxGroup:
+            plan.taxGroupIdNorm === null
+              ? { disconnect: true }
+              : { connect: { id: plan.taxGroupIdNorm } },
+        }
+      : {}),
+    ...(plan.taxExceptionsNorm !== undefined ? { taxExceptions: plan.taxExceptionsNorm } : {}),
     ...(plan.withdrawalNorm !== undefined ? { withdrawal: plan.withdrawalNorm } : {}),
     ...(input.categoryId !== undefined ? { categoryId: plan.categoryIdRaw! } : {}),
   };
@@ -250,6 +279,21 @@ export async function writeProductUpdate(
       popularityOverrideUntil: input.popularityOverrideUntil,
     },
   });
+
+  // the tax group and the classes, each a line when it changed
+  if (plan.taxGroupIdNorm !== undefined && plan.taxGroupIdNorm !== before.taxGroupId) {
+    auditChanges.push({ field: 'taxGroupId', old: before.taxGroupId, new: plan.taxGroupIdNorm });
+  }
+  if (
+    plan.taxExceptionsNorm !== undefined &&
+    !sameExceptions(before.taxExceptions, plan.taxExceptionsNorm)
+  ) {
+    auditChanges.push({
+      field: 'taxExceptions',
+      old: before.taxExceptions,
+      new: plan.taxExceptionsNorm,
+    });
+  }
 
   // the documents are written whole; a list the product has already is no change
   if (plan.documentIdsNorm !== undefined) {

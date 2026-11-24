@@ -172,7 +172,6 @@ describe('POST /api/returns', () => {
         paymentLeft: 30,
         short: false,
       },
-      moneyOverpaid: 0,
       money: [],
       items: [
         {
@@ -190,7 +189,8 @@ describe('POST /api/returns', () => {
           amountNote: null,
           goodsSetAt: null,
           goodsSetBy: null,
-          moneyLogId: null,
+          paidUnits: 0,
+          paidUnitsLeft: 0,
           refundFailure: null,
           refusedCode: null,
         },

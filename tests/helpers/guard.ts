@@ -36,6 +36,11 @@ export function assertTestServices(): void {
     );
   }
 
+  // the receipts of the tests go to the test of the tax authority of Spain, never to the real one
+  if ((process.env.FISKALY_ENVIRONMENT ?? '').trim().toLowerCase() === 'live') {
+    throw new Error('Test guard: the fiskaly environment of the tests must be test');
+  }
+
   // the payment tests pay, refund and close payment pages for real: only in a test sandbox
   if (!/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY ?? '')) {
     throw new Error(

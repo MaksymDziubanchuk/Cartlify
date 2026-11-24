@@ -93,16 +93,42 @@ export const MONEY_ALERT_KINDS = [
   // no statement owes any more
   'bank_money_to_decide',
   'returns_money_short',
-  'returns_money_overpaid',
   'hand_refunds_to_explain',
   'hand_refunds_to_decide',
   'fraud_warnings',
   'fraud_warnings_shipped',
   'payment_reviews',
+  // the fiscal receipts (docs/taxes.md): the ones the provider has not registered for long, and the
+  // ones it refused (root or a money admin makes them by hand and confirms them)
+  'receipts_not_issued',
+  'receipts_refused',
 ] as const satisfies readonly AdminAlertKind[];
 
-// the kinds of root alone: the actions of the admins
-export const ROOT_ALERT_KINDS = ['admin_actions'] as const satisfies readonly AdminAlertKind[];
+// the kinds of root alone: the actions of the admins, and the tax of the countries (docs/taxes.md):
+// the sales near the threshold of a country, a threshold passed where the shop is registered (the
+// tax of the country is taken now), the sales of the last 12 months of a threshold that holds it fell
+// below it (root may go back to the first rule), the sales stopped where it is not (an order refused
+// for it), and
+// what only informs: the orders refused within the limit of a parcel, a rate that starts soon, the
+// period of a threshold that ended (its sales start from 0)
+export const ROOT_ALERT_KINDS = [
+  'admin_actions',
+  'tax_threshold_near',
+  'tax_threshold_passed',
+  'tax_threshold_dropped',
+  'tax_sales_stopped',
+  'tax_parcel_limit_refusals',
+  'tax_rate_soon',
+  'tax_threshold_period_ended',
+] as const satisfies readonly AdminAlertKind[];
+
+// the kinds that only inform and wait for no action: "Close" (PUT /api/admin/alerts/seen/:kind)
+// puts what the person saw away, each for themselves; a later event of the kind alerts again
+export const INFORMATIONAL_ALERT_KINDS: ReadonlySet<AdminAlertKind> = new Set([
+  'tax_parcel_limit_refusals',
+  'tax_rate_soon',
+  'tax_threshold_period_ended',
+]);
 
 // the rights of an admin that open kinds of their own, as the database says them at the request
 export type AlertRights = { newsletters: boolean; money: boolean };
@@ -117,94 +143,136 @@ export const alertKindsOf = (role: Role, rights: AlertRights): AdminAlertKind[] 
   ...(role === 'ROOT' ? ROOT_ALERT_KINDS : []),
 ];
 
-type ThresholdSpec = { unit: AdminAlertThresholdUnit; default: number; min: number; max: number };
+type NumberSpec = { unit: AdminAlertThresholdUnit; min: number; max: number };
+type ThresholdSpec = NumberSpec & { window?: NumberSpec };
 
-// the kinds an admin sets a threshold for, with the one the server gives until they do; the
-// other kinds have none: every paid order, every product with no free units waits
+// the kinds an admin sets a number for, and the ones that take a second number, a window of days.
+// The server gives none: a kind with a number works for a person only once they wrote it, and a
+// person follows it only with it (ALERT_THRESHOLD_REQUIRED). The other kinds have none: every paid
+// order, every product with no free units waits
 const THRESHOLDS: Partial<Record<AdminAlertKind, ThresholdSpec>> = {
   // sent by hand and not delivered for so many days
-  shipped_orders_waiting: { unit: 'days', default: 14, min: 1, max: 365 },
+  shipped_orders_waiting: { unit: 'days', min: 1, max: 365 },
   // a pickup ready and not collected for so many days
-  pickup_not_collected: { unit: 'days', default: 7, min: 1, max: 365 },
+  pickup_not_collected: { unit: 'days', min: 1, max: 365 },
   // a send the shop owes something for, whose cost is not written for so many days
-  shipped_without_cost: { unit: 'days', default: 3, min: 1, max: 365 },
+  shipped_without_cost: { unit: 'days', min: 1, max: 365 },
   // an order shipped by hand, whose send has no tracking number, for so many days
-  shipped_without_tracking: { unit: 'days', default: 2, min: 1, max: 365 },
+  shipped_without_tracking: { unit: 'days', min: 1, max: 365 },
   // a parcel of the delivery provider made so many days ago that the carrier has not taken
-  parcels_not_collected: { unit: 'days', default: 3, min: 1, max: 365 },
+  parcels_not_collected: { unit: 'days', min: 1, max: 365 },
   // the delivery provider has not answered for so many seconds (decision 13: a quarter of an hour)
-  delivery_provider_down: { unit: 'seconds', default: 900, min: 60, max: 86_400 },
+  delivery_provider_down: { unit: 'seconds', min: 60, max: 86_400 },
   // statements: the proof of the parcel is told and the shop has not confirmed it for so many days
-  returns_proof_waiting: { unit: 'days', default: 2, min: 1, max: 365 },
+  returns_proof_waiting: { unit: 'days', min: 1, max: 365 },
   // statements: the buyer told nothing of the parcel and the goods are not in, so many days after
   // the statement (14 to send and a week on the road)
-  returns_goods_not_sent: { unit: 'days', default: 21, min: 1, max: 365 },
+  returns_goods_not_sent: { unit: 'days', min: 1, max: 365 },
   // statements: the money is due (the goods are in, or the proof confirmed) and not back, so many
   // days after the statement
-  returns_money_late: { unit: 'days', default: 10, min: 1, max: 365 },
+  returns_money_late: { unit: 'days', min: 1, max: 365 },
   // statements: the money went back and the goods are not in, so many days after it
-  returns_goods_late: { unit: 'days', default: 14, min: 1, max: 365 },
+  returns_goods_late: { unit: 'days', min: 1, max: 365 },
   // at most so many free units
-  low_stock: { unit: 'units', default: 5, min: 1, max: 100_000 },
+  low_stock: { unit: 'units', min: 1, max: 100_000 },
   // the last good day of a batch within so many days
-  expiring_batches: { unit: 'days', default: 7, min: 1, max: 365 },
+  expiring_batches: { unit: 'days', min: 1, max: 365 },
   // the refunds of late payments that came to their state in so many last days
-  late_refunds: { unit: 'days', default: 7, min: 1, max: 365 },
+  late_refunds: { unit: 'days', min: 1, max: 365 },
   // a refund of each kind asked so many days ago whose money was not told sent or failed
-  late_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
-  return_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
-  hand_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
-  compensation_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
-  dispute_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
+  late_refunds_in_transit: { unit: 'days', min: 1, max: 365 },
+  return_refunds_in_transit: { unit: 'days', min: 1, max: 365 },
+  hand_refunds_in_transit: { unit: 'days', min: 1, max: 365 },
+  compensation_refunds_in_transit: { unit: 'days', min: 1, max: 365 },
+  dispute_refunds_in_transit: { unit: 'days', min: 1, max: 365 },
   // the disputes lost in so many last days
-  disputes_lost: { unit: 'days', default: 7, min: 1, max: 365 },
+  disputes_lost: { unit: 'days', min: 1, max: 365 },
   // root: the orders sent the provider warned of fraud in so many last days
-  fraud_warnings_shipped: { unit: 'days', default: 7, min: 1, max: 365 },
+  fraud_warnings_shipped: { unit: 'days', min: 1, max: 365 },
   // a worker that has not run for so many seconds; it runs every few seconds
-  worker_stalled: { unit: 'seconds', default: 180, min: 60, max: 86_400 },
+  worker_stalled: { unit: 'seconds', min: 60, max: 86_400 },
   // root: the lines the admins wrote in so many last hours
-  admin_actions: { unit: 'hours', default: 24, min: 1, max: 720 },
+  admin_actions: { unit: 'hours', min: 1, max: 720 },
   // the newsletters: a campaign whose mails did not arrive or were not taken by the provider, over so
   // many per cent (whole numbers: the least a share can be set to is 1%)
-  newsletter_undelivered: { unit: 'percent', default: 5, min: 1, max: SHARE_UNITS.undelivered.max },
-  newsletter_rejected: { unit: 'percent', default: 5, min: 1, max: SHARE_UNITS.rejected.max },
+  newsletter_undelivered: { unit: 'percent', min: 1, max: SHARE_UNITS.undelivered.max },
+  newsletter_rejected: { unit: 'percent', min: 1, max: SHARE_UNITS.rejected.max },
   // ...or complained of, over so many in a thousand (per mille): a complaint is rare, the mail
   // providers judge a sender by a few in a thousand, and a whole per cent would be far too coarse
-  newsletter_complaints: { unit: 'permille', default: 3, min: 1, max: SHARE_UNITS.complaints.max },
+  newsletter_complaints: { unit: 'permille', min: 1, max: SHARE_UNITS.complaints.max },
   // a campaign that has been going out for so many days
-  newsletter_running_long: { unit: 'days', default: 3, min: 1, max: 365 },
+  newsletter_running_long: { unit: 'days', min: 1, max: 365 },
   // a campaign scheduled to start within so many hours
-  newsletter_starting_soon: { unit: 'hours', default: 24, min: 1, max: 720 },
+  newsletter_starting_soon: { unit: 'hours', min: 1, max: 720 },
   // a campaign the limit of the campaigns called off, in the last so many days
-  newsletter_cancelled_by_limit: { unit: 'days', default: 7, min: 1, max: 365 },
+  newsletter_cancelled_by_limit: { unit: 'days', min: 1, max: 365 },
+  // a fiscal receipt the provider has not registered for so many minutes
+  receipts_not_issued: { unit: 'minutes', min: 1, max: 10_080 },
+  // root: the sales of a country (or its group) in the period of its threshold reached so many per
+  // cent of it: the room left for the rate of exchange is root's (docs/taxes.md)
+  tax_threshold_near: { unit: 'percent', min: 1, max: 99 },
+  // root: so many orders to a country refused within the limit of a parcel in the last days of the
+  // window (the count stops at 1000: more than 1000)
+  tax_parcel_limit_refusals: {
+    unit: 'refusals',
+    min: 1,
+    max: 1000,
+    window: { unit: 'days', min: 1, max: 30 },
+  },
+  // root: a rate of a country that starts within so many days
+  tax_rate_soon: { unit: 'days', min: 1, max: 365 },
 };
 
-// the threshold of a kind: the one the admin set (custom) or the one the server gives; null for
-// a kind without one
+// the numbers of a kind as the person wrote them (value null: not written yet), with their bounds;
+// null for a kind without one
 export function thresholdOf(
   kind: AdminAlertKind,
-  custom: number | null,
+  value: number | null,
+  window: number | null = null,
 ): AdminAlertThresholdDto | null {
   const spec = THRESHOLDS[kind];
   if (!spec) return null;
 
   return {
-    value: custom ?? spec.default,
-    default: spec.default,
+    value,
     min: spec.min,
     max: spec.max,
     unit: spec.unit,
-    custom: custom !== null,
+    window: spec.window ? { value: window, ...spec.window } : null,
   };
 }
 
-// a threshold an admin sets for a kind: one the kind has, within its bounds
-export function assertThreshold(kind: AdminAlertKind, value: number): void {
+// whether the kind works for a person with the numbers they wrote: a kind without numbers always,
+// one with them once each is written
+export function numbersReady(
+  kind: AdminAlertKind,
+  value: number | null,
+  window: number | null,
+): boolean {
+  const spec = THRESHOLDS[kind];
+  return !spec || (value !== null && (!spec.window || window !== null));
+}
+
+// the numbers an admin sets for a kind: ones the kind has, within their bounds; a kind with a window
+// takes both
+export function assertThreshold(
+  kind: AdminAlertKind,
+  value: number,
+  window: number | null = null,
+): void {
   const spec = THRESHOLDS[kind];
   if (!spec) throw new NotFoundError('ALERT_THRESHOLD_NOT_FOUND', { kind });
 
   if (!Number.isInteger(value) || value < spec.min || value > spec.max) {
     throw new BadRequestError('ALERT_THRESHOLD_INVALID', { min: spec.min, max: spec.max });
+  }
+  if (!spec.window) {
+    if (window !== null) throw new BadRequestError('ALERT_WINDOW_NOT_TAKEN', { kind });
+    return;
+  }
+  const w = spec.window;
+  if (window === null || !Number.isInteger(window) || window < w.min || window > w.max) {
+    throw new BadRequestError('ALERT_WINDOW_INVALID', { min: w.min, max: w.max });
   }
 }
 
@@ -221,6 +289,9 @@ export type AlertWindow = {
   units?: number;
   // the days of a statement of return (the filters of the list of the statements count in days)
   days?: number;
+  // the cases of a kind kept in redis, read before the snapshot: their ids and times
+  ids?: string[];
+  times?: string[];
 };
 
 const HOUR = 3_600_000;
@@ -239,10 +310,22 @@ export function alertWindowOf(
   threshold: number | null,
   now: number,
   today: string,
+  window: number | null = null,
 ): AlertWindow {
   if (threshold === null) return {};
 
   switch (kind) {
+    // a receipt not registered since a time before this one
+    case 'receipts_not_issued':
+      return { before: new Date(now - threshold * 60_000) };
+    case 'tax_threshold_near':
+      return { percent: threshold };
+    // a rate that starts before this time
+    case 'tax_rate_soon':
+      return { until: new Date(now + threshold * DAY) };
+    // so many refusals in the last days of the window
+    case 'tax_parcel_limit_refusals':
+      return { units: threshold, days: window ?? 1 };
     case 'shipped_orders_waiting':
     case 'pickup_not_collected':
     case 'shipped_without_cost':
@@ -461,8 +544,6 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
     // money already with the buyer gave more than its statements took
     case 'returns_money_short':
       return { path: '/api/returns', query: { state: 'open', moneyShort: 'true' } };
-    case 'returns_money_overpaid':
-      return { path: '/api/returns', query: { state: 'closed', moneyOverpaid: 'true' } };
     // the cases of the statements of return are statements: the list of the statements counts
     // them with the same filters (returnFilters.helper.ts)
     case 'returns_manual_check':
@@ -639,6 +720,33 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
     // the stop of the sending worker is one state, not a list of rows
     case 'newsletter_sending_halted':
       return null;
+    // the tax of the countries: the records of the countries, where root reads the threshold, the
+    // limit of a parcel and the rates (GET /api/root/countries)
+    case 'tax_threshold_near':
+    case 'tax_threshold_passed':
+    case 'tax_threshold_dropped':
+    case 'tax_sales_stopped':
+    case 'tax_parcel_limit_refusals':
+    case 'tax_rate_soon':
+    case 'tax_threshold_period_ended':
+      return { path: '/api/root/countries', query: {} };
+    // the receipts are documents of their orders (GET /api/orders/:orderId/documents): the orders
+    // that have one, the one waiting since before the threshold or refused, the order paid first first
+    case 'receipts_not_issued':
+      return {
+        path: '/api/orders',
+        query: {
+          receipts: 'pending',
+          receiptsMadeTo: isoOf(window.before),
+          sortBy: 'paidAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'receipts_refused':
+      return {
+        path: '/api/orders',
+        query: { receipts: 'refused', sortBy: 'paidAt', sortDir: 'asc' },
+      };
   }
 }
 

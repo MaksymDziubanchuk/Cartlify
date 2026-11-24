@@ -71,6 +71,27 @@ const detailsOf = (err: unknown) =>
 // a reference no other run has: the parcels of the real account stay there
 const reference = (n: number) => `contract-${process.pid}-${n}`;
 
+// the declaration of a parcel abroad: two shirts that hold 8.33 of the tax of the seller together
+const CUSTOMS = [
+  {
+    description: 'Cotton shirt',
+    quantity: 2,
+    unitValue: 25,
+    weightGrams: 400,
+    hsCode: '610510',
+    originCountry: 'PT',
+    sku: 'SHIRT-1',
+    tax: 8.33,
+  },
+];
+
+// a number of the shop that is not of the import scheme (a VAT number of the country of the
+// recipient), on the commercial invoice of the order's invoice
+const OTHER_NUMBER = { kind: 'other' as const, number: 'GB123456789' };
+const INVOICE = { number: 'FV-2026-7', date: new Date('2026-11-20T10:00:00Z') };
+
+const isPdf = (file: Buffer) => file.subarray(0, 5).toString('latin1') === '%PDF-';
+
 describe(`the delivery provider ${deliveryProvider.name}`, () => {
   it('is configured with its key, and is not without it', async () => {
     expect(deliveryProvider.isConfigured()).toBe(true);
@@ -157,17 +178,8 @@ describe(`the delivery provider ${deliveryProvider.name}`, () => {
           ...request({ to: harness.abroad, boxes: [box(1000), box(500)] }),
           reference: ref,
           option: choiceOf(carrier),
-          customs: [
-            {
-              description: 'Cotton shirt',
-              quantity: 2,
-              unitValue: 25,
-              weightGrams: 400,
-              hsCode: '610510',
-              originCountry: 'PT',
-              sku: 'SHIRT-1',
-            },
-          ],
+          customs: CUSTOMS,
+          taxNumber: null,
         },
         quiet,
       );
@@ -208,7 +220,13 @@ describe(`the delivery provider ${deliveryProvider.name}`, () => {
       async () => {
         const voiding = await optionNamed(harness.voidingCarrier!);
         const parcel = await deliveryProvider.createParcel(
-          { ...request(), reference: reference(2), option: choiceOf(voiding), customs: null },
+          {
+            ...request(),
+            reference: reference(2),
+            option: choiceOf(voiding),
+            customs: null,
+            taxNumber: null,
+          },
           quiet,
         );
         // a number a box when the carrier gives one
@@ -234,7 +252,13 @@ describe(`the delivery provider ${deliveryProvider.name}`, () => {
 
         const err = await rejectedBy(() =>
           deliveryProvider.createParcel(
-            { ...request(), reference: reference(3), option: choiceOf(option), customs: null },
+            {
+              ...request(),
+              reference: reference(3),
+              option: choiceOf(option),
+              customs: null,
+              taxNumber: null,
+            },
             quiet,
           ),
         );
@@ -258,6 +282,7 @@ describe(`the delivery provider ${deliveryProvider.name}`, () => {
             reference: reference(4),
             option: choiceOf(option),
             customs: null,
+            taxNumber: null,
           },
           quiet,
         ),
@@ -269,13 +294,138 @@ describe(`the delivery provider ${deliveryProvider.name}`, () => {
       });
     });
 
+    it('makes a parcel with the number of the import scheme of the shop, and one without', async () => {
+      const option = await optionNamed(harness.steadyCarrier, { to: harness.abroad });
+      const parcel = await deliveryProvider.createParcel(
+        {
+          ...request({ to: harness.abroad }),
+          reference: reference(6),
+          option: choiceOf(option),
+          customs: CUSTOMS,
+          taxNumber: { kind: 'ioss', number: 'IM2500000001' },
+        },
+        quiet,
+      );
+
+      expect(parcel.parcelId).toMatch(/^\d+$/);
+      const papers = harness.parcelPapers(parcel.parcelId);
+      if (papers) expect(papers.ioss).toBe('IM2500000001');
+      const without = harness.parcelPapers(made.parcelId);
+      if (without) expect(without.ioss).toBeNull();
+    });
+
+    it('tells which carriers take the customs papers electronically', async () => {
+      await expect(deliveryProvider.takesDocuments(harness.steadyCarrier)).resolves.toBe(false);
+      await expect(deliveryProvider.takesDocuments('No such carrier')).resolves.toBe(false);
+      if (harness.documentsCarrier) {
+        await expect(deliveryProvider.takesDocuments(harness.documentsCarrier)).resolves.toBe(true);
+      }
+    });
+
+    it('draws the commercial invoice of a parcel with the tax number of the shop, a pdf', async () => {
+      const file = await deliveryProvider.customsInvoice(
+        {
+          ...request({ to: harness.abroad, boxes: [box(1000), box(500)] }),
+          reference: ref,
+          option: choiceOf(carrier),
+          customs: CUSTOMS,
+          taxNumber: OTHER_NUMBER,
+          parcelId: made.parcelId,
+          invoice: INVOICE,
+        },
+        false,
+        quiet,
+      );
+
+      expect(isPdf(file)).toBe(true);
+      const papers = harness.parcelPapers(made.parcelId);
+      if (papers) expect(papers.invoices.at(-1)).toEqual({ electronic: false });
+    });
+
+    it('refuses to send the invoice electronically with a carrier that does not take it', async () => {
+      const err = await rejectedBy(() =>
+        deliveryProvider.customsInvoice(
+          {
+            ...request({ to: harness.abroad, boxes: [box(1000), box(500)] }),
+            reference: ref,
+            option: choiceOf(carrier),
+            customs: CUSTOMS,
+            taxNumber: OTHER_NUMBER,
+            parcelId: made.parcelId,
+            invoice: INVOICE,
+          },
+          true,
+          quiet,
+        ),
+      );
+
+      expect(statusOf(err)).toBe(409);
+      expect(detailsOf(err)).toEqual({
+        code: 'DELIVERY_PARCEL_REFUSED',
+        details: { message: expect.any(String) },
+      });
+    });
+
+    (harness.documentsCarrier ? it : it.skip)(
+      'sends the invoice electronically with a carrier that takes it',
+      async () => {
+        const option = await optionNamed(harness.documentsCarrier!, { to: harness.abroad });
+        const parcelRequest = {
+          ...request({ to: harness.abroad }),
+          reference: reference(7),
+          option: choiceOf(option),
+          customs: CUSTOMS,
+          taxNumber: OTHER_NUMBER,
+        };
+        const parcel = await deliveryProvider.createParcel(parcelRequest, quiet);
+
+        const file = await deliveryProvider.customsInvoice(
+          { ...parcelRequest, parcelId: parcel.parcelId, invoice: INVOICE },
+          true,
+          quiet,
+        );
+
+        expect(isPdf(file)).toBe(true);
+        const papers = harness.parcelPapers(parcel.parcelId);
+        if (papers) expect(papers).toEqual({ ioss: null, invoices: [{ electronic: true }] });
+      },
+    );
+
+    it('tells a provider that does not answer an invoice as unavailable', async () => {
+      const err = await harness.outOfReach(() =>
+        rejectedBy(() =>
+          deliveryProvider.customsInvoice(
+            {
+              ...request({ to: harness.abroad }),
+              reference: ref,
+              option: choiceOf(carrier),
+              customs: CUSTOMS,
+              taxNumber: OTHER_NUMBER,
+              parcelId: made.parcelId,
+              invoice: INVOICE,
+            },
+            false,
+            quiet,
+          ),
+        ),
+      );
+
+      expect(detailsOf(err)).toMatchObject({ code: 'DELIVERY_PROVIDER_UNAVAILABLE' });
+    });
+
     it('tells a provider that does not answer a creation as unavailable', async () => {
       const option = await optionNamed(harness.steadyCarrier);
 
       const err = await harness.outOfReach(() =>
         rejectedBy(() =>
           deliveryProvider.createParcel(
-            { ...request(), reference: reference(5), option: choiceOf(option), customs: null },
+            {
+              ...request(),
+              reference: reference(5),
+              option: choiceOf(option),
+              customs: null,
+              taxNumber: null,
+            },
             quiet,
           ),
         ),

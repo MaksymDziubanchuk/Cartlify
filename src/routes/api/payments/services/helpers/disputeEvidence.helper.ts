@@ -195,7 +195,6 @@ export async function disputeFactsOf(
     from cartlify.money_log as l
     where l."paymentId" = ${dispute.paymentId}
       and l.event = 'money.refund'
-      and l.part <> 'covered'::cartlify."MoneyPart"
       and (l."transferKey" is not null or l."refundId" is not null)
     group by coalesce(l."transferKey", l.id::text)
     order by min(l.id)

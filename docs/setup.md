@@ -32,7 +32,7 @@ You need:
 
 - main database for development
 - shadow database for Prisma dev migrations
-- Redis instance for the order timeout worker (and for the lock of the pass of the newsletters)
+- Redis instance: the queue of the order timeouts, the alerts the admins dismissed, the calls of an admin in the chat, the prices of the delivery a buyer was shown and the marks of a delivery provider that is down, the lock of the pass of the newsletters (every key is in `src/redis/keys.ts`)
 
 Example:
 

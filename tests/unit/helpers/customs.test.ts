@@ -8,12 +8,17 @@ import {
 } from '@helpers/customs.js';
 import { isAppError } from '@utils/errors.js';
 
-import { resetShopSettings, setShopSettings } from '../../helpers/shopSettings.js';
+import {
+  customsCountry,
+  resetShopCountries,
+  setShopCountries,
+  testCountry,
+} from '../../helpers/shopCountries.js';
 
 // what customs need of a product (the code of the goods, the country of origin) and when a cart
-// needs them: a country of a zone that is not free of customs
+// needs them: a country whose record says a parcel there crosses customs
 
-afterEach(resetShopSettings);
+afterEach(resetShopCountries);
 
 const codeOf = (fn: () => unknown) => {
   try {
@@ -59,17 +64,17 @@ describe('normalizeOriginCountry', () => {
 });
 
 describe('customsNeededFor', () => {
-  it('checks nothing while the shop names no country free of customs', () => {
-    setShopSettings({ customsFreeCountries: null });
-
-    expect(customsNeededFor('GB')).toBe(false);
-  });
-
-  it('needs customs for a country that is not free of them', () => {
-    setShopSettings({ customsFreeCountries: ['ES', 'FR'] });
+  it('needs customs for a country whose record says so', () => {
+    setShopCountries([testCountry('ES'), customsCountry('GB')]);
 
     expect(customsNeededFor('ES')).toBe(false);
     expect(customsNeededFor('GB')).toBe(true);
+  });
+
+  it('asks nothing of a country the shop has no record of, nor of no country', () => {
+    setShopCountries([testCountry('ES')]);
+
+    expect(customsNeededFor('US')).toBe(false);
     expect(customsNeededFor(null)).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 import { DELIVERY_WEBHOOK_PATH, deliveryProvider } from '@providers/delivery/index.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
+import { writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { cancelPaidOrder } from '../../../helpers/cancel.js';
 import {
@@ -48,6 +49,7 @@ beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
   admin = await createUser({ role: 'ADMIN' });
+  await writeAlertNumbers(admin);
   userIds.push(admin.id);
 });
 

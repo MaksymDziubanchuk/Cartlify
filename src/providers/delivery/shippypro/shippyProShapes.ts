@@ -3,6 +3,7 @@ import env from '@config/env.js';
 import type {
   DeliveryAddress,
   DeliveryBox,
+  DeliveryCustomsInvoiceRequest,
   DeliveryCustomsLine,
   DeliveryQuoteRequest,
 } from '../types.js';
@@ -68,16 +69,85 @@ export function shipmentOf(request: DeliveryQuoteRequest): Record<string, unknow
   };
 }
 
-// the lines of the customs declaration (CN22Info): the weight of one unit in kilograms
+// the lines of the customs declaration (CN22Info): the weight of one unit in kilograms, the value of
+// one unit without the tax of the destination the shop took
 export function customsOf(lines: readonly DeliveryCustomsLine[]): Record<string, unknown>[] {
   return lines.map((line) => ({
     Description: line.description.replaceAll('\\', '/').slice(0, 255),
     Weight: kilograms(line.weightGrams),
     Quantity: line.quantity,
-    UnitValue: line.unitValue,
+    UnitValue:
+      Math.round(((line.unitValue * line.quantity - line.tax) / line.quantity) * 100) / 100,
     OriginCountry: line.originCountry.toUpperCase(),
     Currency: currency(),
     HSCode: line.hsCode,
     ...(line.sku ? { SKU: line.sku } : {}),
   }));
+}
+
+const cents = (amount: number): number => Math.round(amount * 100) / 100;
+
+// a day the way the invoice takes it (YYYY-MM-DD)
+const dayOf = (at: Date): string => at.toISOString().slice(0, 10);
+
+// a party of the commercial invoice: the street and the house in one line, the phone in digits
+const partyOf = (address: DeliveryAddress): Record<string, string> => ({
+  Name: address.name,
+  Address: [`${address.street} ${address.house}`.trim(), address.apartment ?? '']
+    .filter(Boolean)
+    .join(', '),
+  Zipcode: address.postalCode ?? '',
+  City: address.city,
+  Country: address.country.toUpperCase(),
+  Telephone: address.phone.replace(/\D/g, ''),
+});
+
+// CreateCrossBorderInvoice: the commercial invoice of a parcel made (OrderId its id at ShippyPro),
+// the tax number of the shop as the VAT number of the exporter. The values of the goods are without
+// the tax, the tax paid apart: the invoice adds them up (checked with the test key, 22.11.2026);
+// the weight of a line is of all its units. UploadETD sends it to the carrier with the parcel: any
+// value of it does (even "false"), so it is there only when the invoice goes electronically
+export function crossBorderInvoiceOf(
+  request: DeliveryCustomsInvoiceRequest,
+  electronic: boolean,
+): Record<string, unknown> {
+  const lines = request.customs ?? [];
+  const goods = lines.map((line) => {
+    const net = cents(line.unitValue * line.quantity - line.tax);
+    return {
+      ParcelCount: request.boxes.length,
+      Description: line.description.replaceAll('\\', '/').slice(0, 255),
+      HsCode: line.hsCode,
+      CountryOfOrigin: line.originCountry.toUpperCase(),
+      Quantity: line.quantity,
+      Weight: kilograms(line.weightGrams * line.quantity),
+      UnitValue: cents(net / line.quantity),
+      GstPaid: cents(line.tax),
+      SubTotalValue: net,
+    };
+  });
+  const day = dayOf(request.invoice.date);
+
+  return {
+    Incoterm: 'DAP',
+    TypeOfExport: 'merchandise',
+    Currency: currency(),
+    NumberOfParcels: request.boxes.length,
+    OrderId: request.parcelId,
+    OrderReference: request.reference,
+    TotalLineItems: goods.length,
+    TotalWeight: kilograms(request.boxes.reduce((sum, box) => sum + box.weightGrams, 0)),
+    TotalAmount: cents(goods.reduce((sum, line) => sum + line.SubTotalValue, 0)),
+    TotalGst: cents(goods.reduce((sum, line) => sum + line.GstPaid, 0)),
+    InvoiceType: 'Commercial',
+    InvoiceNumber: request.invoice.number,
+    CountryOfExportDestination: request.to.country.toUpperCase(),
+    DateOfExportation: dayOf(new Date()),
+    SignatureDate: day,
+    DeclarationNotes: 'The tax of the country of destination was collected at the point of sale.',
+    ShipperExporter: { ...partyOf(request.from), VatNumber: request.taxNumber?.number ?? '' },
+    Consignee: partyOf(request.to),
+    Goods: goods,
+    ...(electronic ? { UploadETD: 'true' } : {}),
+  };
 }

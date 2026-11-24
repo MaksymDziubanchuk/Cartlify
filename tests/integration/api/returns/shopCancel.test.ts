@@ -120,7 +120,6 @@ describe('shop_cancel: the shop cancels a paid order', () => {
           goods: 'to_stock',
           money: 'refunded',
           amount: 30,
-          moneyLogId: expect.any(Number),
         }),
       ],
       // the transfer: the goods and the delivery of the order, sent, with the id Stripe gave

@@ -104,8 +104,6 @@ const NOTHING: Numbers = {
   dispute_delivery_used: 0,
   hand_delivery: 0,
   hand_delivery_used: 0,
-  shares_moved_goods: 0,
-  received_share_delivery: 0,
 };
 
 // an order of two units at 25 paid through pay_order, not sent: its payment is pi_db_<id>
@@ -196,7 +194,7 @@ describe('the refunds made by hand of a period', () => {
     expect(decided).toEqual({ ...NOTHING, hand_compensations: 20 });
   });
 
-  it('counts a refund root gave to the goods as coverage, and takes off what a transfer used of it', async () => {
+  it('counts a refund root gave to the goods as coverage, used by the rows that waited for it', async () => {
     const { attached, used } = await inRolledBackTx(async (db) => {
       const orderId = await paidOrder(db);
       const hand = await handRefundOf(db, `pi_db_${orderId}`, 20);
@@ -216,8 +214,9 @@ describe('the refunds made by hand of a period', () => {
       return { attached, used: diff(await paymentsOf(db), before) };
     }, REPEATABLE_READ);
 
-    // the refund was there before: the decision moves it from undecided to coverage
-    expect(attached).toEqual({ ...NOTHING, hand_undecided: -20, hand_coverage: 20 });
+    // the refund was there before: the decision moves it from undecided to coverage, and the rows of
+    // the statement that waited take it at once (the decision marks them)
+    expect(attached).toEqual({ ...NOTHING, hand_undecided: -20, hand_coverage: 20, hand_used: 20 });
     expect(used).toEqual({ ...NOTHING, hand_undecided: -20, hand_coverage: 20, hand_used: 20 });
   });
 
@@ -428,81 +427,5 @@ describe('the compensations and the money that came back', () => {
     }, REPEATABLE_READ);
 
     expect(paid).toEqual({ ...NOTHING, received_carriers: 12 });
-  });
-});
-
-// the shop did not accept the two units of an order sent, then 25 went back by hand and root gave it
-// to one of them: 25 overpaid
-async function overpaidOrder(db: DbSession) {
-  const orderId = await paidOrder(db);
-  await db.as({ role: 'ADMIN', userId: admin.id });
-  await db.rows(
-    `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
-    orderId,
-  );
-  const [made] = await db.rows<{ id: number }>(
-    `select cartlify.create_return(
-       $1::int,
-       (select jsonb_agg(jsonb_build_object('orderItemId', i.id, 'quantity', i.quantity))
-        from cartlify.order_items as i where i."orderId" = $1::int),
-       'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
-       'defect'::cartlify."ReturnReason", null, 'Test Buyer', 'buyer@example.com', null, null, 4,
-       'Europe/Madrid'
-     ) as id`,
-    orderId,
-  );
-  const [row] = await db.rows<{ id: number; orderItemId: number }>(
-    'select id, "orderItemId" from cartlify.return_items where "returnId" = $1',
-    made!.id,
-  );
-  await db.rows(
-    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
-    made!.id,
-    JSON.stringify([
-      { itemId: row!.id, quantity: 2, goods: 'not_accepted', notAcceptedReason: 'used' },
-    ]),
-  );
-  const hand = await handRefundOf(db, `pi_db_${orderId}`, 25);
-  await answerOf(
-    db,
-    { role: 'ROOT', userId: root.id },
-    `select cartlify.decide_money_use($1::int, $2::jsonb, 0, 'For a unit.') as result`,
-    hand.id,
-    JSON.stringify([{ orderItemId: row!.orderItemId, quantity: 1, amount: 25 }]),
-  );
-  return orderId;
-}
-
-describe('what was overpaid', () => {
-  it('counts what the buyer gave back of it among the money of buyers, not as a refund made by hand', async () => {
-    const back = await inRolledBackTx(async (db) => {
-      const orderId = await overpaidOrder(db);
-      const before = await paymentsOf(db);
-      await answerOf(
-        db,
-        { role: 'ROOT', userId: root.id },
-        `select cartlify.record_overpaid_received($1::int, 10, 'bank_transfer'::cartlify."OutsideMethod", 'Paid back.', (now() at time zone 'UTC')::timestamp(3)) as result`,
-        orderId,
-      );
-      return diff(await paymentsOf(db), before);
-    }, REPEATABLE_READ);
-
-    expect(back).toEqual({ ...NOTHING, received_buyers: 10 });
-  });
-
-  it('counts what root gave up of an overpaid share of the goods', async () => {
-    const moved = await inRolledBackTx(async (db) => {
-      const orderId = await overpaidOrder(db);
-      const before = await paymentsOf(db);
-      await answerOf(
-        db,
-        { role: 'ROOT', userId: root.id },
-        'select cartlify.lose_overpaid($1::int) as result',
-        orderId,
-      );
-      return diff(await paymentsOf(db), before);
-    }, REPEATABLE_READ);
-
-    expect(moved).toEqual({ ...NOTHING, shares_moved_goods: 25 });
   });
 });

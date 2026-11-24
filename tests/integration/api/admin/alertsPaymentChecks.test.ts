@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
-import { alertsOf } from '../../../helpers/alerts.js';
+import { alertsOf, writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
@@ -61,9 +61,11 @@ const {
   expectCases,
 } = alerts;
 
+// an admin and root wrote the numbers the alerts are counted with (ALERT_NUMBERS)
 const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
   const user = await createUser(opts);
   userIds.push(user.id);
+  await writeAlertNumbers(user);
   return user;
 };
 
@@ -139,7 +141,16 @@ describe('the kinds of the checks of a payment', () => {
     );
     expect(rootKinds.slice(rootKinds.indexOf('fraud_warnings'))).toEqual([
       ...KINDS,
+      'receipts_not_issued',
+      'receipts_refused',
       'admin_actions',
+      'tax_threshold_near',
+      'tax_threshold_passed',
+      'tax_threshold_dropped',
+      'tax_sales_stopped',
+      'tax_parcel_limit_refusals',
+      'tax_rate_soon',
+      'tax_threshold_period_ended',
     ]);
     for (const kind of KINDS) {
       expect(adminKinds).not.toContain(kind);
@@ -149,14 +160,14 @@ describe('the kinds of the checks of a payment', () => {
     }
     expect(await subscriptionOf(root, 'fraud_warnings')).toEqual({
       kind: 'fraud_warnings',
-      subscribed: true,
+      subscribed: false,
       threshold: null,
     });
     expect(await subscriptionOf(root, 'payment_reviews')).toMatchObject({ threshold: null });
     expect(await subscriptionOf(root, 'fraud_warnings_shipped')).toEqual({
       kind: 'fraud_warnings_shipped',
-      subscribed: true,
-      threshold: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
+      subscribed: false,
+      threshold: { value: 7, min: 1, max: 365, unit: 'days', window: null },
     });
   });
 

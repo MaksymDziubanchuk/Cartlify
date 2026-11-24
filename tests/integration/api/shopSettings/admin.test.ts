@@ -32,7 +32,6 @@ afterAll(async () => {
 const VALUE_KEYS = [
   'deliveryMethods',
   'deliveryZones',
-  'customsFreeCountries',
   'deliverySender',
   'pickupAddress',
   'pickupHours',
@@ -57,6 +56,17 @@ const VALUE_KEYS = [
   'sellerTaxId',
   'sellerEmail',
   'sellerPhone',
+  'sellerCountry',
+  'vatPayer',
+  'sellerTaxIdLabel',
+  'maxOrderTotal',
+  'invoiceMode',
+  'invoicePrefix',
+  'creditNotePrefix',
+  'invoiceYearly',
+  'receiptMoment',
+  'documentFooter',
+  'pickupCountry',
 ].sort();
 
 describe('GET /api/admin/shop-settings', () => {

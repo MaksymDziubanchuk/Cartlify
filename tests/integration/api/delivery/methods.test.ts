@@ -3,8 +3,6 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { SUPPORTED_DELIVERY_COUNTRIES } from '@config/deliveryCountries.js';
-
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
@@ -73,19 +71,6 @@ describe('GET /api/delivery/methods', () => {
       'manual',
       'pickup',
     ]);
-  });
-
-  it('names the countries of the zone of the rest: every country no other zone names', async () => {
-    setShopSettings({
-      deliveryZones: [
-        { name: 'Spain', countries: ['ES'], manualPrice: 5, freeFrom: null },
-        { name: 'Rest', countries: 'rest', manualPrice: 30, freeFrom: null },
-      ],
-    });
-
-    const [, rest] = (await read()).json().zones;
-
-    expect(rest.countries).toEqual(SUPPORTED_DELIVERY_COUNTRIES.filter((c) => c !== 'ES'));
   });
 
   it('leaves out a method the shop has not enabled, and gives no zone a shop has not set', async () => {

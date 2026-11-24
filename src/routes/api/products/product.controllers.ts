@@ -1,4 +1,5 @@
 import type { ControllerRouter } from 'types/controller.js';
+import { updateProductsTax } from './services/updateProductsTax.service.js';
 import type { ProductId, CategoryId } from 'types/ids.js';
 import type { User } from 'types/user.js';
 import type {
@@ -60,6 +61,8 @@ import type {
   PriceHistoryParamsDto,
   PriceHistoryQueryDto,
   PriceHistoryResponseDto,
+  UpdateProductsTaxBodyDto,
+  UpdateProductsTaxResponseDto,
 } from 'types/dto/products.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
@@ -260,6 +263,9 @@ const postProduct: ControllerRouter<
   // what customs need of it: the code of the goods and the country of origin
   let hsCode: string | undefined;
   let originCountry: string | undefined;
+  // the tax group by its id and the classes of the countries as json
+  let taxGroupId: string | undefined;
+  let taxExceptions: string | undefined;
   let withdrawal: string | undefined;
   // the ids of the documents of the directory the product names, with a comma between
   let documentIdsRaw: string | undefined;
@@ -323,6 +329,8 @@ const postProduct: ControllerRouter<
       else if (part.fieldname === 'warnings') warnings = v;
       else if (part.fieldname === 'hsCode') hsCode = v;
       else if (part.fieldname === 'originCountry') originCountry = v;
+      else if (part.fieldname === 'taxGroupId') taxGroupId = v;
+      else if (part.fieldname === 'taxExceptions') taxExceptions = v;
       else if (part.fieldname === 'withdrawal') withdrawal = v;
       else if (part.fieldname === 'documentIds') documentIdsRaw = v;
       else if (PARTY_FORM_FIELD.test(part.fieldname) && v !== '') {
@@ -368,6 +376,8 @@ const postProduct: ControllerRouter<
         warnings,
         hsCode,
         originCountry,
+        taxGroupId,
+        taxExceptions,
         withdrawal,
         documentIds: documentIdsRaw,
         variants: variantsRaw,
@@ -427,6 +437,9 @@ const updateProductById: ControllerRouter<
   // what customs need of it (empty takes each away)
   let hsCode: string | null | undefined;
   let originCountry: string | null | undefined;
+  // the tax group and the classes of the countries: a form gives text, a json body their values
+  let taxGroupId: unknown;
+  let taxExceptions: unknown;
   let withdrawal: string | null | undefined;
   // the documents by their ids: a form gives them as text, a json body as an array or null
   let documentIds: unknown;
@@ -460,6 +473,8 @@ const updateProductById: ControllerRouter<
       else if (part.fieldname === 'warnings') warnings = v;
       else if (part.fieldname === 'hsCode') hsCode = v;
       else if (part.fieldname === 'originCountry') originCountry = v;
+      else if (part.fieldname === 'taxGroupId') taxGroupId = t;
+      else if (part.fieldname === 'taxExceptions') taxExceptions = t;
       else if (part.fieldname === 'withdrawal') withdrawal = v;
       else if (part.fieldname === 'documentIds') documentIds = v;
       else if (part.fieldname === 'stock') stock = v;
@@ -482,6 +497,8 @@ const updateProductById: ControllerRouter<
     warnings = b.warnings;
     hsCode = b.hsCode;
     originCountry = b.originCountry;
+    taxGroupId = b.taxGroupId;
+    taxExceptions = b.taxExceptions;
     withdrawal = b.withdrawal;
     documentIds = b.documentIds;
     stock = b.stock;
@@ -501,6 +518,8 @@ const updateProductById: ControllerRouter<
       warnings,
       hsCode,
       originCountry,
+      taxGroupId: taxGroupId as UpdateProductDto['taxGroupId'],
+      taxExceptions: taxExceptions as UpdateProductDto['taxExceptions'],
       withdrawal,
       documentIds: documentIds as UpdateProductDto['documentIds'],
       stock,
@@ -547,6 +566,18 @@ const patchProductSale: ControllerRouter<
       { variantIds: req.body.variantIds },
     ),
   );
+  return reply.code(200).send(result);
+};
+
+// admin, root: PATCH /api/products/tax
+const updateProductsTaxController: ControllerRouter<
+  {},
+  UpdateProductsTaxBodyDto,
+  {},
+  UpdateProductsTaxResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+  const result = await updateProductsTax({ ...req.body, actorId, actorRole });
   return reply.code(200).send(result);
 };
 
@@ -724,6 +755,7 @@ export const productController = {
   patchProductSale,
   postProductSales,
   updateProductsBulkPrice,
+  updateProductsTax: updateProductsTaxController,
   deleteProductById,
   deleteProductReview,
   patchProductCategory,

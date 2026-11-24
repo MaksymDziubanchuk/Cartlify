@@ -663,6 +663,39 @@ const warningsBodyField = {
   description: `The warnings, up to ${WARNINGS_MAX} signs; empty or null takes them away.`,
 } as const;
 
+// the tax group of a product and the countries that class it in another one (docs/taxes.md)
+const taxGroupIdResponseField = {
+  type: ['integer', 'null'],
+  description: 'An admin only: the tax group (GET /api/root/tax-groups); null: the main rate.',
+} as const;
+
+const taxExceptionsResponseField = {
+  type: 'object',
+  additionalProperties: { type: ['integer', 'null'] },
+  description:
+    'An admin only: the countries that class the product in another group, ' +
+    '{ country: group id, or null for the main rate }.',
+} as const;
+
+const taxGroupIdBodyField = {
+  type: ['integer', 'null'],
+  minimum: 1,
+  description:
+    'The tax group (GET /api/root/tax-groups), TAX_GROUP_NOT_FOUND for none such; null: the ' +
+    'main rate of every country.',
+} as const;
+
+const taxExceptionsBodyField = {
+  type: 'object',
+  maxProperties: 300,
+  propertyNames: { pattern: '^[A-Z]{2}$' },
+  additionalProperties: { type: ['integer', 'null'], minimum: 1 },
+  description:
+    'The countries that class the product in another group than its own, { country: group id, ' +
+    'or null for the main rate }, written whole ({} takes them away); TAX_GROUP_NOT_FOUND for a ' +
+    'group that is not there.',
+} as const;
+
 const hsCodeBodyField = {
   type: ['string', 'null'],
   description:
@@ -705,6 +738,17 @@ const partyIdFormFields = {
   },
   hsCode: { ...hsCodeBodyField, type: 'string' },
   originCountry: { ...originCountryBodyField, type: 'string' },
+  taxGroupId: {
+    type: 'string',
+    description:
+      'The tax group by its id; empty: the main rate (TAX_GROUP_NOT_FOUND for none such).',
+  },
+  taxExceptions: {
+    type: 'string',
+    description:
+      'The classes of the countries as json, { "DE": 3, "FR": null } (PRODUCT_TAX_EXCEPTIONS_INVALID ' +
+      'when it is no such object); empty: none.',
+  },
   withdrawal: {
     type: 'string',
     description:
@@ -764,6 +808,8 @@ const productResponseSchema = {
     warnings: warningsResponseField,
     hsCode: hsCodeResponseField,
     originCountry: originCountryResponseField,
+    taxGroupId: taxGroupIdResponseField,
+    taxExceptions: taxExceptionsResponseField,
     documents: documentsResponseField,
     withdrawal: withdrawalResponseField,
     category: {
@@ -1109,6 +1155,8 @@ const updateProductBodySchema = {
     warnings: warningsBodyField,
     hsCode: hsCodeBodyField,
     originCountry: originCountryBodyField,
+    taxGroupId: taxGroupIdBodyField,
+    taxExceptions: taxExceptionsBodyField,
     withdrawal: withdrawalBodyField,
     documentIds: documentIdsBodyField,
 

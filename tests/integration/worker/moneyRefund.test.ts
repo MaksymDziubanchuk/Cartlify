@@ -115,14 +115,23 @@ async function readyStatement(paymentCard?: string) {
   return { orderId, paymentId, returnId: card.id as number };
 }
 
-// the money of the rows of a statement and the line of the transfer that pays them
+// the money of the rows of a statement and the line of the transfer that pays them: the lines name
+// the rows (db/05: return_row_line, the last own money of a row; for a row whose transfer failed,
+// the failure)
 const rowsOf = (returnId: number) =>
   asAdmin(async (tx) => {
-    const rows = await tx.orderReturnItem.findMany({
-      where: { returnId },
-      orderBy: { id: 'asc' },
-      select: { money: true, moneyLogId: true },
-    });
+    const rows = await tx.$queryRaw<{ money: string; moneyLogId: number | null }[]>`
+      select i.money::text as money,
+             case when i.money = 'failed' then (
+               select max(f.id)
+               from cartlify.money_log as f
+               where f.event = 'money.refund_failed' and f.part = 'goods' and f."returnId" = i."returnId"
+                 and i.id in (select n.return_item_id from cartlify.money_line_return_rows(f.id) as n)
+             ) else cartlify.return_row_line(i.id) end as "moneyLogId"
+      from cartlify.return_items as i
+      where i."returnId" = ${returnId}::int
+      order by i.id
+    `;
     const lines = await tx.moneyLog.findMany({
       where: { id: { in: rows.flatMap((row) => (row.moneyLogId ? [row.moneyLogId] : [])) } },
       select: {

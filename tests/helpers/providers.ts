@@ -41,6 +41,14 @@ import {
   shippyProWebhookBody,
   useCarriers,
 } from './shippyPro.js';
+import {
+  breakFiskaly,
+  FISKALY_TEST_NIF,
+  fiskalyWait,
+  realFiskaly,
+  refuseNextReceipt,
+} from './fiskaly.js';
+import { fiskalyReceiptProvider } from '@providers/receipts/fiskaly/fiskaly.provider.js';
 
 import type {
   MailDropReason,
@@ -58,6 +66,8 @@ import type {
 import type { FileStorageProviderName } from '@providers/files/index.js';
 import type { IdentityProviderName } from '@providers/identity/index.js';
 import type { PaymentProviderName } from '@providers/payments/index.js';
+import type { ReceiptProvider, ReceiptProviderName } from '@providers/receipts/index.js';
+import type { ShopSettingsValues } from '@config/shopSettings.js';
 
 export type PaymentHarness = {
   // a payment the provider took, of the amount in cents; its id at the provider
@@ -328,7 +338,7 @@ const testAddress = (over: Partial<DeliveryAddress>): DeliveryAddress => ({
 });
 
 export type DeliveryHarness = {
-  // the run asks the real service: the contract makes one parcel and no more (a label each)
+  // the run asks the real service all it can without a label: every parcel is made by the mock
   real: boolean;
   sender: DeliveryAddress;
   recipient: DeliveryAddress;
@@ -337,6 +347,14 @@ export type DeliveryHarness = {
   // account of the run has none (the real one of the tests)
   steadyCarrier: string;
   voidingCarrier: string | null;
+  // a carrier of the account that takes a commercial invoice electronically with the parcel; null
+  // when the account of the run has none
+  documentsCarrier: string | null;
+  // what the provider keeps of a parcel it made: the number of the import scheme it went with and
+  // its commercial invoices (whether each went to the carrier); null when it cannot be looked at
+  parcelPapers(
+    parcelId: string,
+  ): { ioss: string | null; invoices: { electronic: boolean }[] } | null;
   // the carrier refuses the next parcel with the reason; null when the real one cannot be made to
   refuseNext: ((reason: string) => void) | null;
   // the first carrier of the account prices in another currency than the shop; null for real
@@ -394,6 +412,17 @@ export const deliveryHarness: Record<DeliveryProviderName, DeliveryHarness> = {
     steadyCarrier: 'Generic',
     // what the real account cannot be made to do answers from the mock in both modes
     voidingCarrier: 'MockExpress',
+    documentsCarrier: 'MockExpress',
+    // the parcels are of the mock in both modes
+    parcelPapers: (parcelId) => {
+      const parcel = mockParcel(parcelId);
+      return parcel
+        ? {
+            ioss: parcel.ioss,
+            invoices: parcel.invoices.map((one) => ({ electronic: one.electronic })),
+          }
+        : null;
+    },
     refuseNext: (reason) => refuseNextParcel(reason),
     pricesInOtherCurrency: () =>
       useCarriers(MOCK_CARRIERS.map((c, i) => (i === 0 ? { ...c, currency: 'USD' } : c))),
@@ -456,5 +485,39 @@ export const deliveryHarness: Record<DeliveryProviderName, DeliveryHarness> = {
         ...(at ? { date: Math.floor(at.getTime() / 1000) } : {}),
       });
     },
+  },
+};
+
+export type ReceiptHarness = {
+  // the provider itself: the server takes the one RECEIPT_PROVIDER names (none in the tests), the
+  // contract and the tests of the receipts take each that makes receipts
+  provider: ReceiptProvider;
+  real: boolean;
+  // the data of the shop the provider registers for: the taxpayer of the account of the tests
+  shop: Partial<ShopSettingsValues>;
+  // how long a test that waits for the registration may take (undefined: the usual limit)
+  wait: number | undefined;
+  // the tax authority refuses the next receipt; null when the real one cannot be made to
+  refuseNext: (() => void) | null;
+  // the provider does not answer (down), or does not take the key of the app (unauthorized),
+  // until the test ends
+  outOfReach(kind: 'down' | 'unauthorized'): void;
+};
+
+// none makes no receipts: nothing to answer
+export const receiptHarness: Record<ReceiptProviderName, ReceiptHarness | null> = {
+  none: null,
+  fiskaly: {
+    provider: fiskalyReceiptProvider,
+    real: realFiskaly,
+    shop: {
+      sellerCountry: 'ES',
+      sellerTaxId: `ES${FISKALY_TEST_NIF}`,
+      sellerTaxIdLabel: 'NIF',
+      sellerLegalName: 'Cartlify Test Shop',
+    },
+    wait: fiskalyWait,
+    refuseNext: realFiskaly ? null : () => refuseNextReceipt(),
+    outOfReach: (kind) => breakFiskaly(kind),
   },
 };

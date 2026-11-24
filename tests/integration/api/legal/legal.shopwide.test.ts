@@ -89,6 +89,7 @@ type Retention = {
   recipientDays: number;
   newsletterConsentDays: number;
   newsletterRecipientsDays: number;
+  taxDocumentsDays: number;
 };
 
 type LegalDocument = {
@@ -118,6 +119,7 @@ const RETENTION: Retention = {
   recipientDays: 3650,
   newsletterConsentDays: 3650,
   newsletterRecipientsDays: 365,
+  taxDocumentsDays: 3650,
 };
 
 // the fields a kind carries beside its text
@@ -1266,6 +1268,7 @@ describe('POST /api/root/legal-documents: the fields of a kind', () => {
       recipientDays: 66,
       newsletterConsentDays: 77,
       newsletterRecipientsDays: 88,
+      taxDocumentsDays: 3650,
     };
 
     const res = await publish(root, {
@@ -1298,6 +1301,7 @@ describe('POST /api/root/legal-documents: the fields of a kind', () => {
           retentionRecipientDays: true,
           retentionNewsletterConsentDays: true,
           retentionNewsletterRecipientsDays: true,
+          retentionTaxDocumentsDays: true,
         },
       }),
     );
@@ -1310,6 +1314,7 @@ describe('POST /api/root/legal-documents: the fields of a kind', () => {
       retentionRecipientDays: 66,
       retentionNewsletterConsentDays: 77,
       retentionNewsletterRecipientsDays: 88,
+      retentionTaxDocumentsDays: 3650,
     });
   });
 

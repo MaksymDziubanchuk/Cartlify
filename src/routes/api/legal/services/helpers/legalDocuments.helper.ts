@@ -51,6 +51,7 @@ export const legalDocumentSelect = {
   retentionRecipientDays: true,
   retentionNewsletterConsentDays: true,
   retentionNewsletterRecipientsDays: true,
+  retentionTaxDocumentsDays: true,
 } as const;
 
 type LegalDocumentRow = Prisma.LegalDocumentGetPayload<{ select: typeof legalDocumentSelect }>;
@@ -78,7 +79,8 @@ const retentionOf = (row: LegalDocumentRow): PrivacyRetentionDto | null =>
   row.retentionReturnPersonalDays !== null &&
   row.retentionRecipientDays !== null &&
   row.retentionNewsletterConsentDays !== null &&
-  row.retentionNewsletterRecipientsDays !== null
+  row.retentionNewsletterRecipientsDays !== null &&
+  row.retentionTaxDocumentsDays !== null
     ? {
         loginAddressesDays: row.retentionLoginAddressesDays,
         guestDataDays: row.retentionGuestDataDays,
@@ -88,6 +90,7 @@ const retentionOf = (row: LegalDocumentRow): PrivacyRetentionDto | null =>
         recipientDays: row.retentionRecipientDays,
         newsletterConsentDays: row.retentionNewsletterConsentDays,
         newsletterRecipientsDays: row.retentionNewsletterRecipientsDays,
+        taxDocumentsDays: row.retentionTaxDocumentsDays,
       }
     : null;
 

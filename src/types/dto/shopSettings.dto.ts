@@ -1,5 +1,6 @@
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import type { DeliverySender, DeliveryZone } from '@config/deliveryZones.js';
+import type { InvoiceModeName, ReceiptMomentName } from '@config/shopSettings.js';
 
 // the data of the shop (delivery, brand, reservation, moderation, withdrawal, languages, the
 // seller, the logo): a row a setting in cartlify.shop_settings, root adds one for each setting
@@ -9,7 +10,6 @@ import type { DeliverySender, DeliveryZone } from '@config/deliveryZones.js';
 export interface ShopSettingsValuesDto {
   deliveryMethods: DeliveryMethodName[];
   deliveryZones: DeliveryZone[];
-  customsFreeCountries: string[] | null;
   deliverySender: DeliverySender | null;
   pickupAddress: string;
   pickupHours: string;
@@ -41,6 +41,18 @@ export interface ShopSettingsValuesDto {
   sellerTaxId: string | null;
   sellerEmail: string | null;
   sellerPhone: string | null;
+
+  sellerCountry: string | null;
+  vatPayer: boolean | null;
+  sellerTaxIdLabel: string | null;
+  maxOrderTotal: number | null;
+  invoiceMode: InvoiceModeName | null;
+  invoicePrefix: string | null;
+  creditNotePrefix: string | null;
+  invoiceYearly: boolean | null;
+  receiptMoment: ReceiptMomentName | null;
+  documentFooter: string | null;
+  pickupCountry: string | null;
 }
 
 // the fields a guest or a buyer is shown (GET /api/shop-settings)
@@ -54,6 +66,10 @@ export interface PublicShopSettingsDto {
   sellerTaxId: string | null;
   sellerEmail: string | null;
   sellerPhone: string | null;
+  sellerCountry: string | null;
+  sellerTaxIdLabel: string | null;
+  maxOrderTotal: number | null;
+  invoiceMode: InvoiceModeName | null;
 }
 
 // a field that has no default of the server and root has not set yet
@@ -66,7 +82,6 @@ export interface ShopSettingsMissingFieldsDto {
 export interface PutShopSettingsBodyDto {
   deliveryMethods: DeliveryMethodName[];
   deliveryZones: DeliveryZone[];
-  customsFreeCountries: string[] | null;
   deliverySender: DeliverySender | null;
   pickupAddress: string;
   pickupHours: string;
@@ -90,6 +105,17 @@ export interface PutShopSettingsBodyDto {
   sellerTaxId: string | null;
   sellerEmail: string | null;
   sellerPhone: string | null;
+  sellerCountry: string | null;
+  vatPayer: boolean | null;
+  sellerTaxIdLabel: string | null;
+  maxOrderTotal: number | null;
+  invoiceMode: InvoiceModeName | null;
+  invoicePrefix: string | null;
+  creditNotePrefix: string | null;
+  invoiceYearly: boolean | null;
+  receiptMoment: ReceiptMomentName | null;
+  documentFooter: string | null;
+  pickupCountry: string | null;
 }
 
 // root sets one setting, PUT /api/root/shop-settings/:key: the value of the shape of that key

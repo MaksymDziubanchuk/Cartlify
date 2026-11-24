@@ -12,6 +12,14 @@ const aliasMapper = Object.fromEntries(
   ]),
 );
 
+// the own files of the services a run of the launcher does not take (tests/run.mjs, TEST_SKIP_FILES:
+// the paths from the root, through commas): left out of the integration files
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const skippedFiles = (process.env.TEST_SKIP_FILES ?? '')
+  .split(',')
+  .filter(Boolean)
+  .map((file) => `<rootDir>/${escape(file)}$`);
+
 // coverage counts every source file, not only the ones a test imported
 const coverageFrom = ['src/**/*.ts', '!src/index.ts', '!src/types/**'];
 
@@ -87,12 +95,15 @@ export default {
       ...shared,
       displayName: 'integration',
       testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
+      testPathIgnorePatterns: ['/node_modules/', ...skippedFiles],
       setupFiles: ['<rootDir>/tests/setup/integration.setup.ts'],
       // a file waits for the files that change the whole shop (and they for it); the app logs go
       // to the tests, an unexpected warning or error fails its test;
       // cloudinary calls stay in its test/ folder; sendgrid and stripe answer from mocks unless
-      // the run takes them for real; the time of a test is the same as in the unit tests
+      // the run takes them for real; the time of a test is the same as in the unit tests, first:
+      // the real ShippyPro gives its tests more (integration.shippypro.ts)
       setupFilesAfterEnv: [
+        '<rootDir>/tests/setup/timeout.ts',
         '<rootDir>/tests/setup/integration.gc.ts',
         '<rootDir>/tests/setup/integration.driver.ts',
         '<rootDir>/tests/setup/integration.shopState.ts',
@@ -102,8 +113,8 @@ export default {
         '<rootDir>/tests/setup/integration.mail.ts',
         '<rootDir>/tests/setup/integration.turnstile.ts',
         '<rootDir>/tests/setup/integration.shippypro.ts',
+        '<rootDir>/tests/setup/integration.fiskaly.ts',
         '<rootDir>/tests/setup/integration.stripe.ts',
-        '<rootDir>/tests/setup/timeout.ts',
       ],
     },
   ],

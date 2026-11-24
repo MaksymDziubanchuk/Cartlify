@@ -23,4 +23,12 @@ export const redisKeys = {
   deliveryProviderDownSince: 'delivery:provider-down-since',
   // when it last failed to answer: an hour with no call after it and the alert says nothing
   deliveryProviderDownLast: 'delivery:provider-down-last',
+  // the tax (src/routes/api/admin/services/helpers/taxAlerts.helper.ts): the thresholds that stopped
+  // sales in their period, a hash; the orders refused within the limit of a parcel, a count a country
+  // a day (<prefix><country>:<yyyy-mm-dd>), counted while the mark is there; what a person saw of a
+  // kind of alert that only informs, a hash of each (<prefix><user id>)
+  taxSalesStopped: 'tax:sales-stopped',
+  taxParcelRefusalsPrefix: 'tax:parcel-refusals:',
+  taxParcelRefusalsOn: 'tax:parcel-refusals:on',
+  adminAlertSeenPrefix: 'admin:alerts:seen:',
 } as const;

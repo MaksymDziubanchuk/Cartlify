@@ -232,6 +232,16 @@ const orderShipmentsSchema = {
         type: ['string', 'null'],
         description: 'The label of a parcel of the provider to print, none for a manual send.',
       },
+      customsInvoice: {
+        type: ['string', 'null'],
+        enum: ['electronic', 'print', null],
+        description:
+          'A parcel that crosses customs with the tax number of the shop in the country of the ' +
+          'recipient on a commercial invoice (a number that is not of the import scheme, ' +
+          'docs/taxes.md): electronic, the carrier was sent it with the parcel; print, print it ' +
+          '(GET .../customs-invoice) and put it on the parcel with the label. Empty for any other ' +
+          'parcel.',
+      },
       boxes: {
         type: 'array',
         description: 'The boxes of the parcel and what is in each.',
@@ -305,6 +315,7 @@ const orderShipmentsSchema = {
       'rolledBackAt',
       'state',
       'labelUrl',
+      'customsInvoice',
       'boxes',
     ],
   },
@@ -345,6 +356,16 @@ const ordersOrderItemSchema = {
     quantity: { type: 'number' },
     unitPrice: { type: 'number' },
     totalPrice: { type: 'number' },
+    tax: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The tax the price of the line holds as the confirmation fixed it (docs/taxes.md): the ' +
+        'rate (null: none) and the tax. Left out while the order is a cart and for a shop that ' +
+        'takes no tax.',
+      properties: { rate: { type: ['number', 'null'] }, amount: { type: 'number' } },
+      required: ['rate', 'amount'],
+    },
     withdrawal: {
       type: 'object',
       additionalProperties: false,
@@ -456,6 +477,36 @@ const ordersOrderResponseSchema = {
         'grace of the shop after it, any other order never. The button of withdrawal goes by it.',
     },
     returnStatus: returnStatusField,
+    tax: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The tax the confirmation fixed (docs/taxes.md): the rule and the country it is taxed in, ' +
+        'the items and the delivery by rate, whether customs may ask the buyer for the tax and the ' +
+        'duty on receipt, whether the buyer asked for an invoice. Left out while the order is a cart ' +
+        'and for a shop that takes no tax.',
+      properties: {
+        rule: { type: 'string', enum: ['seller', 'recipient', 'none', 'buyer_at_receipt'] },
+        country: { type: 'string' },
+        totals: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              rate: { type: ['number', 'null'] },
+              net: { type: 'number' },
+              tax: { type: 'number' },
+              gross: { type: 'number' },
+            },
+            required: ['rate', 'net', 'tax', 'gross'],
+          },
+        },
+        payOnReceipt: { type: 'boolean' },
+        invoiceRequested: { type: 'boolean' },
+      },
+      required: ['rule', 'country', 'totals', 'payOnReceipt', 'invoiceRequested'],
+    },
     holds: {
       type: 'array',
       description:
@@ -1005,6 +1056,13 @@ const ordersCurrentConfirmBodySchema = {
         '(DELIVERY_PRICE_CHANGED, with the price now) and nothing is confirmed: the page shows the ' +
         'price now and the buyer confirms again.',
     },
+    invoice: {
+      type: 'boolean',
+      description:
+        'The buyer asks for an invoice: a shop that makes them on request (invoiceMode on_request, ' +
+        'GET /api/shop-settings) makes one when the order is paid; a shop that makes one of every ' +
+        'order makes it anyway.',
+    },
   },
   required: ['orderId', 'expectedDeliveryPrice'],
 } as const;
@@ -1072,8 +1130,81 @@ const ordersDeliveryOptionsResponseSchema = {
             type: ['string', 'null'],
             description: 'How long the carrier takes, the way the shop wrote it ("1-3").',
           },
+          tax: {
+            type: 'object',
+            additionalProperties: false,
+            description:
+              'The tax of the cart sent this way, by the rule of the country it is taxed in (the ' +
+              'country of the address, the one of the place for a pickup; docs/taxes.md): the ' +
+              'confirmation keeps the same numbers. The page shows them as it likes.',
+            properties: {
+              items: {
+                type: 'array',
+                description:
+                  'Each item at the unit price the rule leaves (lower than the catalog where no ' +
+                  'tax of the seller is taken and root asked for that), the price of the line, ' +
+                  'its rate (null: no tax) and the tax the line holds.',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    itemId: { type: 'integer' },
+                    unitPrice: { type: 'number' },
+                    totalPrice: { type: 'number' },
+                    rate: { type: ['number', 'null'] },
+                    tax: { type: 'number' },
+                  },
+                  required: ['itemId', 'unitPrice', 'totalPrice', 'rate', 'tax'],
+                },
+              },
+              totals: {
+                type: 'array',
+                description:
+                  'The items and the delivery by rate: without the tax, the tax, with it.',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    rate: { type: ['number', 'null'] },
+                    net: { type: 'number' },
+                    tax: { type: 'number' },
+                    gross: { type: 'number' },
+                  },
+                  required: ['rate', 'net', 'tax', 'gross'],
+                },
+              },
+              total: {
+                type: 'number',
+                description: 'The items and the delivery, what the buyer pays.',
+              },
+              payOnReceipt: {
+                type: 'boolean',
+                description: 'Customs may ask the buyer for the tax and the duty on receipt.',
+              },
+              refusal: {
+                type: ['object', 'null'],
+                description:
+                  'Why the confirmation would refuse the order this way, with the same code: ' +
+                  'TAX_SALES_STOPPED, TAX_PARCEL_LIMIT (with the limit: an order above it can ' +
+                  'go), ORDER_TOTAL_ABOVE_MAXIMUM (with the largest total); null when it can go.',
+                properties: {
+                  code: {
+                    type: 'string',
+                    enum: ['TAX_SALES_STOPPED', 'TAX_PARCEL_LIMIT', 'ORDER_TOTAL_ABOVE_MAXIMUM'],
+                  },
+                  limit: { type: 'number' },
+                  withDelivery: { type: 'boolean' },
+                  withVat: { type: 'boolean' },
+                  maximum: { type: 'number' },
+                },
+                required: ['code'],
+                additionalProperties: false,
+              },
+            },
+            required: ['items', 'totals', 'total', 'payOnReceipt', 'refusal'],
+          },
         },
-        required: ['method', 'price', 'carrier', 'label', 'days'],
+        required: ['method', 'price', 'carrier', 'label', 'days', 'tax'],
       },
     },
     carriersUnavailable: {
@@ -1263,6 +1394,22 @@ const ordersGetQuerySchema = {
       description:
         'Admin and root (FILTER_FORBIDDEN for a buyer): the orders the provider warned of after ' +
         'they were sent, at this time or later.',
+    },
+    receipts: {
+      type: 'string',
+      enum: ['pending', 'refused'],
+      description:
+        'Admin and root (FILTER_FORBIDDEN for a buyer): the orders with a fiscal receipt in the ' +
+        'state (docs/taxes.md), the receipts of the documents of the money that went back among ' +
+        'them: pending, not registered by the provider yet; refused, to register by hand ' +
+        '(POST /api/orders/:orderId/documents/:documentId/receipt-confirmation).',
+    },
+    receiptsMadeTo: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Admin and root (FILTER_FORBIDDEN for a buyer), with receipts: only the receipts made ' +
+        'before this time.',
     },
     parcels: {
       type: 'string',

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { prisma } from '@db/client.js';
 
 import { inRolledBackTx, type Actor, type DbSession } from '../../helpers/db.js';
-import { answerOf, DECIDE_USE, handRefundOf } from '../../helpers/dbMoney.js';
+import { answerOf } from '../../helpers/dbMoney.js';
 import {
   cartOf,
   paidOrderOf,
@@ -22,11 +22,14 @@ import {
   type TestUser,
 } from '../../helpers/factories.js';
 import { cancelAndRefundIn, publishContractIn, refundReturnIn } from '../../helpers/returns.js';
+import { invoicedOrderOf, invoiceShopOf, receiptMomentOf } from '../../helpers/dbTaxDocuments.js';
+import { asDbSession, inSuperuserTx } from '../../helpers/ownerDb.js';
 
 // how long the shop keeps what it needs no longer: the address and the browser of old logins, the
 // favorites and chats of guests who stopped coming, the chats of accounts deleted long ago, the
 // address and the browser of closed statements of return, their personal data, the recipient of
-// the orders of deleted accounts, and what the newsletters leave (the requests that were not
+// the orders of deleted accounts, the copy of the buyer in the tax documents, and what the
+// newsletters leave (the requests that were not
 // confirmed, the proof of the consent of an ended subscription, the mails of a campaign; their
 // cases are in newsletterRetention.shopwide.test.ts). The days are in the privacy policy of the shop, one
 // column for each kind; a function takes none. A row is kept for the shorter of the term of the version in force when
@@ -101,6 +104,7 @@ type Terms = {
   recipient: number;
   newsletterConsent: number;
   newsletterRecipients: number;
+  taxDocuments: number;
 };
 
 const TERMS: Terms = {
@@ -112,6 +116,7 @@ const TERMS: Terms = {
   recipient: 30,
   newsletterConsent: 3650,
   newsletterRecipients: 365,
+  taxDocuments: 3650,
 };
 
 // root publishes a version of the privacy policy with the terms given (the rest as in TERMS); the
@@ -124,9 +129,10 @@ async function publishPolicy(db: DbSession, terms: Partial<Terms> = {}) {
        (kind, title, content, "publishedById", "retentionLoginAddressesDays",
         "retentionGuestDataDays", "retentionDeletedChatsDays", "retentionReturnAddressesDays",
         "retentionReturnPersonalDays", "retentionRecipientDays",
-        "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays")
+        "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays",
+        "retentionTaxDocumentsDays")
      values ('privacy'::cartlify."LegalDocumentKind", 'The privacy policy',
-             'The text of the privacy policy.', $1, $2, $3, $4, $5, $6, $7, $8, $9)
+             'The text of the privacy policy.', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      returning id, version, "createdAt"::text as "createdAt"`,
     root.id,
     t.loginAddresses,
@@ -137,6 +143,7 @@ async function publishPolicy(db: DbSession, terms: Partial<Terms> = {}) {
     t.recipient,
     t.newsletterConsent,
     t.newsletterRecipients,
+    t.taxDocuments,
   );
   return row!;
 }
@@ -179,6 +186,7 @@ describe.each([
   ['cleanup_return_addresses'],
   ['cleanup_return_personal'],
   ['cleanup_deleted_accounts_recipients'],
+  ['cleanup_tax_document_buyers'],
   ['cleanup_newsletter_pending'],
   ['cleanup_newsletter_consent'],
   ['cleanup_newsletter_recipients'],
@@ -1226,67 +1234,6 @@ async function compensationSentOutside(db: DbSession): Promise<number> {
   return marked.id as number;
 }
 
-// money already with the buyer for goods the shop did not accept (a refund made by hand root gave
-// the unit), given back by the buyer outside the app with a note that names their account; the line
-// of the money received
-async function overpaidReceivedBack(db: DbSession): Promise<number> {
-  const orderId = await paidOrderOf(db, buyer.id, admin.id, [[product.variantId, 1]]);
-  await db.as(adminActor());
-  await db.rows(
-    `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
-    orderId,
-  );
-  const [item] = await db.rows<{ id: number }>(
-    'select id from cartlify.order_items where "orderId" = $1',
-    orderId,
-  );
-  const returnId = await answerOf(
-    db,
-    adminActor(),
-    `select cartlify.create_return(
-       $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
-       'defect'::cartlify."ReturnReason", null, 'Test Buyer', 'buyer@example.com', null, null, 4,
-       'Europe/Madrid'
-     ) as result`,
-    orderId,
-    JSON.stringify([{ orderItemId: item!.id, quantity: 1 }]),
-  );
-  const [row] = await db.rows<{ id: number }>(
-    'select id from cartlify.return_items where "returnId" = $1',
-    returnId,
-  );
-  await db.rows(
-    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
-    returnId,
-    JSON.stringify([
-      { itemId: row!.id, quantity: 1, goods: 'not_accepted', notAcceptedReason: 'used' },
-    ]),
-  );
-  const hand = await handRefundOf(db, `pi_db_${orderId}`, 10);
-  await answerOf(
-    db,
-    rootActor(),
-    DECIDE_USE,
-    hand.id,
-    JSON.stringify([{ orderItemId: item!.id, quantity: 1, amount: 10 }]),
-    0,
-    'For the unit.',
-  );
-  await answerOf(
-    db,
-    rootActor(),
-    `select cartlify.record_overpaid_received($1::int, 10, 'bank_transfer'::cartlify."OutsideMethod",
-       'From the account ES91 2100 0418 4502 0005 1332.', ${NOW}::timestamp(3)) as result`,
-    orderId,
-  );
-  await db.as(adminActor());
-  const [line] = await db.rows<{ id: number }>(
-    `select id from cartlify.money_log where "orderId" = $1 and event = 'money.received'`,
-    orderId,
-  );
-  return line!.id;
-}
-
 // a line of the money journal as an admin reads it
 async function moneyLineOf(db: DbSession, id: number) {
   await db.as(adminActor());
@@ -1491,31 +1438,26 @@ describe('cartlify.cleanup_return_personal', () => {
     expect(result.again).toEqual(result.after);
   });
 
-  // the notes of the money outside the app tied to no statement: a compensation sent another way,
-  // and what the buyer gave back for money already with them
-  it.each([
-    ['a compensation sent another way', compensationSentOutside, 'Sent outside the app'],
-    [
-      'money the buyer gave back for goods not taken',
-      overpaidReceivedBack,
-      'Received outside the app',
-    ],
-  ])('makes up the note of %s once the term has passed', async (_case, made, madeUp) => {
-    const result = await inRoundedTx(async (db) => {
-      await publishPolicy(db, { returnPersonal: 1 });
-      const line = await made(db);
-      const before = await moneyLineOf(db, line);
+  // the notes of the money outside the app tied to no statement: a compensation sent another way
+  it.each([['a compensation sent another way', compensationSentOutside, 'Sent outside the app']])(
+    'makes up the note of %s once the term has passed',
+    async (_case, made, madeUp) => {
+      const result = await inRoundedTx(async (db) => {
+        await publishPolicy(db, { returnPersonal: 1 });
+        const line = await made(db);
+        const before = await moneyLineOf(db, line);
 
-      await cleanup(db, 'cleanup_return_personal');
-      const after = await moneyLineOf(db, line);
-      await cleanup(db, 'cleanup_return_personal');
-      return { before, after, again: await moneyLineOf(db, line) };
-    });
+        await cleanup(db, 'cleanup_return_personal');
+        const after = await moneyLineOf(db, line);
+        await cleanup(db, 'cleanup_return_personal');
+        return { before, after, again: await moneyLineOf(db, line) };
+      });
 
-    expect(result.before.note).toMatch(/ES91 2100 0418 4502 0005 1332/);
-    expect(result.after).toEqual({ ...result.before, note: madeUp });
-    expect(result.again).toEqual(result.after);
-  });
+      expect(result.before.note).toMatch(/ES91 2100 0418 4502 0005 1332/);
+      expect(result.after).toEqual({ ...result.before, note: madeUp });
+      expect(result.again).toEqual(result.after);
+    },
+  );
 
   it.each([
     ['two days', 2],
@@ -1892,5 +1834,93 @@ describe('cartlify.cleanup_deleted_accounts_recipients', () => {
     expect(result.first).toBeGreaterThanOrEqual(4);
     expect(result.second).toBe(0);
     expect(result.afterSecond).toEqual(result.afterFirst);
+  });
+});
+
+describe('cartlify.cleanup_tax_document_buyers', () => {
+  // The database dates a document itself, and keeps it as it was made: the superuser of the test
+  // container dates the documents of a test back (inSuperuserTx), the rest is the session of a
+  // role as the other cleanups have it. A paid order of a shop that makes an invoice of every
+  // order and registers its receipt at the payment: the invoice and its receipt
+  async function documentsOf(db: DbSession) {
+    await invoiceShopOf(db, root.id, 'every_order');
+    await receiptMomentOf(db, root.id, 'payment');
+    const orderId = await invoicedOrderOf(db, {
+      buyerId: buyer.id,
+      adminId: admin.id,
+      variantId: product.variantId,
+    });
+    return orderId;
+  }
+
+  const dateBack = async (db: DbSession, orderId: number, at: string) => {
+    await db.as(asSystem());
+    await db.rows(
+      `update cartlify.tax_documents set "createdAt" = ${at} where "orderId" = $1`,
+      orderId,
+    );
+  };
+
+  const copiesOf = async (db: DbSession, orderId: number) => {
+    await db.as(adminActor());
+    return db.rows<{ kind: string; buyer: Json; seller: Json; lines: Json; gross: number }>(
+      `select kind::text as kind, buyer, seller, lines, gross::float8 as gross
+       from cartlify.tax_documents where "orderId" = $1 order by id`,
+      orderId,
+    );
+  };
+
+  it('empties the copy of the buyer of the documents older than the term, and keeps the rest of them', async () => {
+    const result = await inSuperuserTx(async (owner) => {
+      const db = asDbSession(owner);
+      const old = await documentsOf(db);
+      const recent = await documentsOf(db);
+      await publishPolicy(db, { taxDocuments: 30 });
+      await dateBack(db, old, daysAgo(30));
+      await dateBack(db, recent, daysAgo(20));
+      const before = await copiesOf(db, old);
+      const count = await cleaned(db, 'cleanup_tax_document_buyers');
+      return { before, old: await copiesOf(db, old), recent: await copiesOf(db, recent), count };
+    });
+
+    expect(result.before.map((d) => d.kind)).toEqual(['invoice', 'receipt']);
+    expect(result.before[0]!.buyer).toMatchObject({ country: expect.any(String) });
+    expect(result.old.map((d) => d.buyer)).toEqual([{}, {}]);
+    // what the document says of the sale stays: the seller, the lines, the sums
+    expect(result.old.map(({ buyer: _buyer, ...rest }) => rest)).toEqual(
+      result.before.map(({ buyer: _buyer, ...rest }) => rest),
+    );
+    expect(result.recent.map((d) => d.buyer)).not.toContainEqual({});
+    expect(result.count).toBeGreaterThanOrEqual(2);
+  });
+
+  it('cleans a day before the term ends, a minute short of that it waits', async () => {
+    const result = await inSuperuserTx(async (owner) => {
+      const db = asDbSession(owner);
+      const due = await documentsOf(db);
+      const early = await documentsOf(db);
+      await publishPolicy(db, { taxDocuments: 30 });
+      await dateBack(db, due, daysAgo(29, 1));
+      await dateBack(db, early, daysAgo(29, -1));
+      await cleanup(db, 'cleanup_tax_document_buyers');
+      return { due: await copiesOf(db, due), early: await copiesOf(db, early) };
+    });
+
+    expect(result.due.map((d) => d.buyer)).toEqual([{}, {}]);
+    expect(result.early.map((d) => d.buyer)).not.toContainEqual({});
+  });
+
+  it('says how many documents it emptied, and has none the second time', async () => {
+    const counts = await inSuperuserTx(async (owner) => {
+      const db = asDbSession(owner);
+      const old = await documentsOf(db);
+      await publishPolicy(db, { taxDocuments: 30 });
+      await dateBack(db, old, daysAgo(31));
+      const first = await cleaned(db, 'cleanup_tax_document_buyers');
+      return { first, second: await cleaned(db, 'cleanup_tax_document_buyers') };
+    });
+
+    expect(counts.first).toBeGreaterThanOrEqual(2);
+    expect(counts.second).toBe(0);
   });
 });

@@ -2,7 +2,7 @@
 // (a checkbox under Services, service:<name>); the others answer from their mocks, and so do all
 // of them when jest runs without the launcher
 export type TestService =
-  'sendgrid' | 'cloudinary' | 'stripe' | 'openai' | 'turnstile' | 'shippypro';
+  'sendgrid' | 'cloudinary' | 'stripe' | 'openai' | 'turnstile' | 'shippypro' | 'fiskaly';
 
 export const isRealService = (service: TestService): boolean =>
   (process.env.TEST_REAL_SERVICES ?? '').split(',').includes(service);

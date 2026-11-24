@@ -107,9 +107,12 @@ export const moneyRefundsOf = (purpose?: MoneyRefundPurpose) => Prisma.sql`(
       when s.failure is null or s.failure = 'already_refunded' then false
       when s.purpose in ('return', 'dispute_remainder') then (
         exists (
-          select 1 from cartlify.return_items as i
-          join cartlify.money_log as f on f.id = i."moneyLogId"
+          select 1
+          from cartlify.money_log as f
+          cross join lateral cartlify.money_line_return_rows(f.id) as n
+          join cartlify.return_items as i on i.id = n.return_item_id
           where f.event = 'money.refund_failed' and f."coversId" = any (s."lineIds")
+            and i.money = 'failed'::cartlify."ReturnMoney"
         )
         -- the way back left alone, a transfer of its own: its open statement still owes it, and
         -- nothing sent it again since (a transfer, money outside the app)

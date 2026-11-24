@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 
 import appStripe from '@providers/payments/stripe/stripeClient.js';
 
-import { alertsOf } from '../../../helpers/alerts.js';
+import { alertsOf, writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -74,6 +74,7 @@ const {
 
 const newAdmin = async () => {
   const user = await createUser({ role: 'ADMIN' });
+  await writeAlertNumbers(user);
   userIds.push(user.id);
   return user;
 };
@@ -83,6 +84,7 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   admin = await newAdmin();
   root = await createUser({ role: 'ROOT' });
+  await writeAlertNumbers(root);
   userIds.push(root.id);
 });
 
@@ -199,13 +201,13 @@ describeMock('the kinds of the disputes', () => {
     );
     expect(await subscriptionOf(someone, 'disputes_to_answer')).toEqual({
       kind: 'disputes_to_answer',
-      subscribed: true,
+      subscribed: false,
       threshold: null,
     });
     expect(await subscriptionOf(someone, 'disputes_lost')).toEqual({
       kind: 'disputes_lost',
-      subscribed: true,
-      threshold: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
+      subscribed: false,
+      threshold: { value: 7, min: 1, max: 365, unit: 'days', window: null },
     });
     expect(await subscriptionOf(someone, 'dispute_refunds_in_transit')).toMatchObject({
       threshold: { value: 3, unit: 'days' },

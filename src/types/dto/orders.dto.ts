@@ -29,6 +29,9 @@ export type ConfirmedStatus = true | false;
 // shared response shapes
 
 // the product of a position: what the page needs to link to it
+// the state of a fiscal receipt the list of the orders of the admins filters by
+export type OrdersReceiptsFilter = 'pending' | 'refused';
+
 export interface OrderItemProductDto {
   id: ProductId;
   name: string;
@@ -49,6 +52,20 @@ export interface OrderItemDto {
   // the rule of withdrawal of the product and the kind it makes: the rule of now while the order is
   // a cart, the rule of the confirmation once it is confirmed
   withdrawal: { rule: WithdrawalRuleName; right: WithdrawalRight };
+  // the tax the line holds, as the confirmation fixed it (docs/taxes.md); left out while the order is
+  // a cart and for a shop that takes no tax
+  tax?: { rate: number | null; amount: number };
+}
+
+// the tax of a confirmed order: the rule and the country it is taxed in, the sums by rate (the
+// items and the delivery), whether the buyer may pay the tax and the duty on receipt, and whether
+// the buyer asked for an invoice
+export interface OrderTaxDto {
+  rule: string;
+  country: string;
+  totals: { rate: number | null; net: number; tax: number; gross: number }[];
+  payOnReceipt: boolean;
+  invoiceRequested: boolean;
 }
 
 // the address of a manual delivery
@@ -95,6 +112,9 @@ export interface OrderShipmentAdminDto extends OrderShipmentPublicDto {
   rolledBackAt: Date | null;
   // a parcel of the delivery provider: the label to print; none for a manual send
   labelUrl: string | null;
+  // a parcel with the tax number of the shop on its commercial invoice: sent to the carrier with
+  // the parcel (electronic) or to print with the label (print); none for any other parcel
+  customsInvoice: 'electronic' | 'print' | null;
   boxes: ShipmentBoxDto[];
 }
 
@@ -144,6 +164,8 @@ export interface OrderResponseDto {
   total: number;
   // empty while the order has none: a cart of a buyer who has not chosen yet
   delivery: OrderDeliveryDto | null;
+  // the tax the confirmation fixed; left out while the order is a cart and with no tax
+  tax?: OrderTaxDto;
 
   createdAt: Date;
   updatedAt: Date;
@@ -326,12 +348,34 @@ export interface DeliveryOptionsBodyDto {
 
 // a way the cart goes to the address and its price for the items of the cart; a carrier with its
 // name for the buyer and how long it takes
+// the tax of the cart sent one way (docs/taxes.md): the items at the prices the rule leaves, the
+// tax by rate, the total; whether the buyer may pay the tax and the duty on receipt, and why the
+// order cannot go (null when it can)
+export interface DeliveryOptionTaxDto {
+  items: {
+    itemId: number;
+    unitPrice: number;
+    totalPrice: number;
+    rate: number | null;
+    tax: number;
+  }[];
+  totals: { rate: number | null; net: number; tax: number; gross: number }[];
+  total: number;
+  payOnReceipt: boolean;
+  refusal:
+    | { code: 'TAX_SALES_STOPPED' }
+    | { code: 'TAX_PARCEL_LIMIT'; limit: number; withDelivery: boolean; withVat: boolean }
+    | { code: 'ORDER_TOTAL_ABOVE_MAXIMUM'; maximum: number }
+    | null;
+}
+
 export interface DeliveryOptionDto {
   method: DeliveryMethodName;
   price: number;
   carrier: DeliveryCarrierDto | null;
   label: string | null;
   days: string | null;
+  tax: DeliveryOptionTaxDto;
 }
 
 export interface DeliveryOptionsResponseDto {
@@ -353,6 +397,8 @@ export interface ConfirmCurrentOrderBodyDto {
   delivery?: ConfirmDeliveryBodyDto;
   // the price of the delivery the page showed the buyer; another price now refuses the confirmation
   expectedDeliveryPrice: number;
+  // the buyer asks for an invoice (a shop that makes them on request, invoiceMode on_request)
+  invoice?: boolean;
 }
 
 export interface ConfirmCurrentOrderDto extends ConfirmCurrentOrderBodyDto {
@@ -418,6 +464,10 @@ export interface GetOrdersQueryDto {
   // the provider warned of after they were sent, from this time (an iso date-time)
   holds?: string;
   fraudWarnedFrom?: string;
+  // the orders with a fiscal receipt in the state, the receipts made before this time (an iso
+  // date-time)
+  receipts?: OrdersReceiptsFilter;
+  receiptsMadeTo?: string;
   // the orders whose parcels of the delivery provider wait for an admin (parcelCases.helper.ts), and
   // the parcels made before this time (an iso date-time)
   parcels?: ParcelCase;
@@ -456,6 +506,8 @@ export interface FindOrdersDto {
   shippedTo?: Date;
   holds?: string;
   fraudWarnedFrom?: Date;
+  receipts?: OrdersReceiptsFilter;
+  receiptsMadeTo?: Date;
   parcels?: ParcelCase;
   parcelsMadeTo?: Date;
 
@@ -690,4 +742,40 @@ export type UpdateOrdersStatusResultDto =
 
 export interface UpdateOrdersStatusResponseDto {
   results: UpdateOrdersStatusResultDto[];
+}
+
+// a tax document of an order (docs/taxes.md): an invoice or a credit note of ours (its number in
+// its series, the PDF at GET /api/orders/:orderId/documents/:documentId/pdf), or a fiscal receipt
+// of a provider (its state there, its number and link); a credit note and a return receipt name what
+// they correct, a receipt the document it registers
+export interface OrderTaxDocumentDto {
+  id: number;
+  kind: 'invoice' | 'credit_note' | 'receipt' | 'return_receipt';
+  number: string | null;
+  correctsId: number | null;
+  documentId: number | null;
+  net: number;
+  tax: number;
+  gross: number;
+  currency: string;
+  createdAt: string;
+  receipt: {
+    // null for a receipt not sent yet
+    provider: string | null;
+    state: 'pending' | 'registered' | 'refused' | 'manual';
+    number: string | null;
+    url: string | null;
+    text: string | null;
+    // the last answer of the provider that was not a receipt, for an admin; null for the buyer
+    error: string | null;
+  } | null;
+}
+
+export interface PostReceiptConfirmationBodyDto {
+  number: string;
+  url?: string | null;
+}
+
+export interface OrderTaxDocumentsResponseDto {
+  items: OrderTaxDocumentDto[];
 }

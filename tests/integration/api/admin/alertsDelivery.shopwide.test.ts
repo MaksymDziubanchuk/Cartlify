@@ -6,6 +6,7 @@ import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
+import { writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
@@ -29,6 +30,7 @@ beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
   admin = await createUser({ role: 'ADMIN' });
+  await writeAlertNumbers(admin);
 });
 
 afterEach(() => {

@@ -1,6 +1,8 @@
 import type { ControllerRouter } from 'types/controller.js';
-import type { UserEntity } from 'types/user.js';
+import { getOrderTaxDocumentPdf, getOrderTaxDocuments } from './services/taxDocuments.service.js';
 import type {
+  OrderTaxDocumentsResponseDto,
+  PostReceiptConfirmationBodyDto,
   ParcelsBodyDto,
   ParcelsBulkResultDto,
   ParcelsDraftDto,
@@ -39,6 +41,7 @@ import type {
   DecideOrderHoldParamsDto,
   RecordCarrierMoneyBodyDto,
 } from 'types/dto/orders.dto.js';
+import type { UserEntity } from 'types/user.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
 import {
@@ -46,9 +49,11 @@ import {
   createParcels,
   createParcelsOf,
   orderCarriers,
+  parcelCustomsInvoice,
   parcelsDraft,
 } from './services/parcels.service.js';
 import { confirmParcelVoid, voidOrderParcels } from './services/voidParcels.service.js';
+import { confirmReceiptByHand } from './services/receipts.service.js';
 
 const getCurrentOrder: ControllerRouter<{}, {}, {}, OrderResponseDto> = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
@@ -117,11 +122,11 @@ const postConfirm: ControllerRouter<{}, ConfirmCurrentOrderBodyDto, {}, OrderRes
   reply,
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { orderId, delivery, expectedDeliveryPrice } = req.body;
+  const { orderId, delivery, expectedDeliveryPrice, invoice } = req.body;
 
   const args = pickDefined<ConfirmCurrentOrderDto>(
     { actorId, actorRole, orderId, expectedDeliveryPrice, log: req.log },
-    { delivery },
+    { delivery, invoice },
   );
 
   const result = await ordersServices.confirmOrder(args);
@@ -215,6 +220,34 @@ const postParcelVoidConfirmation: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// GET /api/orders/:orderId/shipments/:shipmentId/customs-invoice: the commercial invoice of a parcel
+// with the tax number of the shop, to print
+const getParcelCustomsInvoice: ControllerRouter<
+  { orderId: string; shipmentId: string },
+  {},
+  {},
+  Buffer
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { pdf, fileName } = await parcelCustomsInvoice(
+    {
+      actorId,
+      actorRole,
+      orderId: Number(req.params.orderId),
+      shipmentId: Number(req.params.shipmentId),
+    },
+    req.log,
+  );
+  return reply
+    .code(200)
+    .header('content-type', 'application/pdf')
+    .header(
+      'content-disposition',
+      `attachment; filename="${fileName.replace(/[^A-Za-z0-9_.-]/g, '_')}"`,
+    )
+    .send(pdf);
+};
+
 // the ways the cart goes to an address, with their prices
 const postDeliveryOptions: ControllerRouter<
   {},
@@ -260,6 +293,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
     shippedTo,
     holds,
     fraudWarnedFrom,
+    receipts,
+    receiptsMadeTo,
     parcels,
     parcelsMadeTo,
     sortBy,
@@ -301,6 +336,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
       shippedTo: shippedTo ? new Date(shippedTo) : undefined,
       holds,
       fraudWarnedFrom: fraudWarnedFrom ? new Date(fraudWarnedFrom) : undefined,
+      receipts,
+      receiptsMadeTo: receiptsMadeTo ? new Date(receiptsMadeTo) : undefined,
       parcels,
       parcelsMadeTo: parcelsMadeTo ? new Date(parcelsMadeTo) : undefined,
     },
@@ -334,6 +371,66 @@ const postOrdersStatus: ControllerRouter<
     req.log,
   );
   return reply.code(200).send(result);
+};
+
+// GET /api/orders/:orderId/documents: the tax documents of the order
+const getDocuments: ControllerRouter<
+  GetOrderByIdParamsDto,
+  {},
+  {},
+  OrderTaxDocumentsResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const result = await getOrderTaxDocuments({
+    actorId,
+    actorRole,
+    orderId: Number(req.params.orderId),
+  });
+  return reply.code(200).send(result);
+};
+
+// POST /api/orders/:orderId/documents/:documentId/receipt-confirmation: a receipt the admin
+// registered by hand at the fiscal service
+const confirmReceipt: ControllerRouter<
+  GetOrderByIdParamsDto & { documentId: string },
+  PostReceiptConfirmationBodyDto,
+  {},
+  OrderTaxDocumentsResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const result = await confirmReceiptByHand({
+    actorId,
+    actorRole,
+    orderId: Number(req.params.orderId),
+    documentId: Number(req.params.documentId),
+    number: req.body.number.trim(),
+    url: req.body.url ?? null,
+  });
+  return reply.code(200).send(result);
+};
+
+// GET /api/orders/:orderId/documents/:documentId/pdf: the PDF of an invoice or a credit note
+const getDocumentPdf: ControllerRouter<
+  GetOrderByIdParamsDto & { documentId: string },
+  {},
+  {},
+  Buffer
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { pdf, fileName } = await getOrderTaxDocumentPdf({
+    actorId,
+    actorRole,
+    orderId: Number(req.params.orderId),
+    documentId: Number(req.params.documentId),
+  });
+  return reply
+    .code(200)
+    .header('content-type', 'application/pdf')
+    .header(
+      'content-disposition',
+      `attachment; filename="${fileName.replace(/[^A-Za-z0-9_.-]/g, '_')}"`,
+    )
+    .send(pdf);
 };
 
 const getOrderById: ControllerRouter<GetOrderByIdParamsDto, {}, {}, OrderResponseDto> = async (
@@ -550,6 +647,9 @@ const postReturnProof: ControllerRouter<
 };
 
 export const ordersController = {
+  getDocuments,
+  getDocumentPdf,
+  confirmReceipt,
   getCurrentOrder,
   postCurrentItems,
   patchCurrentItems,
@@ -562,6 +662,7 @@ export const ordersController = {
   postParcelsBulk,
   postParcelsVoid,
   postParcelVoidConfirmation,
+  getParcelCustomsInvoice,
 
   getOrders,
   getOrderById,

@@ -61,6 +61,16 @@ export default async function adminRouter(app: FastifyInstance) {
     adminController.getAccountingTimeline,
   );
 
+  // the tax of the money of a period, for the declarations (docs/taxes.md)
+  app.get(
+    '/reports/vat',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getVatReportSchema,
+    },
+    adminController.getVatReport,
+  );
+
   app.get(
     '/stock/batches',
     {
@@ -213,6 +223,16 @@ export default async function adminRouter(app: FastifyInstance) {
       schema: adminSchema.deleteAlertThresholdSchema,
     },
     adminController.deleteAlertThreshold,
+  );
+
+  // Close of a kind of alerts that only informs
+  app.put(
+    '/alerts/seen/:kind',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.putAlertSeenSchema,
+    },
+    adminController.putAlertSeen,
   );
 
   app.get(

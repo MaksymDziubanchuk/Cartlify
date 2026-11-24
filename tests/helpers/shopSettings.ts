@@ -54,6 +54,7 @@ export const INTEGRATION_SHOP_BASELINE: Partial<ShopSettingsValues> = {
   deliveryZones: [TEST_ZONE],
   pickupAddress: 'Test shop, Main street 1, Kyiv',
   pickupHours: 'Mon-Fri 10:00-18:00',
+  pickupCountry: 'UA',
   emailFromName: 'Cartlify',
   emailReplyTo: 'support@shop.example.com',
   avatarRemovalsLimit: 2,

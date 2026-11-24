@@ -124,6 +124,7 @@ type Move = {
   note: string | null;
   happenedAt: string | null;
   coversId: number | null;
+  itemIds: number[];
   by: { id: number } | null;
 };
 
@@ -144,15 +145,18 @@ type Card = {
     money: string;
     amount: number;
     amountNote: string | null;
-    moneyLogId: number | null;
+    paidUnits: number;
     refundFailure: { code: string; text: string | null } | null;
     refusedCode: string | null;
   }>;
 };
 
-// the line of the money journal the money of a row stands on, as the card shows it
+// the line of the money journal the money of a row stands on, as the card shows it: the last
+// movement of the goods that names the row
 const lineOfRow = (card: Card, index = 0) =>
-  card.money.find((move) => move.id === card.items[index]!.moneyLogId);
+  [...card.money]
+    .reverse()
+    .find((move) => move.part === 'goods' && move.itemIds.includes(card.items[index]!.id));
 
 // a statement of an admin for the units of the item; its card
 async function statementOf(orderId: number, itemId: number, quantity: number): Promise<Card> {
@@ -213,7 +217,6 @@ describe('POST /api/returns/:returnId/refund', () => {
     expect(done.items).toEqual([
       expect.objectContaining({
         money: 'refunded',
-        moneyLogId: expect.any(Number),
         refundFailure: null,
       }),
     ]);

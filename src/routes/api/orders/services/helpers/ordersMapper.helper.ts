@@ -21,6 +21,7 @@ import {
 } from '@routes/api/products/services/helpers/variant.helper.js';
 import {
   movementOf,
+  lastLineOfRow,
   readReturnMoneyLines,
   sumsOf,
   type ReturnMoneyLine,
@@ -29,6 +30,7 @@ import {
 import type {
   OrderDeliveryDto,
   OrderItemDto,
+  OrderTaxDto,
   OrderMoneyLineDto,
   OrderResponseDto,
   OrderShipmentAdminDto,
@@ -62,6 +64,7 @@ export const orderResponseSelect = {
   // sent, for the view of an admin
   holds: true,
   fraudWarnedAt: true,
+  invoiceRequested: true,
   createdAt: true,
   updatedAt: true,
   items: {
@@ -73,6 +76,11 @@ export const orderResponseSelect = {
       unitPrice: true,
       totalPrice: true,
       productName: true,
+      // the tax the confirmation fixed (db/05, confirm_order)
+      taxRule: true,
+      taxCountry: true,
+      taxRate: true,
+      taxAmount: true,
       // the rule of withdrawal kept by the item (db/05); a cart shows the rule of now instead
       withdrawal: true,
 
@@ -103,6 +111,10 @@ export const orderDeliverySelect = {
   apartment: true,
   note: true,
   price: true,
+  // the tax the price of the delivery holds, as the confirmation fixed it
+  taxRule: true,
+  taxLines: true,
+  taxAmount: true,
 } satisfies Prisma.OrderDeliverySelect;
 
 export type OrderDeliveryRow = Prisma.OrderDeliveryGetPayload<{
@@ -119,6 +131,7 @@ export const orderShipmentSelect = {
   rolledBackAt: true,
   state: true,
   labelUrl: true,
+  customsInvoice: true,
 } satisfies Prisma.OrderShipmentSelect;
 
 // a send with what the shop paid the carrier for it: the sum of its lines in the money journal
@@ -166,7 +179,8 @@ export async function withDeliveryAndSends<T extends { id: number }>(
     select: { ...orderShipmentSelect, orderId: true },
   });
 
-  // what the shop paid for each send: its lines money.shipping_cost and money.correction
+  // what the shop paid for each send: its lines (money.shipping_cost, money.correction, and what a
+  // carrier gave back for a label voided, money.shipping_refund)
   const costOf = await shipmentCostsOf(
     db,
     sends.map((send) => send.id),
@@ -443,9 +457,10 @@ function sentAtOf(line: ReturnMoneyLine | null): string | null {
 
 // the money a statement sent back, a movement at a time as the buyer sees it: a transfer to the
 // way they paid (each a key, in its parts) and money root sent outside the app; what went back,
-// what was kept for the way back, and where it stands. A transfer that money already sent covered
-// (a refund made by hand in the dashboard of the provider tied to the statement) did not reach the
-// buyer when that money failed later; root sends it another way then, on the refund itself
+// what was kept for the way back, and where it stands. Money already sent another way that paid
+// rows of the statement (a refund made by hand in the dashboard of the provider, what a bank gave:
+// the part covered, no line of the journal) is a movement too, with the rest the movement sent; it
+// did not reach the buyer when that money failed later; root sends it another way then, on the refund itself
 // (money.outside of the refund made by hand, tied to the statement)
 function buyerRefundsOf(lines: ReturnMoneyLine[]): BuyerReturnRefundDto[] {
   const failureOf = (lineId: number | null) =>
@@ -459,7 +474,11 @@ function buyerRefundsOf(lines: ReturnMoneyLine[]): BuyerReturnRefundDto[] {
           (line.part === 'goods' ||
             // the way back the shop paid alone, outside the app
             (line.part === 'way_back' &&
-              !movementOf(lines, line).some((one) => one.part === 'goods')))) ||
+              !movementOf(lines, line).some((one) => one.part === 'goods')) ||
+            // money already with the buyer that paid all of the rows: the movement once
+            (line.part === 'covered' &&
+              !movementOf(lines, line).some((one) => one.part === 'goods') &&
+              movementOf(lines, line).find((one) => one.part === 'covered') === line))) ||
         (line.event === 'money.outside' && line.purpose !== 'return'),
     )
     .map((goods) => {
@@ -571,7 +590,7 @@ export async function buyerReturnsOf(
         quantity: true,
         amount: true,
         money: true,
-        moneyLogId: true,
+        splitFromId: true,
         goods: true,
         notAcceptedReason: true,
       },
@@ -594,7 +613,6 @@ export async function buyerReturnsOf(
             : 'received';
 
       const money = moneyLines.get(statement.id) ?? [];
-      const lineOf = (id: number | null) => money.find((one) => one.id === id) ?? null;
 
       const dto: BuyerReturnDto = {
         id: statement.id,
@@ -625,7 +643,8 @@ export async function buyerReturnsOf(
             quantity: line.quantity,
             amount: decimalToNumber(line.amount),
             money: line.money,
-            refundedAt: line.money === 'refunded' ? sentAtOf(lineOf(line.moneyLogId)) : null,
+            refundedAt:
+              line.money === 'refunded' ? sentAtOf(lastLineOfRow(money, lines, line)) : null,
             refusal:
               line.money !== 'refused'
                 ? null
@@ -754,6 +773,7 @@ const mapShipments = (row: OrderResponseRow): OrderShipmentAdminDto[] =>
     rolledBackAt: s.rolledBackAt,
     state: s.state,
     labelUrl: s.labelUrl,
+    customsInvoice: s.customsInvoice,
     boxes: s.boxes,
   }));
 
@@ -835,6 +855,59 @@ function mapItem(
     withdrawal: withdrawalOf(
       row.confirmed ? it.withdrawal : (context.rules.get(it.productId) ?? it.withdrawal),
     ),
+    ...(row.confirmed && it.taxRule
+      ? {
+          tax: {
+            rate: it.taxRate === null ? null : decimalToNumber(it.taxRate),
+            amount: it.taxAmount === null ? 0 : decimalToNumber(it.taxAmount),
+          },
+        }
+      : {}),
+  };
+}
+
+// the tax of a confirmed order: the items and the delivery by rate (the part without a tax under
+// null); none while it is a cart or for a shop that takes no tax
+function taxOf(row: OrderResponseRow): OrderTaxDto | undefined {
+  const first = row.items.find((it) => it.taxRule);
+  if (!row.confirmed || !first) return undefined;
+
+  const byRate = new Map<number | null, { gross: number; tax: number }>();
+  const add = (rate: number | null, gross: number, tax: number) => {
+    const sum = byRate.get(rate) ?? { gross: 0, tax: 0 };
+    byRate.set(rate, { gross: sum.gross + gross, tax: sum.tax + tax });
+  };
+  for (const it of row.items) {
+    add(
+      it.taxRate === null ? null : decimalToNumber(it.taxRate),
+      Math.round(decimalToNumber(it.totalPrice) * 100),
+      Math.round((it.taxAmount === null ? 0 : decimalToNumber(it.taxAmount)) * 100),
+    );
+  }
+  const delivery = row.delivery;
+  const parts = Array.isArray(delivery?.taxLines)
+    ? (delivery!.taxLines as { rate: number; gross: number; tax: number }[])
+    : [];
+  if (parts.length) {
+    for (const part of parts)
+      add(part.rate, Math.round(part.gross * 100), Math.round(part.tax * 100));
+  } else if (delivery && decimalToNumber(delivery.price) > 0) {
+    add(null, Math.round(decimalToNumber(delivery.price) * 100), 0);
+  }
+
+  return {
+    rule: first.taxRule!,
+    country: first.taxCountry!,
+    totals: [...byRate.entries()]
+      .sort(([a], [b]) => (a ?? -1) - (b ?? -1))
+      .map(([rate, sum]) => ({
+        rate,
+        net: (sum.gross - sum.tax) / 100,
+        tax: sum.tax / 100,
+        gross: sum.gross / 100,
+      })),
+    payOnReceipt: first.taxRule === 'buyer_at_receipt',
+    invoiceRequested: row.invoiceRequested,
   };
 }
 
@@ -894,6 +967,7 @@ export function mapOrderRowToResponse(
       : Math.round((itemsTotal + (delivery?.price ?? 0)) * 100) / 100,
     delivery,
     items: row.items.map((it) => mapItem(row, it, context, unpaid)),
+    ...(taxOf(row) ? { tax: taxOf(row)! } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     // a field the order does not have yet is left out

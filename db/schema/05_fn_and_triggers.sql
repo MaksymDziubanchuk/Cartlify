@@ -1846,8 +1846,11 @@ $$;
 
 -- Refreshes the item prices of an order from the prices its variants sell at now
 -- (product_current_price: the sale price while the sale lasts). Returns the number of items
--- whose price changed. Runs with caller rights: RLS lets only the owner change items, and only
--- before the confirmation.
+-- whose price changed: the price of the catalog an item was priced at (listUnitPrice when the tax
+-- rule of a confirmation lowered it). An item that keeps the tax of an earlier confirmation (the
+-- order is a cart again) is at the price of the catalog again too (order_items_before_ins_upd),
+-- with no change counted for it. Runs with caller rights: RLS lets only the owner change items,
+-- and only before the confirmation.
 CREATE OR REPLACE FUNCTION cartlify.refresh_order_prices (p_order_id integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -1855,15 +1858,26 @@ SET
 DECLARE
   v_changed integer;
 BEGIN
+  -- a confirmed order keeps its prices (the update below changes none of its items, RLS hides them)
+  SELECT count(*)::integer
+  INTO v_changed
+  FROM cartlify.order_items AS oi
+  JOIN cartlify.product_variants AS v ON v.id = oi."variantId"
+  JOIN cartlify.orders AS o ON o.id = oi."orderId" AND NOT o.confirmed
+  WHERE oi."orderId" = p_order_id
+    AND COALESCE(oi."listUnitPrice", oi."unitPrice") IS DISTINCT FROM
+      cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt");
+
   UPDATE cartlify.order_items AS oi
   SET "unitPrice" = cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt")
   FROM cartlify.product_variants AS v
   WHERE oi."orderId" = p_order_id
     AND v.id = oi."variantId"
-    AND oi."unitPrice" IS DISTINCT FROM
-      cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt");
-
-  GET DIAGNOSTICS v_changed = ROW_COUNT;
+    AND (
+      oi."unitPrice" IS DISTINCT FROM
+        cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt")
+      OR oi."taxRule" IS NOT NULL
+    );
 
   RETURN v_changed;
 END;
@@ -1902,12 +1916,25 @@ $$;
 -- consent to an older one is refused, LEGAL_DOCUMENT_NOT_CURRENT). The server takes that lock
 -- before it reads the versions the buyer accepted, so the order never keeps a contract its buyer
 -- did not accept. Both stay empty while no contract is published.
+-- The tax of the order is the server's (the kind tax, docs/taxes.md), given in p_tax:
+-- { items: [{ id, rule, country, groupId, rate, unitPrice, tax }], delivery: { rule, parts:
+-- [{ rate, gross, tax }] } }, every item of the order once (ORDER_TAX_INVALID). The confirmation
+-- keeps it: each item its rule, country, group, rate and tax with the unit price the rule leaves
+-- (order_items_before_ins_upd checks the arithmetic), the delivery its parts (they make its price,
+-- each holds its tax half up); the free-from sum is counted with the prices the rule leaves. A tax
+-- of an earlier confirmation goes first. p_tax null, or a rule null: no tax (a shop that takes
+-- none). p_invoice_requested: the buyer asked for an invoice (orders.invoiceRequested).
+-- the old form, without the tax: dropped once dev and prod run this one (db:snapshot:check:db)
+DROP FUNCTION IF EXISTS cartlify.confirm_order (integer, interval, numeric, numeric, numeric);
+
 CREATE OR REPLACE FUNCTION cartlify.confirm_order (
   p_order_id integer,
   p_reserve_for interval,
   p_delivery_flat numeric DEFAULT NULL,
   p_delivery_free_from numeric DEFAULT NULL,
-  p_expected_delivery_price numeric DEFAULT NULL
+  p_expected_delivery_price numeric DEFAULT NULL,
+  p_tax jsonb DEFAULT NULL,
+  p_invoice_requested boolean DEFAULT false
 ) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1925,6 +1952,10 @@ DECLARE
 
   v_withdrawal_days integer;
   v_return_payer    cartlify."ReturnShippingPayer";
+
+  v_item  jsonb;
+  v_parts jsonb;
+  v_items integer;
 
   r record;
 BEGIN
@@ -1985,13 +2016,14 @@ BEGIN
 
   -- the reservation above locked the variant rows, so prices cannot change until the commit:
   -- refuse when an item price differs from the price its variant sells at now (a sale that just
-  -- ended counts), the buyer must confirm the amount he sees
+  -- ended counts), the buyer must confirm the amount he sees; an item an earlier confirmation
+  -- lowered by its tax rule is compared by its price of the catalog
   IF EXISTS (
     SELECT 1
     FROM cartlify.order_items AS oi
     JOIN cartlify.product_variants AS v ON v.id = oi."variantId"
     WHERE oi."orderId" = p_order_id
-      AND oi."unitPrice" IS DISTINCT FROM
+      AND COALESCE(oi."listUnitPrice", oi."unitPrice") IS DISTINCT FROM
         cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt")
   ) THEN
     RAISE EXCEPTION 'ORDER_PRICES_CHANGED';
@@ -2014,6 +2046,46 @@ BEGIN
   WHERE oi."orderId" = p_order_id
     AND oi."productId" = w."productId"
     AND oi."withdrawal" IS DISTINCT FROM w.rule;
+
+  -- the tax of an earlier confirmation goes: the items are at the prices of the catalog again
+  UPDATE cartlify.order_items AS oi
+  SET "taxRule" = NULL
+  WHERE oi."orderId" = p_order_id
+    AND (oi."taxRule" IS NOT NULL OR oi."listUnitPrice" IS NOT NULL);
+
+  -- the tax of this one, every item once
+  IF p_tax IS NOT NULL THEN
+    SELECT count(*)::integer INTO v_items FROM cartlify.order_items AS oi WHERE oi."orderId" = p_order_id;
+
+    IF jsonb_typeof(p_tax -> 'items') IS DISTINCT FROM 'array'
+       OR jsonb_array_length(p_tax -> 'items') <> v_items
+       OR (SELECT count(DISTINCT e ->> 'id') FROM jsonb_array_elements(p_tax -> 'items') AS e) <> v_items
+       OR EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(p_tax -> 'items') AS e
+         WHERE NOT EXISTS (
+           SELECT 1
+           FROM cartlify.order_items AS oi
+           WHERE oi."orderId" = p_order_id AND oi.id::text = e ->> 'id'
+         )
+       ) THEN
+      RAISE EXCEPTION 'ORDER_TAX_INVALID';
+    END IF;
+
+    FOR v_item IN SELECT e FROM jsonb_array_elements(p_tax -> 'items') AS e LOOP
+      CONTINUE WHEN v_item ->> 'rule' IS NULL;
+
+      UPDATE cartlify.order_items AS oi
+      SET
+        "taxRule" = (v_item ->> 'rule')::cartlify."TaxRule",
+        "taxCountry" = v_item ->> 'country',
+        "taxGroupId" = (v_item ->> 'groupId')::integer,
+        "taxRate" = (v_item ->> 'rate')::numeric,
+        "taxAmount" = (v_item ->> 'tax')::numeric,
+        "unitPrice" = (v_item ->> 'unitPrice')::numeric
+      WHERE oi."orderId" = p_order_id AND oi.id = (v_item ->> 'id')::integer;
+    END LOOP;
+  END IF;
 
   -- where the order goes is written before the confirmation; its price is fixed now, from what
   -- the items cost, and the total that the update below sets holds it
@@ -2052,6 +2124,44 @@ BEGIN
   WHERE d."orderId" = p_order_id
     AND d."price" IS DISTINCT FROM v_delivery_price;
 
+  -- the tax the price of the delivery holds: its parts make the price, each holds its tax half up;
+  -- no parts is no tax (a rule without one, a delivery for nothing)
+  IF p_tax IS NOT NULL AND (p_tax -> 'delivery' ->> 'rule') IS NOT NULL THEN
+    v_parts := COALESCE(p_tax -> 'delivery' -> 'parts', '[]'::jsonb);
+
+    IF jsonb_typeof(v_parts) <> 'array'
+       OR (
+         jsonb_array_length(v_parts) > 0
+         AND (
+           (SELECT SUM((e ->> 'gross')::numeric) FROM jsonb_array_elements(v_parts) AS e)
+             IS DISTINCT FROM v_delivery_price
+           OR EXISTS (
+             SELECT 1
+             FROM jsonb_array_elements(v_parts) AS e
+             WHERE (e ->> 'rate')::numeric NOT BETWEEN 0 AND 100
+               OR (e ->> 'tax')::numeric IS DISTINCT FROM round(
+                 (e ->> 'gross')::numeric * (e ->> 'rate')::numeric / (100 + (e ->> 'rate')::numeric),
+                 2
+               )
+           )
+         )
+       ) THEN
+      RAISE EXCEPTION 'ORDER_TAX_INVALID';
+    END IF;
+
+    UPDATE cartlify.order_deliveries AS d
+    SET
+      "taxRule" = (p_tax -> 'delivery' ->> 'rule')::cartlify."TaxRule",
+      "taxLines" = v_parts,
+      "taxAmount" = (SELECT COALESCE(SUM((e ->> 'tax')::numeric), 0) FROM jsonb_array_elements(v_parts) AS e)
+    WHERE d."orderId" = p_order_id;
+  ELSE
+    UPDATE cartlify.order_deliveries AS d
+    SET "taxRule" = NULL, "taxLines" = NULL, "taxAmount" = NULL
+    WHERE d."orderId" = p_order_id
+      AND (d."taxRule" IS NOT NULL OR d."taxLines" IS NOT NULL OR d."taxAmount" IS NOT NULL);
+  END IF;
+
   -- the contract in force: its days to withdraw and its payer of the way back stay with the order;
   -- none published leaves both empty
   PERFORM pg_advisory_xact_lock_shared(hashtext('cartlify.legal_documents:contract'));
@@ -2070,7 +2180,8 @@ BEGIN
     status = 'waiting',
     "reservationExpiresAt" = clock_timestamp() + p_reserve_for,
     "withdrawalDays" = v_withdrawal_days,
-    "returnShippingPaidBy" = v_return_payer
+    "returnShippingPaidBy" = v_return_payer,
+    "invoiceRequested" = COALESCE(p_invoice_requested, false)
   WHERE o.id = p_order_id;
 END;
 $$;
@@ -2420,6 +2531,24 @@ BEGIN
       RETURN 'ORDER_NOT_PAYABLE';
     END IF;
 
+    -- the tax the confirmation fixed has to be on every item still (a write of the cart since takes
+    -- it off, docs/taxes.md): an order that was taxed (a shop that takes the tax gives every item a
+    -- rule, a pickup too; the delivery tells it of a shop that takes none at home) and lost it is not
+    -- sold by this payment, which goes back as one the order cannot take
+    IF (
+         cartlify.shop_setting_now('vatPayer') = 'true'::jsonb
+         OR EXISTS (
+           SELECT 1 FROM cartlify.order_deliveries AS d
+           WHERE d."orderId" = p_order_id AND d."taxRule" IS NOT NULL
+         )
+       )
+       AND EXISTS (
+         SELECT 1 FROM cartlify.order_items AS oi
+         WHERE oi."orderId" = p_order_id AND oi."taxRule" IS NULL
+       ) THEN
+      RETURN 'ORDER_NOT_PAYABLE';
+    END IF;
+
     BEGIN
       FOR r IN
         SELECT oi."variantId" AS variant_id,
@@ -2505,6 +2634,17 @@ BEGIN
   FROM cartlify.orders AS o
   JOIN cartlify.order_deliveries AS d ON d."orderId" = o.id
   WHERE o.id = p_order_id AND d.price > 0;
+
+  -- the invoice of the sale, of the line of money of the payment (the goods, else the delivery),
+  -- when the shop makes one (docs/taxes.md)
+  PERFORM cartlify.make_order_invoice(p_order_id, m.id)
+  FROM (
+    SELECT l.id
+    FROM cartlify.money_log AS l
+    WHERE l."orderId" = p_order_id AND l.event = 'money.payment' AND l."paymentId" = p_payment_id
+    ORDER BY l.id
+    LIMIT 1
+  ) AS m;
 
   RETURN 'PAID';
 END;
@@ -2665,6 +2805,11 @@ $$;
 -- The rule of withdrawal of the product comes from the database too (product_withdrawals), never
 -- from the caller. The confirmation fixes the price, the name and the rule, because items of a
 -- confirmed order cannot change.
+-- The tax of an item is written by the confirmation only (confirm_order, a step of the database):
+-- one update that gives the rule and the unit price the rule leaves, before the order is confirmed.
+-- The price may only come down, for a rule that takes no tax of the seller (the price of the
+-- catalog is kept beside it), and the tax is the one the line holds, half up to the cent
+-- (ORDER_TAX_INVALID). Any other write is of a cart: the price of the catalog, no tax.
 CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_confirmed boolean;
@@ -2710,8 +2855,6 @@ BEGIN
     RAISE EXCEPTION 'VARIANT_NOT_FOUND';
   END IF;
 
-  NEW."unitPrice" := v_price;
-  NEW."totalPrice" := NEW."unitPrice" * NEW."quantity";
   NEW."productName" := v_name;
 
   -- the rule of the product as it is now; a product that is not there leaves the default
@@ -2719,6 +2862,40 @@ BEGIN
     (SELECT w.rule FROM cartlify.product_withdrawals(ARRAY[NEW."productId"]) AS w),
     'allowed'
   );
+
+  IF current_user = 'cartlify_owner'
+     AND TG_OP = 'UPDATE'
+     AND OLD."taxRule" IS NULL
+     AND NEW."taxRule" IS NOT NULL THEN
+    IF NEW.quantity IS DISTINCT FROM OLD.quantity
+       OR NEW."variantId" IS DISTINCT FROM OLD."variantId"
+       OR NEW."unitPrice" IS NULL
+       OR NEW."unitPrice" < 0
+       OR NEW."unitPrice" > v_price
+       OR (NEW."unitPrice" < v_price AND NEW."taxRule" NOT IN ('none', 'buyer_at_receipt'))
+       OR NEW."taxAmount" IS DISTINCT FROM (
+         CASE
+           WHEN NEW."taxRate" IS NULL THEN 0
+           ELSE round(NEW."unitPrice" * NEW.quantity * NEW."taxRate" / (100 + NEW."taxRate"), 2)
+         END
+       ) THEN
+      RAISE EXCEPTION 'ORDER_TAX_INVALID' USING ERRCODE = 'check_violation';
+    END IF;
+
+    NEW."totalPrice" := NEW."unitPrice" * NEW."quantity";
+    NEW."listUnitPrice" := CASE WHEN NEW."unitPrice" < v_price THEN v_price END;
+
+    RETURN NEW;
+  END IF;
+
+  NEW."unitPrice" := v_price;
+  NEW."totalPrice" := NEW."unitPrice" * NEW."quantity";
+  NEW."taxRule" := NULL;
+  NEW."taxCountry" := NULL;
+  NEW."taxGroupId" := NULL;
+  NEW."taxRate" := NULL;
+  NEW."taxAmount" := NULL;
+  NEW."listUnitPrice" := NULL;
 
   RETURN NEW;
   
@@ -2822,6 +2999,7 @@ BEGIN
 
     NEW."withdrawalDays" := NULL;
     NEW."returnShippingPaidBy" := NULL;
+    NEW."invoiceRequested" := false;
 
     SELECT COALESCE(SUM(oi."totalPrice"), 0)
     INTO v_total
@@ -3347,6 +3525,7 @@ BEGIN
     WHEN 'retentionRecipientDays' THEN p_policy."retentionRecipientDays"
     WHEN 'retentionNewsletterConsentDays' THEN p_policy."retentionNewsletterConsentDays"
     WHEN 'retentionNewsletterRecipientsDays' THEN p_policy."retentionNewsletterRecipientsDays"
+    WHEN 'retentionTaxDocumentsDays' THEN p_policy."retentionTaxDocumentsDays"
     ELSE NULL
   END;
 END;
@@ -3369,7 +3548,8 @@ BEGIN
   IF p_field NOT IN (
     'retentionLoginAddressesDays', 'retentionGuestDataDays', 'retentionDeletedChatsDays',
     'retentionReturnAddressesDays', 'retentionReturnPersonalDays', 'retentionRecipientDays',
-    'retentionNewsletterConsentDays', 'retentionNewsletterRecipientsDays'
+    'retentionNewsletterConsentDays', 'retentionNewsletterRecipientsDays',
+    'retentionTaxDocumentsDays'
   ) THEN
     RAISE EXCEPTION 'RETENTION_FIELD_INVALID' USING ERRCODE = '22023';
   END IF;
@@ -3638,8 +3818,7 @@ $$;
 -- was sent outside the app, with the way back paid back) become made up, and the words of
 -- the provider about a failed transfer go. So do, by the same term from the moment the line was
 -- written, the notes of the money outside the app tied to no statement: a refund of a late payment,
--- made by hand or a compensation that root sent another way, and the money the buyer gave back for
--- a share already with them (record_overpaid_received). The money, the goods, the dates and the reasons stay:
+-- made by hand or a compensation that root sent another way. The money, the goods, the dates and the reasons stay:
 -- the reports stand on them. The term counts from the closing of the statement. Returns how many
 -- statements it made anonymous.
 CREATE OR REPLACE FUNCTION cartlify.cleanup_return_personal () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
@@ -3722,6 +3901,35 @@ $$;
 -- the public form asks for the name of the recipient, and a deleted account keeps the right. The
 -- term counts from the deletion of the account for the rest. Returns how many deliveries it made
 -- anonymous.
+-- Empties the copy of the buyer in the tax documents whose term has passed, counted from the
+-- document (retentionTaxDocumentsDays of the privacy policy, the shorter of the version in force
+-- then and now): the document stays with its number, its lines and its sums, the buyer is {}
+-- (tax_documents_append_only lets the owner do only that). Nothing without a published policy.
+-- Returns how many documents it emptied.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_tax_document_buyers () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionTaxDocumentsDays');
+  v_count integer;
+BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  UPDATE cartlify.tax_documents AS d
+  SET buyer = '{}'::jsonb
+  WHERE d.buyer <> '{}'::jsonb
+    AND d."createdAt" <= v_now - make_interval(days => v_floor - 1)
+    AND cartlify.retention_due ('retentionTaxDocumentsDays', d."createdAt", d."createdAt", v_now);
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION cartlify.cleanup_deleted_accounts_recipients () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -4627,9 +4835,10 @@ BEGIN
          NEW.confirmed = false
          AND NEW.status IN ('pending', 'unconfirmed')
          AND NEW."reservationExpiresAt" IS NULL
+         AND NOT NEW."invoiceRequested"
          AND v_changed <@ ARRAY[
            'confirmed', 'status', 'reservationExpiresAt', 'total', 'withdrawalDays',
-           'returnShippingPaidBy', 'updatedAt'
+           'returnShippingPaidBy', 'invoiceRequested', 'updatedAt'
          ]
        )
        OR (
@@ -4642,7 +4851,7 @@ BEGIN
          AND cartlify.is_owner(NEW."userId")
          AND v_changed <@ ARRAY[
            'confirmed', 'status', 'reservationExpiresAt', 'total', 'withdrawalDays',
-           'returnShippingPaidBy', 'updatedAt'
+           'returnShippingPaidBy', 'invoiceRequested', 'updatedAt'
          ]
        )
        -- pay_order: the payment, who took it and when are set together, nothing else but the
@@ -4718,7 +4927,9 @@ EXECUTE FUNCTION cartlify.order_deliveries_before_update ();
 -- from the prices too (the policy lets this only while the order is not confirmed); an admin or
 -- root corrects the person and the address of a paid order (the policy) and picks another carrier
 -- of the delivery provider, or sends an order of a carrier by hand (the method carrier to manual),
--- never another method or the price; the price is fixed by confirm_order, a step of the database.
+-- never another method or the price, nor the country of an order whose tax the confirmation fixed
+-- (the tax and its documents are of that country); the price and the tax are fixed by
+-- confirm_order, a step of the database.
 CREATE OR REPLACE FUNCTION cartlify.order_deliveries_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -4731,7 +4942,7 @@ BEGIN
   END IF;
 
   IF current_user = 'cartlify_owner'
-     AND v_changed <@ ARRAY['price', 'updatedAt'] THEN
+     AND v_changed <@ ARRAY['price', 'taxRule', 'taxLines', 'taxAmount', 'updatedAt'] THEN
     RETURN NEW;
   END IF;
 
@@ -4784,7 +4995,8 @@ BEGIN
        'street', 'house', 'apartment', 'note', 'method', 'carrierName', 'carrierService',
        'carrierConnection', 'updatedAt'
      ]
-     AND (NOT 'method' = ANY (v_changed) OR (OLD.method = 'carrier' AND NEW.method = 'manual')) THEN
+     AND (NOT 'method' = ANY (v_changed) OR (OLD.method = 'carrier' AND NEW.method = 'manual'))
+     AND (NOT 'country' = ANY (v_changed) OR OLD."taxRule" IS NULL) THEN
     RETURN NEW;
   END IF;
 
@@ -5111,7 +5323,7 @@ BEGIN
   END IF;
 
   -- the parcel stays a send the shop counted a cost for: the reports keep the cost in the period
-  -- it was written in, and the correction below takes it back in the period of the void
+  -- it was written in, and the carrier gives it back (money.shipping_refund) in the period of the void
   UPDATE cartlify.order_shipments AS s
   SET state = 'voided'
   WHERE s.id = p_shipment_id;
@@ -5124,7 +5336,7 @@ BEGIN
   IF v_first IS NOT NULL AND v_old <> 0 THEN
     PERFORM cartlify.log_money_change (
       jsonb_build_object(
-        'event', 'money.correction',
+        'event', 'money.shipping_refund',
         'purpose', 'shipping',
         'part', 'whole',
         'amount', v_old,
@@ -5192,7 +5404,7 @@ BEFORE UPDATE ON cartlify.chat_threads FOR EACH ROW
 EXECUTE FUNCTION cartlify.chat_threads_update_columns ();
 
 -- Guard of admin alert settings: an admin or root changes whether a kind of their alerts is on
--- and its threshold, never whose the row is or which kind.
+-- and its numbers (the threshold, the window), never whose the row is or which kind.
 CREATE OR REPLACE FUNCTION cartlify.admin_alert_settings_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -5204,7 +5416,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF v_changed <@ ARRAY['subscribed', 'threshold'] THEN
+  IF v_changed <@ ARRAY['subscribed', 'threshold', 'window'] THEN
     RETURN NEW;
   END IF;
 
@@ -5217,6 +5429,33 @@ DROP TRIGGER IF EXISTS trg_admin_alert_settings_update_columns ON cartlify.admin
 CREATE TRIGGER trg_admin_alert_settings_update_columns
 BEFORE UPDATE ON cartlify.admin_alert_settings FOR EACH ROW
 EXECUTE FUNCTION cartlify.admin_alert_settings_update_columns ();
+
+-- Whether some root follows a kind of alerts with its number and its window written (an admin or
+-- root asks it after a write of the settings of the kind): the server counts what such a kind needs
+-- only while one does (the orders refused within the limit of a parcel, docs/taxes.md). A person
+-- reads only their own settings; this says yes or no of all of them, nothing else.
+CREATE OR REPLACE FUNCTION cartlify.alert_kind_followed (p_kind text) RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  IF NOT cartlify.is_admin() OR cartlify.current_actor_id() IS NULL THEN
+    RAISE EXCEPTION 'ADMIN_ALERT_SETTING_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN EXISTS (
+    SELECT 1
+    FROM cartlify.admin_alert_settings AS s
+    JOIN cartlify.users AS u ON u.id = s."userId"
+    WHERE s.kind = p_kind
+      AND s.subscribed
+      AND s.threshold IS NOT NULL
+      AND s."window" IS NOT NULL
+      AND u.role = 'ROOT'
+      AND u."deletedAt" IS NULL
+  );
+END;
+$$;
 
 -- Guard of parties: the policy says who (admin or root), this says what. A party changes its name,
 -- address, email and country, never its id (products name it by the id) or the day it was made.
@@ -5564,7 +5803,9 @@ EXECUTE FUNCTION cartlify.stock_log_append_only ();
 -- with its time), mark a refund the provider made by itself (byDashboard, with the id), write the
 -- number the bank gives to follow a refund (bankReference), write what money given back by hand or
 -- taken by a bank was for (moneyUse, with its shares in the meta: decide_money_use), and write it
--- again while no line names it (coversId) other than its own failure: no statement took its shares;
+-- again while no line names it (coversId) other than its own failure and no row of a statement took
+-- its shares (the marks of rows of statements take them, return_row_shares); what the reception finds
+-- lost of a share (record_return_paid_units, as the owner) is written into the meta then too;
 -- and what the cleanup of the retention terms does: empty the address and the browser, the words of
 -- the provider, and replace a note with the made-up text. A change to anything else, or by any
 -- other role, is MONEY_LOG_APPEND_ONLY with the code 42501. A superuser (a data script by hand) is
@@ -5609,10 +5850,33 @@ BEGIN
           AND (
             (c.col = 'moneyUse' AND OLD."moneyUse" IS NULL)
             OR (c.col = 'meta' AND OLD.meta IS NULL)
-            OR NOT EXISTS (
-              SELECT 1
-              FROM cartlify.money_log AS u
-              WHERE u."coversId" = OLD.id AND u.event <> 'money.refund_failed'
+            OR (
+              NOT EXISTS (
+                SELECT 1
+                FROM cartlify.money_log AS u
+                WHERE u."coversId" = OLD.id AND u.event <> 'money.refund_failed'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM cartlify.return_row_shares (OLD."orderId") AS sh WHERE sh.source_id = OLD.id
+              )
+            )
+            OR (
+              c.col = 'meta' AND current_user = 'cartlify_owner'
+              AND (SELECT count(*) FROM jsonb_array_elements(COALESCE(NEW.meta, '[]'::jsonb)) AS e WHERE e ? 'lost')
+                > (SELECT count(*) FROM jsonb_array_elements(COALESCE(OLD.meta, '[]'::jsonb)) AS e WHERE e ? 'lost')
+              AND (
+                SELECT COALESCE(jsonb_agg(x.e ORDER BY x.o), '[]'::jsonb)
+                FROM jsonb_array_elements(COALESCE(NEW.meta, '[]'::jsonb)) WITH ORDINALITY AS x (e, o)
+                WHERE NOT x.e ? 'lost'
+              ) = (
+                SELECT COALESCE(jsonb_agg(x.e ORDER BY x.o), '[]'::jsonb)
+                FROM jsonb_array_elements(COALESCE(OLD.meta, '[]'::jsonb)) WITH ORDINALITY AS x (e, o)
+                WHERE NOT x.e ? 'lost'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(NEW.meta, '[]'::jsonb)) AS e
+                WHERE e ? 'lost' AND NOT (e ? 'lostOrderItemId' AND e ? 'lostReturnItemId')
+              )
             )
           )
         )
@@ -5699,11 +5963,10 @@ $$;
 
 -- True for the zones of the delivery (deliveryZones): a list of up to 100 zones, each
 -- { name, countries, manualPrice, freeFrom } and nothing else: a name of 1 to 100 characters,
--- trimmed, once; the countries a list of two capital letters, at least one, or 'rest' (every
--- country the server delivers to that no other zone names; one such zone at most); the price of the
--- manual delivery to the zone 0 or more, null when the manual delivery does not go there; the sum
--- of the items from which every delivery to the zone is free, above 0 or null. A country is in one
--- zone only. Which countries the server delivers to at all is the server's rule.
+-- trimmed, once; the countries a list of two capital letters, at least one; the price of the manual
+-- delivery to the zone 0 or more, null when the manual delivery does not go there; the sum of the
+-- items from which every delivery to the zone is free, above 0 or null. A country is in one zone
+-- only. That every country of a zone has its record (shop_countries) is the server's rule.
 CREATE OR REPLACE FUNCTION cartlify.shop_setting_zones_valid (p_value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
   v_zone      jsonb;
@@ -5711,7 +5974,6 @@ DECLARE
   v_names     text[] := ARRAY[]::text[];
   v_countries text[] := ARRAY[]::text[];
   v_country   jsonb;
-  v_rest      integer := 0;
 BEGIN
   IF p_value IS NULL OR jsonb_typeof(p_value) <> 'array' OR jsonb_array_length(p_value) > 100 THEN
     RETURN false;
@@ -5744,9 +6006,7 @@ BEGIN
       RETURN false;
     END IF;
 
-    IF v_zone -> 'countries' = '"rest"'::jsonb THEN
-      v_rest := v_rest + 1;
-    ELSIF jsonb_typeof(v_zone -> 'countries') = 'array' AND jsonb_array_length(v_zone -> 'countries') >= 1 THEN
+    IF jsonb_typeof(v_zone -> 'countries') = 'array' AND jsonb_array_length(v_zone -> 'countries') >= 1 THEN
       FOR v_country IN SELECT c FROM jsonb_array_elements(v_zone -> 'countries') AS c LOOP
         IF jsonb_typeof(v_country) <> 'string' OR (v_country #>> '{}') !~ '^[A-Z]{2}$'
            OR (v_country #>> '{}') = ANY (v_countries) THEN
@@ -5759,7 +6019,7 @@ BEGIN
     END IF;
   END LOOP;
 
-  RETURN v_rest <= 1;
+  RETURN true;
 END;
 $$;
 
@@ -5832,8 +6092,6 @@ BEGIN
       v_valid := cartlify.shop_setting_list_valid(p_value, '^(manual|pickup|carrier)$');
     WHEN 'deliveryZones' THEN
       v_valid := cartlify.shop_setting_zones_valid(p_value);
-    WHEN 'customsFreeCountries' THEN
-      v_valid := v_type = 'null' OR cartlify.shop_setting_list_valid(p_value, '^[A-Z]{2}$');
     WHEN 'deliverySender' THEN
       v_valid := v_type = 'null' OR cartlify.shop_setting_sender_valid(p_value);
     WHEN 'enabledLocales' THEN
@@ -5889,6 +6147,23 @@ BEGIN
       v_valid := v_type = 'null' OR char_length(v_text) <= 254;
     WHEN 'sellerPhone' THEN
       v_valid := v_type = 'null' OR char_length(v_text) <= 30;
+    WHEN 'sellerCountry', 'pickupCountry' THEN
+      v_valid := v_type = 'null' OR v_text ~ '^[A-Z]{2}$';
+    WHEN 'vatPayer', 'invoiceYearly' THEN
+      v_valid := v_type IN ('null', 'boolean');
+    WHEN 'sellerTaxIdLabel' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) BETWEEN 1 AND 30;
+    WHEN 'maxOrderTotal' THEN
+      v_valid := v_type = 'null' OR cartlify.shop_setting_money_valid(p_value, false);
+    WHEN 'invoiceMode' THEN
+      v_valid := v_type = 'null' OR v_text IN ('every_order', 'on_request');
+    WHEN 'invoicePrefix', 'creditNotePrefix' THEN
+      -- the series of the documents: what a fiscal service takes as a series too
+      v_valid := v_type = 'null' OR v_text ~ '^[A-Z0-9_./-]{1,10}$';
+    WHEN 'receiptMoment' THEN
+      v_valid := v_type = 'null' OR v_text IN ('payment', 'shipment');
+    WHEN 'documentFooter' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 1000;
     ELSE
       v_valid := false;
   END CASE;
@@ -5938,6 +6213,2142 @@ DROP TRIGGER IF EXISTS trg_shop_settings_append_only ON cartlify.shop_settings;
 CREATE TRIGGER trg_shop_settings_append_only
 BEFORE UPDATE OR DELETE ON cartlify.shop_settings FOR EACH ROW
 EXECUTE FUNCTION cartlify.shop_settings_append_only ();
+
+-- Guard: a series holds one kind of document (docs/taxes.md): a prefix of the invoices
+-- (invoicePrefix: the invoices and the invoices that reverse a credit note) is not one the credit
+-- notes are numbered in, nor the other way round (creditNotePrefix), the series a year of it (F2026)
+-- included. A prefix may change or go: a new one starts a new series, and the corrections of the
+-- documents made go on in the last series (tax_document_series). The refusal is
+-- INVOICE_SERIES_TAKEN with the code 23514. As the owner: it reads every document, whoever writes
+-- the row.
+CREATE OR REPLACE FUNCTION cartlify.shop_settings_series_taken () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_prefix text := NEW.value #>> '{}';
+BEGIN
+  IF NEW.key IN ('invoicePrefix', 'creditNotePrefix') AND jsonb_typeof(NEW.value) = 'string'
+     AND EXISTS (
+       SELECT 1 FROM cartlify.tax_documents AS d
+       WHERE d.kind = CASE WHEN NEW.key = 'invoicePrefix' THEN 'credit_note' ELSE 'invoice' END::cartlify."TaxDocumentKind"
+         AND (
+           d.series = v_prefix
+           OR (length(d.series) = length(v_prefix) + 4 AND left(d.series, length(v_prefix)) = v_prefix
+               AND right(d.series, 4) ~ '^[0-9]{4}$')
+         )
+     ) THEN
+    RAISE EXCEPTION 'INVOICE_SERIES_TAKEN' USING ERRCODE = '23514';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shop_settings_series_taken ON cartlify.shop_settings;
+
+CREATE TRIGGER trg_shop_settings_series_taken
+BEFORE INSERT ON cartlify.shop_settings FOR EACH ROW
+EXECUTE FUNCTION cartlify.shop_settings_series_taken ();
+
+------------------------------------------------------------
+-- TAXES: THE COUNTRIES, THE GROUPS, THE DOCUMENTS
+------------------------------------------------------------
+-- The record of a country the shop sells to holds the rule of its tax and what the rule needs
+-- (docs/taxes.md); the rules are general, the numbers and the choices are root's. A refusal names
+-- the field that does not fit, with the code check_violation.
+
+-- Checks a record of a country before it is written and owns what the database keeps there: the
+-- time of the row and the moment the sales of the last 12 months passed the threshold (heldAt,
+-- hold_tax_threshold writes it); a country that joins a group of a threshold takes the state of
+-- the group, and a threshold that goes takes its state with it.
+-- What each rule needs:
+-- - a country with customs takes the rule recipient or buyer_at_receipt, a country without customs
+--   any rule but buyer_at_receipt, or none at all (a shop that takes no tax in its own country);
+-- - only the rule recipient has the registration with its number, label and kind (all of them with
+--   the registration, none without), the limit of a parcel (its sum and both flags, or nothing) and
+--   the threshold (its sum and flag; the group and the end only with them);
+-- - the rule recipient needs rates; a rule that takes a tax, or a price without the tax of the
+--   seller, needs the way the tax comes out of the delivery; the rules without a tax of the seller
+--   (none, buyer_at_receipt, recipient across customs) need the price and the text for the
+--   documents;
+-- - the rates are a list of { group, rate, from }: the group null (the main rate) or a tax group, a
+--   rate from 0 to 100 to the hundredth, from null (from the start) or a time; a group starts once at
+--   a time and every group named has a rate from the start. That every tax group has a rate is
+--   checked at the end of the transaction (shop_countries_group_check), so root may add a group and
+--   its rates in one go.
+CREATE OR REPLACE FUNCTION cartlify.shop_countries_before_write () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_now timestamp := clock_timestamp() AT TIME ZONE 'UTC';
+  v_entry jsonb;
+  v_key text;
+  v_from text;
+  v_keys text[] := ARRAY[]::text[];
+  v_starts text[] := ARRAY[]::text[];
+  v_from_start text[] := ARRAY[]::text[];
+  v_needs_price boolean;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW."createdAt" := v_now;
+    NEW."thresholdHeldAt" := NULL;
+  ELSE
+    NEW.country := OLD.country;
+    NEW."createdAt" := OLD."createdAt";
+    -- the moment is the database's: a write of root keeps it (hold_tax_threshold runs as the owner)
+    IF current_user <> 'cartlify_owner' THEN
+      NEW."thresholdHeldAt" := OLD."thresholdHeldAt";
+    END IF;
+  END IF;
+
+  -- a country that joins a group of a threshold takes the state of the group
+  IF NEW."thresholdGroup" IS NOT NULL
+     AND (TG_OP = 'INSERT' OR NEW."thresholdGroup" IS DISTINCT FROM OLD."thresholdGroup")
+     AND EXISTS (
+       SELECT 1 FROM cartlify.shop_countries AS c
+       WHERE c."thresholdGroup" = NEW."thresholdGroup" AND c.country <> NEW.country
+     ) THEN
+    SELECT c."thresholdHeldAt"
+    INTO NEW."thresholdHeldAt"
+    FROM cartlify.shop_countries AS c
+    WHERE c."thresholdGroup" = NEW."thresholdGroup" AND c.country <> NEW.country
+    ORDER BY c.country
+    LIMIT 1;
+  END IF;
+
+  -- a threshold that goes takes its state with it; a year starts on the 1st of January unless root
+  -- named the month
+  IF NEW."thresholdAmount" IS NULL THEN
+    NEW."thresholdHeldAt" := NULL;
+    NEW."thresholdInitialFrom" := NULL;
+  ELSIF NEW."thresholdPeriod" = 'year' AND NEW."thresholdStartMonth" IS NULL THEN
+    NEW."thresholdStartMonth" := 1;
+  END IF;
+
+  IF (NOT NEW."customsFree" AND NEW.rule IS DISTINCT FROM 'recipient' AND NEW.rule IS DISTINCT FROM 'buyer_at_receipt')
+     OR (NEW."customsFree" AND NEW.rule = 'buyer_at_receipt') THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_RULE_INVALID' USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF NEW.rule IS DISTINCT FROM 'recipient'
+     AND (
+       NEW.registered OR NEW."taxNumber" IS NOT NULL OR NEW."taxNumberLabel" IS NOT NULL
+       OR NEW."taxNumberKind" IS NOT NULL OR NEW."parcelLimit" IS NOT NULL
+       OR NEW."parcelLimitWithDelivery" IS NOT NULL OR NEW."parcelLimitWithVat" IS NOT NULL
+       OR NEW."thresholdAmount" IS NOT NULL OR NEW."thresholdWithVat" IS NOT NULL
+       OR NEW."thresholdGroup" IS NOT NULL OR NEW."thresholdPeriod" IS NOT NULL
+     ) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_RECIPIENT_ONLY' USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF NEW.registered IS DISTINCT FROM (NEW."taxNumber" IS NOT NULL)
+     OR NEW.registered IS DISTINCT FROM (NEW."taxNumberLabel" IS NOT NULL)
+     OR NEW.registered IS DISTINCT FROM (NEW."taxNumberKind" IS NOT NULL) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_TAX_NUMBER_INVALID' USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF (NEW."parcelLimit" IS NULL) IS DISTINCT FROM (NEW."parcelLimitWithDelivery" IS NULL)
+     OR (NEW."parcelLimit" IS NULL) IS DISTINCT FROM (NEW."parcelLimitWithVat" IS NULL) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_PARCEL_LIMIT_INVALID' USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- the threshold: its sum, its measure and its period together; a month only of a year
+  IF (NEW."thresholdAmount" IS NULL) IS DISTINCT FROM (NEW."thresholdWithVat" IS NULL)
+     OR (NEW."thresholdAmount" IS NULL) IS DISTINCT FROM (NEW."thresholdPeriod" IS NULL)
+     OR (NEW."thresholdAmount" IS NULL AND NEW."thresholdGroup" IS NOT NULL)
+     OR (NEW."thresholdPeriod" = 'rolling_12' AND NEW."thresholdStartMonth" IS NOT NULL)
+     OR (NEW."thresholdStartMonth" IS NOT NULL AND NEW."thresholdStartMonth" NOT BETWEEN 1 AND 12) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_THRESHOLD_INVALID' USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF NEW.rule = 'recipient' AND jsonb_typeof(NEW.rates) = 'array' AND jsonb_array_length(NEW.rates) = 0 THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_RATES_REQUIRED' USING ERRCODE = 'check_violation';
+  END IF;
+
+  v_needs_price := NEW.rule IN ('none', 'buyer_at_receipt') OR (NEW.rule = 'recipient' AND NOT NEW."customsFree");
+
+  IF v_needs_price AND NEW."exportPrice" IS NULL THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_EXPORT_PRICE_REQUIRED' USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF v_needs_price AND NEW."exemptionText" IS NULL THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_EXEMPTION_TEXT_REQUIRED' USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF NEW."deliveryVat" IS NULL
+     AND (NEW.rule IN ('seller', 'recipient') OR (v_needs_price AND NEW."exportPrice" = 'without_seller_vat')) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_DELIVERY_VAT_REQUIRED' USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- the rates
+  IF NEW.rates IS NULL OR jsonb_typeof(NEW.rates) <> 'array' OR jsonb_array_length(NEW.rates) > 1000 THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+  END IF;
+
+  FOR v_entry IN SELECT e FROM jsonb_array_elements(NEW.rates) AS e LOOP
+    IF jsonb_typeof(v_entry) <> 'object'
+       OR (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(v_entry) AS k)
+         IS DISTINCT FROM ARRAY['from', 'group', 'rate']
+       OR jsonb_typeof(v_entry -> 'rate') <> 'number'
+       OR jsonb_typeof(v_entry -> 'group') NOT IN ('null', 'number')
+       OR jsonb_typeof(v_entry -> 'from') NOT IN ('null', 'string') THEN
+      RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF (v_entry ->> 'rate')::numeric < 0 OR (v_entry ->> 'rate')::numeric > 100
+       OR (v_entry ->> 'rate')::numeric <> round((v_entry ->> 'rate')::numeric, 2) THEN
+      RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+    END IF;
+
+    v_key := COALESCE(v_entry ->> 'group', 'main');
+    IF v_key <> 'main' THEN
+      IF v_key !~ '^[1-9][0-9]{0,8}$' THEN
+        RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM cartlify.tax_groups AS g WHERE g.id = v_key::integer) THEN
+        RAISE EXCEPTION 'TAX_GROUP_NOT_FOUND' USING ERRCODE = 'check_violation';
+      END IF;
+    END IF;
+
+    v_from := v_entry ->> 'from';
+    IF v_from IS NOT NULL THEN
+      -- a time in the form the server writes (UTC, to the millisecond at most)
+      IF v_from !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?Z$' THEN
+        RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+      END IF;
+
+      BEGIN
+        PERFORM v_from::timestamptz;
+      EXCEPTION WHEN others THEN
+        RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+      END;
+    ELSE
+      v_from_start := v_from_start || v_key;
+    END IF;
+
+    IF (v_key || '@' || COALESCE(v_from, '')) = ANY (v_starts) THEN
+      RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+    END IF;
+
+    v_starts := v_starts || (v_key || '@' || COALESCE(v_from, ''));
+    v_keys := v_keys || v_key;
+  END LOOP;
+
+  -- every group named, the main rate too, has a rate in force from the start
+  IF EXISTS (SELECT 1 FROM unnest(v_keys) AS k WHERE NOT (k = ANY (v_from_start)))
+     OR (cardinality(v_keys) > 0 AND NOT ('main' = ANY (v_from_start))) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_RATES_INVALID' USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shop_countries_before_write ON cartlify.shop_countries;
+
+CREATE TRIGGER trg_shop_countries_before_write
+BEFORE INSERT OR UPDATE ON cartlify.shop_countries FOR EACH ROW
+EXECUTE FUNCTION cartlify.shop_countries_before_write ();
+
+-- At the end of the transaction that wrote a country: a country with rates has a rate from the
+-- start for every tax group (SHOP_COUNTRY_GROUP_RATE_MISSING), and the countries of one group of the
+-- threshold share its sum, its flag, its period (SHOP_COUNTRY_THRESHOLD_GROUP_MISMATCH). The route of
+-- root writes the whole group in one go.
+CREATE OR REPLACE FUNCTION cartlify.shop_countries_group_check () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_row cartlify.shop_countries%ROWTYPE;
+BEGIN
+  SELECT * INTO v_row FROM cartlify.shop_countries AS c WHERE c.country = NEW.country;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF jsonb_array_length(v_row.rates) > 0
+     AND EXISTS (
+       SELECT 1
+       FROM cartlify.tax_groups AS g
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(v_row.rates) AS e
+         WHERE e -> 'group' = to_jsonb(g.id) AND e -> 'from' = 'null'::jsonb
+       )
+     ) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_GROUP_RATE_MISSING' USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF v_row."thresholdGroup" IS NOT NULL
+     AND EXISTS (
+       SELECT 1
+       FROM cartlify.shop_countries AS c
+       WHERE c."thresholdGroup" = v_row."thresholdGroup"
+         AND c.country <> v_row.country
+         AND (
+           c."thresholdAmount", c."thresholdWithVat", c."thresholdPeriod", c."thresholdStartMonth",
+           c."thresholdInitialFrom", c."thresholdHeldAt"
+         ) IS DISTINCT FROM (
+           v_row."thresholdAmount", v_row."thresholdWithVat", v_row."thresholdPeriod",
+           v_row."thresholdStartMonth", v_row."thresholdInitialFrom", v_row."thresholdHeldAt"
+         )
+     ) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_THRESHOLD_GROUP_MISMATCH' USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shop_countries_group_check ON cartlify.shop_countries;
+
+CREATE CONSTRAINT TRIGGER trg_shop_countries_group_check
+AFTER INSERT OR UPDATE ON cartlify.shop_countries
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION cartlify.shop_countries_group_check ();
+
+-- At the end of the transaction that added a tax group: every country with rates has a rate from
+-- the start for it (SHOP_COUNTRY_GROUP_RATE_MISSING); root adds the group with its rates in one go.
+CREATE OR REPLACE FUNCTION cartlify.tax_groups_rates_check () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cartlify.tax_groups AS g WHERE g.id = NEW.id)
+     AND EXISTS (
+       SELECT 1
+       FROM cartlify.shop_countries AS c
+       WHERE jsonb_array_length(c.rates) > 0
+         AND NOT EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(c.rates) AS e
+           WHERE e -> 'group' = to_jsonb(NEW.id) AND e -> 'from' = 'null'::jsonb
+         )
+     ) THEN
+    RAISE EXCEPTION 'SHOP_COUNTRY_GROUP_RATE_MISSING' USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_tax_groups_rates_check ON cartlify.tax_groups;
+
+CREATE CONSTRAINT TRIGGER trg_tax_groups_rates_check
+AFTER INSERT ON cartlify.tax_groups
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION cartlify.tax_groups_rates_check ();
+
+-- A group a product is in cannot go: as its group (the foreign key refuses too) or as the class of a
+-- country (TAX_GROUP_IN_USE). The rates of the countries forget the group with it.
+CREATE OR REPLACE FUNCTION cartlify.tax_groups_before_delete () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM cartlify.products AS p
+    WHERE p."taxGroupId" = OLD.id
+      OR EXISTS (SELECT 1 FROM jsonb_each(p."taxExceptions") AS x WHERE x.value = to_jsonb(OLD.id))
+  ) THEN
+    RAISE EXCEPTION 'TAX_GROUP_IN_USE' USING ERRCODE = 'check_violation';
+  END IF;
+
+  UPDATE cartlify.shop_countries AS c
+  SET rates = (
+    SELECT COALESCE(jsonb_agg(e ORDER BY n), '[]'::jsonb)
+    FROM jsonb_array_elements(c.rates) WITH ORDINALITY AS r (e, n)
+    WHERE e -> 'group' IS DISTINCT FROM to_jsonb(OLD.id)
+  )
+  WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c.rates) AS e WHERE e -> 'group' = to_jsonb(OLD.id));
+
+  RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_tax_groups_before_delete ON cartlify.tax_groups;
+
+CREATE TRIGGER trg_tax_groups_before_delete
+BEFORE DELETE ON cartlify.tax_groups FOR EACH ROW
+EXECUTE FUNCTION cartlify.tax_groups_before_delete ();
+
+-- The countries that class a product in another group: { country: group id, or null for the main
+-- rate }, a country two capital letters, a group one that exists (PRODUCT_TAX_EXCEPTIONS_INVALID,
+-- TAX_GROUP_NOT_FOUND).
+CREATE OR REPLACE FUNCTION cartlify.products_tax_exceptions_check () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_pair record;
+BEGIN
+  IF NEW."taxExceptions" IS NULL OR jsonb_typeof(NEW."taxExceptions") <> 'object' THEN
+    RAISE EXCEPTION 'PRODUCT_TAX_EXCEPTIONS_INVALID' USING ERRCODE = 'check_violation';
+  END IF;
+
+  FOR v_pair IN SELECT x.key, x.value FROM jsonb_each(NEW."taxExceptions") AS x LOOP
+    IF v_pair.key !~ '^[A-Z]{2}$' THEN
+      RAISE EXCEPTION 'PRODUCT_TAX_EXCEPTIONS_INVALID' USING ERRCODE = 'check_violation';
+    END IF;
+
+    CONTINUE WHEN jsonb_typeof(v_pair.value) = 'null';
+
+    IF jsonb_typeof(v_pair.value) <> 'number' OR (v_pair.value #>> '{}') !~ '^[1-9][0-9]{0,8}$' THEN
+      RAISE EXCEPTION 'PRODUCT_TAX_EXCEPTIONS_INVALID' USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM cartlify.tax_groups AS g WHERE g.id = (v_pair.value #>> '{}')::integer) THEN
+      RAISE EXCEPTION 'TAX_GROUP_NOT_FOUND' USING ERRCODE = 'check_violation';
+    END IF;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_products_tax_exceptions_check ON cartlify.products;
+
+CREATE TRIGGER trg_products_tax_exceptions_check
+BEFORE INSERT OR UPDATE OF "taxExceptions" ON cartlify.products FOR EACH ROW
+EXECUTE FUNCTION cartlify.products_tax_exceptions_check ();
+
+-- The next number of a series of documents, without gaps: the lock of the series holds until the
+-- end of the transaction that makes the document, so two documents never take one number and a
+-- transaction that fails takes none. Internal: the trigger that makes a document calls it.
+CREATE OR REPLACE FUNCTION cartlify.tax_document_number (p_series text) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_number integer;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.tax_documents:' || p_series));
+
+  SELECT COALESCE(MAX(d.number), 0) + 1
+  INTO v_number
+  FROM cartlify.tax_documents AS d
+  WHERE d.series = p_series;
+
+  RETURN v_number;
+END;
+$$;
+
+-- Sets what the database owns in a new document: the time, and the number of an invoice and of a
+-- credit note in their series (whatever the row says).
+CREATE OR REPLACE FUNCTION cartlify.tax_documents_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW."createdAt" := clock_timestamp() AT TIME ZONE 'UTC';
+
+  IF NEW.kind IN ('invoice', 'credit_note') AND NEW.series IS NOT NULL THEN
+    NEW.number := cartlify.tax_document_number(NEW.series);
+  ELSE
+    NEW.number := NULL;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_tax_documents_before_insert ON cartlify.tax_documents;
+
+CREATE TRIGGER trg_tax_documents_before_insert
+BEFORE INSERT ON cartlify.tax_documents FOR EACH ROW
+EXECUTE FUNCTION cartlify.tax_documents_before_insert ();
+
+-- Guard: a document stays as it was made and is never removed. The steps of the database change
+-- only what a receipt keeps of its provider (the state, the number, the link, the code, the text,
+-- the tries, the error, the next try, who confirmed it by hand), and the cleanup of the retention
+-- term empties the copy of the buyer (to {}). The refusal is TAX_DOCUMENT_APPEND_ONLY with the code
+-- 42501; a superuser is not checked, as rls does not check it either.
+CREATE OR REPLACE FUNCTION cartlify.tax_documents_append_only () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[];
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'TAX_DOCUMENT_APPEND_ONLY' USING ERRCODE = '42501';
+  END IF;
+
+  v_changed := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+
+  IF current_user = 'cartlify_owner'
+     AND OLD.kind IN ('receipt', 'return_receipt')
+     AND v_changed <@ ARRAY[
+       'provider', 'receiptState', 'receiptStateAt', 'receiptNumber', 'receiptUrl', 'receiptCode',
+       'receiptText', 'receiptAttempts', 'receiptError', 'receiptNextAt', 'receiptConfirmedById'
+     ] THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND v_changed <@ ARRAY['buyer']
+     AND NEW.buyer = '{}'::jsonb THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'TAX_DOCUMENT_APPEND_ONLY' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_tax_documents_append_only ON cartlify.tax_documents;
+
+CREATE TRIGGER trg_tax_documents_append_only
+BEFORE UPDATE OR DELETE ON cartlify.tax_documents FOR EACH ROW
+EXECUTE FUNCTION cartlify.tax_documents_append_only ();
+
+-- The sales of a span of a threshold to its countries [p_from, p_to), p_to null for until now: the
+-- orders paid in it (by their payment in the money journal) and, for a span until now, the
+-- confirmed orders that wait for their payment, with the tax or without it (the tax the
+-- confirmation fixed). A pickup is no sale to a country; the money that went back later does not
+-- lower the sales (a threshold is passed by what was sold). The sum only, nothing of a buyer: the
+-- app counts the threshold of a cart under the context of its buyer, and holds the lock of the
+-- threshold while it confirms (db/01 gives it the execute right). It reads the orders and the
+-- orders of every buyer as their owner (the policies *_select_owner of db/03: an order keeps the
+-- moment it was paid, paidAt, the time of its payment in the money journal), whoever asks; a call
+-- without an actor is TAX_THRESHOLD_FORBIDDEN.
+-- the old form, until now only: dropped once dev and prod run this one (db:snapshot:check:db).
+-- Temporary.
+DROP FUNCTION IF EXISTS cartlify.tax_threshold_sales (text[], timestamp without time zone, boolean);
+
+CREATE OR REPLACE FUNCTION cartlify.tax_threshold_sales (
+  p_countries text[],
+  p_from timestamp without time zone,
+  p_to timestamp without time zone,
+  p_with_vat boolean
+) RETURNS numeric LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_sales numeric;
+BEGIN
+  IF cartlify.current_actor_role() IS NULL THEN
+    RAISE EXCEPTION 'TAX_THRESHOLD_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+
+  WITH sold AS (
+    SELECT o.id, o.total
+    FROM cartlify.orders AS o
+    JOIN cartlify.order_deliveries AS d ON d."orderId" = o.id
+    WHERE d.country = ANY (p_countries)
+      AND d.method <> 'pickup'
+      AND (
+        (
+          o."paidAt" IS NOT NULL
+          AND (p_from IS NULL OR o."paidAt" >= p_from)
+          AND (p_to IS NULL OR o."paidAt" < p_to)
+        )
+        OR (p_to IS NULL AND o.confirmed AND o.status = 'waiting')
+      )
+  )
+  SELECT COALESCE(SUM(
+    s.total
+    - CASE
+        WHEN p_with_vat THEN 0
+        ELSE
+          COALESCE((SELECT SUM(i."taxAmount") FROM cartlify.order_items AS i WHERE i."orderId" = s.id), 0)
+          + COALESCE((SELECT dd."taxAmount" FROM cartlify.order_deliveries AS dd WHERE dd."orderId" = s.id), 0)
+      END
+  ), 0)
+  INTO v_sales
+  FROM sold AS s;
+
+  RETURN v_sales;
+END;
+$$;
+
+-- A threshold over the last 12 months whose sales passed it (with the order a confirmation just
+-- made) holds the tax of the recipient from now on, for its whole group, until root goes back to
+-- the first rule (thresholdInitialFrom after the moment). The database counts the sales itself
+-- (tax_threshold_sales of the last 12 months); a threshold of a year, one held already or one not
+-- passed changes nothing. True when it holds now. The app calls it in the transaction of the
+-- confirmation (db/01 gives the right); it writes as the owner whoever confirms.
+CREATE OR REPLACE FUNCTION cartlify.hold_tax_threshold (p_country text) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_row cartlify.shop_countries%ROWTYPE;
+  v_now timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+  v_countries text[];
+BEGIN
+  IF cartlify.current_actor_role() IS NULL THEN
+    RAISE EXCEPTION 'TAX_THRESHOLD_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_row FROM cartlify.shop_countries AS c WHERE c.country = p_country;
+  IF NOT FOUND OR v_row."thresholdPeriod" IS DISTINCT FROM 'rolling_12' THEN
+    RETURN false;
+  END IF;
+  IF v_row."thresholdHeldAt" IS NOT NULL
+     AND (v_row."thresholdInitialFrom" IS NULL OR v_row."thresholdHeldAt" > v_row."thresholdInitialFrom") THEN
+    RETURN true;
+  END IF;
+
+  v_countries := CASE
+    WHEN v_row."thresholdGroup" IS NULL THEN ARRAY[v_row.country]
+    ELSE ARRAY(SELECT c.country FROM cartlify.shop_countries AS c WHERE c."thresholdGroup" = v_row."thresholdGroup")
+  END;
+  IF cartlify.tax_threshold_sales(v_countries, v_now - interval '12 months', NULL, v_row."thresholdWithVat")
+     <= v_row."thresholdAmount" THEN
+    RETURN false;
+  END IF;
+
+  UPDATE cartlify.shop_countries AS c
+  SET "thresholdHeldAt" = v_now
+  WHERE c.country = ANY (v_countries);
+  RETURN true;
+END;
+$$;
+
+-- The current value of a setting of the data of the shop (its latest row), for the steps of the
+-- database that need one: null when root never set it.
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_now (p_key text) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT s.value FROM cartlify.shop_settings AS s WHERE s.key = p_key ORDER BY s.id DESC LIMIT 1;
+$$;
+
+-- The last value of a setting of the data of the shop root set to something (its latest row that is
+-- not null): null when root never did.
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_last (p_key text) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT s.value FROM cartlify.shop_settings AS s
+  WHERE s.key = p_key AND jsonb_typeof(s.value) <> 'null'
+  ORDER BY s.id DESC
+  LIMIT 1;
+$$;
+
+-- The series of a kind of document now: its prefix, with the year of the day of the shop when root
+-- asked for a series a year (F2026). Null when the shop makes no invoices (invoiceMode not set). A
+-- correction of a document made (p_correction) is numbered whenever the shop had a series of its
+-- kind: root took the prefix away, or the choice of a series a year, and the last one set holds.
+CREATE OR REPLACE FUNCTION cartlify.tax_document_series (
+  p_kind cartlify."TaxDocumentKind",
+  p_correction boolean DEFAULT false
+) RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_key text := CASE WHEN p_kind = 'credit_note' THEN 'creditNotePrefix' ELSE 'invoicePrefix' END;
+  v_prefix text := cartlify.shop_setting_now(v_key) #>> '{}';
+  v_yearly jsonb := cartlify.shop_setting_now('invoiceYearly');
+BEGIN
+  IF p_correction AND v_prefix IS NULL THEN
+    v_prefix := cartlify.shop_setting_last(v_key) #>> '{}';
+  END IF;
+  IF p_correction AND jsonb_typeof(v_yearly) IS DISTINCT FROM 'boolean' THEN
+    v_yearly := cartlify.shop_setting_last('invoiceYearly');
+  END IF;
+
+  -- a new invoice only while the shop makes them; a correction of an invoice made (a credit note, an
+  -- invoice that reverses one) whenever its series is there
+  IF ((cartlify.shop_setting_now('invoiceMode') #>> '{}') IS NULL AND NOT p_correction)
+     OR v_prefix IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_yearly::text = 'true' THEN
+    RETURN v_prefix || to_char(cartlify.shop_today(), 'YYYY');
+  END IF;
+
+  RETURN v_prefix;
+END;
+$$;
+
+-- The seller a document of an order names: the name, the address and the country of the shop, and
+-- the tax number the sale is taxed under (the number of a country where the shop is registered
+-- apart, when the order is taxed there by the rule recipient; else the one of the shop).
+CREATE OR REPLACE FUNCTION cartlify.tax_document_seller (p_order_id integer) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_country text;
+  v_rule cartlify."TaxRule";
+  v_number text;
+  v_label text;
+BEGIN
+  SELECT i."taxCountry", i."taxRule"
+  INTO v_country, v_rule
+  FROM cartlify.order_items AS i
+  WHERE i."orderId" = p_order_id AND i."taxRule" IS NOT NULL
+  ORDER BY i.id
+  LIMIT 1;
+
+  IF v_rule = 'recipient' THEN
+    SELECT c."taxNumber", c."taxNumberLabel"
+    INTO v_number, v_label
+    FROM cartlify.shop_countries AS c
+    WHERE c.country = v_country AND c.registered;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'name', cartlify.shop_setting_now('sellerLegalName') #>> '{}',
+    'address', cartlify.shop_setting_now('sellerAddress') #>> '{}',
+    'country', cartlify.shop_setting_now('sellerCountry') #>> '{}',
+    'taxNumber', COALESCE(v_number, cartlify.shop_setting_now('sellerTaxId') #>> '{}'),
+    'taxNumberLabel', COALESCE(v_label, cartlify.shop_setting_now('sellerTaxIdLabel') #>> '{}')
+  );
+END;
+$$;
+
+-- The lines of an order as a document holds them, at the moment of the sale: each item (its name,
+-- quantity, the price of the line with the tax and the tax in it, the rate) and the delivery by the
+-- parts of its rates (one line without a rate when it holds no tax), each with the rule of its tax
+-- and the country it is taxed in; the net of a unit to the cent for the eye, the sums of the line
+-- exact.
+CREATE OR REPLACE FUNCTION cartlify.tax_document_lines (p_order_id integer) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT COALESCE(jsonb_agg(l.line ORDER BY l.n, l.k), '[]'::jsonb)
+  FROM (
+    SELECT 0 AS n, i.id AS k,
+      jsonb_build_object(
+        'kind', 'item',
+        'orderItemId', i.id,
+        'name', COALESCE(i."productName", p.name),
+        'quantity', i.quantity,
+        'unitNet', round((i."totalPrice" - COALESCE(i."taxAmount", 0)) / i.quantity, 2),
+        'rate', i."taxRate",
+        'rule', i."taxRule",
+        'country', i."taxCountry",
+        'net', i."totalPrice" - COALESCE(i."taxAmount", 0),
+        'tax', COALESCE(i."taxAmount", 0),
+        'gross', i."totalPrice"
+      ) AS line
+    FROM cartlify.order_items AS i
+    JOIN cartlify.products AS p ON p.id = i."productId"
+    WHERE i."orderId" = p_order_id
+    UNION ALL
+    SELECT 1, row_number() OVER (),
+      jsonb_build_object(
+        'kind', 'delivery',
+        'orderItemId', NULL,
+        'name', NULL,
+        'quantity', 1,
+        'unitNet', (e ->> 'gross')::numeric - (e ->> 'tax')::numeric,
+        'rate', (e ->> 'rate')::numeric,
+        'rule', d."taxRule",
+        'country', (
+          SELECT i."taxCountry" FROM cartlify.order_items AS i WHERE i."orderId" = d."orderId" ORDER BY i.id LIMIT 1
+        ),
+        'net', (e ->> 'gross')::numeric - (e ->> 'tax')::numeric,
+        'tax', (e ->> 'tax')::numeric,
+        'gross', (e ->> 'gross')::numeric
+      )
+    FROM cartlify.order_deliveries AS d
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(d."taxLines", '[]'::jsonb)) AS e
+    WHERE d."orderId" = p_order_id
+    UNION ALL
+    SELECT 1, 0,
+      jsonb_build_object(
+        'kind', 'delivery', 'orderItemId', NULL, 'name', NULL, 'quantity', 1,
+        'unitNet', d.price, 'rate', NULL, 'rule', d."taxRule",
+        'country', (
+          SELECT i."taxCountry" FROM cartlify.order_items AS i WHERE i."orderId" = d."orderId" ORDER BY i.id LIMIT 1
+        ),
+        'net', d.price, 'tax', 0, 'gross', d.price
+      )
+    FROM cartlify.order_deliveries AS d
+    WHERE d."orderId" = p_order_id AND d.price > 0
+      AND jsonb_array_length(COALESCE(d."taxLines", '[]'::jsonb)) = 0
+  ) AS l;
+$$;
+
+-- The sums by rate of the lines of a document (the part without a tax under a null rate).
+CREATE OR REPLACE FUNCTION cartlify.tax_document_totals (p_lines jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('rate', t.rate, 'net', t.net, 'tax', t.tax, 'gross', t.gross) ORDER BY t.rate NULLS FIRST), '[]'::jsonb)
+  FROM (
+    SELECT (e ->> 'rate')::numeric AS rate,
+      SUM((e ->> 'net')::numeric) AS net,
+      SUM((e ->> 'tax')::numeric) AS tax,
+      SUM((e ->> 'gross')::numeric) AS gross
+    FROM jsonb_array_elements(p_lines) AS e
+    GROUP BY (e ->> 'rate')::numeric
+  ) AS t;
+$$;
+
+-- Makes the invoice of a paid order in the transaction of its payment (pay_order), when the shop
+-- makes one: of every order (invoiceMode every_order), or of an order the buyer asked one for
+-- (on_request). The invoice keeps the copies of the moment: the seller, the buyer (the recipient
+-- and the address of the delivery), the lines and the sums by rate, the text of a sale without
+-- tax, the text at the foot; its number is the next of its series (tax_documents_before_insert).
+-- Internal: pay_order calls it.
+CREATE OR REPLACE FUNCTION cartlify.make_order_invoice (p_order_id integer, p_money_log_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_mode text := cartlify.shop_setting_now('invoiceMode') #>> '{}';
+  v_series text := cartlify.tax_document_series('invoice');
+  v_order cartlify.orders%ROWTYPE;
+  v_delivery cartlify.order_deliveries%ROWTYPE;
+  v_lines jsonb;
+  v_rule cartlify."TaxRule";
+  v_country text;
+  v_currency text;
+  v_id integer;
+BEGIN
+  IF v_series IS NULL OR v_mode IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT * INTO v_order FROM cartlify.orders AS o WHERE o.id = p_order_id;
+  IF v_mode = 'on_request' AND NOT v_order."invoiceRequested" THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT * INTO v_delivery FROM cartlify.order_deliveries AS d WHERE d."orderId" = p_order_id;
+  SELECT i."taxRule", i."taxCountry" INTO v_rule, v_country
+  FROM cartlify.order_items AS i WHERE i."orderId" = p_order_id ORDER BY i.id LIMIT 1;
+  SELECT upper(m.currency) INTO v_currency FROM cartlify.money_log AS m WHERE m.id = p_money_log_id;
+
+  v_lines := cartlify.tax_document_lines(p_order_id);
+
+  INSERT INTO cartlify.tax_documents (
+    kind, series, "orderId", "moneyLogId", locale, currency, seller, buyer, lines, totals, details,
+    net, tax, gross, "taxCountry", "taxRule"
+  )
+  SELECT
+    'invoice', v_series, p_order_id, p_money_log_id,
+    COALESCE(cartlify.shop_setting_now('shopLocale') #>> '{}', 'en'),
+    COALESCE(v_currency, 'XXX'),
+    cartlify.tax_document_seller(p_order_id),
+    jsonb_build_object(
+      'name', btrim(v_delivery."recipientFirstName" || ' ' || v_delivery."recipientLastName"),
+      'country', v_delivery.country,
+      'postalCode', v_delivery."postalCode",
+      'city', v_delivery.city,
+      'street', v_delivery.street,
+      'house', v_delivery.house,
+      'apartment', v_delivery.apartment
+    ),
+    v_lines,
+    cartlify.tax_document_totals(v_lines),
+    jsonb_build_object(
+      'orderId', p_order_id,
+      'soldAt', v_order."paidAt",
+      'paymentProvider', v_order."paymentProvider",
+      'exemptionText', CASE WHEN v_rule IN ('none', 'buyer_at_receipt') THEN (
+        SELECT c."exemptionText" FROM cartlify.shop_countries AS c WHERE c.country = v_country
+      ) END,
+      'footer', cartlify.shop_setting_now('documentFooter') #>> '{}'
+    ),
+    (SELECT COALESCE(SUM((e ->> 'net')::numeric), 0) FROM jsonb_array_elements(v_lines) AS e),
+    (SELECT COALESCE(SUM((e ->> 'tax')::numeric), 0) FROM jsonb_array_elements(v_lines) AS e),
+    (SELECT COALESCE(SUM((e ->> 'gross')::numeric), 0) FROM jsonb_array_elements(v_lines) AS e),
+    v_country,
+    v_rule
+  RETURNING id INTO v_id;
+
+  -- the receipt of the sale, when the shop registers it at the payment
+  IF (cartlify.shop_setting_now('receiptMoment') #>> '{}') = 'payment' THEN
+    PERFORM cartlify.make_document_receipt(v_id);
+  END IF;
+
+  RETURN v_id;
+END;
+$$;
+
+-- The tax a line of money of an order holds (docs/taxes.md), share by share of the copy of the
+-- order (an item; a part of the delivery by its rate), each with its rule and its country: a payment
+-- takes the lines of the copy of its part (the goods, the delivery, or all) by their sums; money that
+-- went back to the buyer takes what each line has left after the lines counted before it (the
+-- payment, the money that went back, the money that came back), the items a statement names by its
+-- rows (the meta of the line), else every line of its part, everything for a part whole; each share
+-- in proportion to what the line has left, the last taking the rest. The tax of a share is half up
+-- and never more than the line has left; a share that takes the rest of a line takes the rest of its
+-- tax (the rule of the remainder), so the money of an order and its tax meet to the cent. The shares
+-- have the sign of the line. Null for a line of no sale (the money of a send, a late payment, the
+-- way back, a deduction). The credit notes take their lines from it, the report of the tax reads it.
+-- Internal: the trigger of the journal calls it.
+CREATE OR REPLACE FUNCTION cartlify.money_line_tax_shares (p_line cartlify.money_log) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_out jsonb := '[]'::jsonb;
+  v_amount numeric := abs(p_line.amount);
+  v_left numeric := abs(p_line.amount);
+  v_sign numeric := sign(p_line.amount);
+  v_paid boolean := p_line.event = 'money.payment';
+  v_weights numeric;
+  v_share numeric;
+  v_tax numeric;
+  v_count integer;
+  v_n integer := 0;
+  r record;
+BEGIN
+  IF p_line."orderId" IS NULL OR p_line.amount = 0
+     OR p_line.purpose IN ('late_payment', 'shipping')
+     OR p_line.part NOT IN ('goods', 'delivery', 'whole') THEN
+    RETURN NULL;
+  END IF;
+
+  CREATE TEMP TABLE IF NOT EXISTS tax_share_targets (
+    k integer, kind text, item_id integer, name text, rate jsonb, rule jsonb, country jsonb,
+    gross_left numeric, tax_left numeric, weight numeric, in_part boolean, taken numeric
+  ) ON COMMIT DROP;
+  DELETE FROM tax_share_targets;
+
+  -- each line of the copy with what it holds: all of it for a payment, else what the lines of money
+  -- counted before it left of it
+  INSERT INTO tax_share_targets
+  SELECT row_number() OVER (ORDER BY o.ord)::integer, o.line ->> 'kind',
+    (o.line ->> 'orderItemId')::integer, o.line ->> 'name', o.line -> 'rate', o.line -> 'rule',
+    o.line -> 'country',
+    CASE WHEN v_paid THEN (o.line ->> 'gross')::numeric ELSE COALESCE(c.gross, 0) END,
+    CASE WHEN v_paid THEN (o.line ->> 'tax')::numeric ELSE COALESCE(c.tax, 0) END,
+    0,
+    (p_line.part = 'goods' AND o.line ->> 'kind' = 'item')
+      OR (p_line.part = 'delivery' AND o.line ->> 'kind' = 'delivery')
+      OR p_line.part = 'whole',
+    0
+  FROM jsonb_array_elements(cartlify.tax_document_lines(p_line."orderId")) WITH ORDINALITY AS o (line, ord)
+  LEFT JOIN LATERAL (
+    SELECT SUM((e ->> 'gross')::numeric) AS gross, SUM((e ->> 'tax')::numeric) AS tax
+    FROM cartlify.money_log AS m
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m."taxShares", '[]'::jsonb)) AS e
+    WHERE m."orderId" = p_line."orderId"
+      AND m.id IS DISTINCT FROM p_line.id
+      AND e ->> 'kind' = o.line ->> 'kind'
+      AND (e ->> 'orderItemId') IS NOT DISTINCT FROM (o.line ->> 'orderItemId')
+      AND (e -> 'rate') IS NOT DISTINCT FROM (o.line -> 'rate')
+  ) AS c ON true;
+
+  -- the weights: the items of a decision (money given back by hand or taken by a bank: the items of
+  -- the order with their sums), the items of the rows of a statement, else by what is left
+  IF p_line.part = 'goods' AND jsonb_typeof(p_line.meta) = 'array'
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(p_line.meta) AS e WHERE e ? 'orderItemId')
+     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(p_line.meta) AS e WHERE e ? 'returnItemId') THEN
+    UPDATE tax_share_targets AS t
+    SET weight = COALESCE((
+      SELECT SUM((e ->> 'amount')::numeric)
+      FROM jsonb_array_elements(p_line.meta) AS e
+      WHERE (e ->> 'orderItemId')::integer = t.item_id
+    ), 0)
+    WHERE t.kind = 'item';
+  ELSIF p_line.part = 'goods' AND jsonb_typeof(p_line.meta) = 'array'
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(p_line.meta) AS e WHERE e ? 'returnItemId') THEN
+    UPDATE tax_share_targets AS t
+    SET weight = COALESCE((
+      SELECT SUM((e ->> 'amount')::numeric)
+      FROM jsonb_array_elements(p_line.meta) AS e
+      JOIN cartlify.return_items AS ri ON ri.id = (e ->> 'returnItemId')::integer
+      WHERE ri."orderItemId" = t.item_id
+    ), 0)
+    WHERE t.kind = 'item';
+  ELSE
+    UPDATE tax_share_targets AS t
+    SET weight = t.gross_left
+    WHERE t.in_part;
+  END IF;
+
+  DELETE FROM tax_share_targets WHERE gross_left <= 0;
+
+  -- the targets the weights name, each its part of the money, never more than it has left
+  SELECT COALESCE(SUM(weight), 0), count(*) INTO v_weights, v_count
+  FROM tax_share_targets WHERE weight > 0;
+
+  FOR r IN SELECT * FROM tax_share_targets WHERE weight > 0 ORDER BY k LOOP
+    v_n := v_n + 1;
+    v_share := CASE
+      WHEN v_n = v_count THEN v_left
+      ELSE round(v_amount * r.weight / v_weights, 2)
+    END;
+    v_share := LEAST(v_share, r.gross_left, v_left);
+    CONTINUE WHEN v_share <= 0;
+    UPDATE tax_share_targets AS t SET taken = v_share WHERE t.k = r.k;
+    v_left := v_left - v_share;
+  END LOOP;
+
+  -- what a target could not take (it had less left than its part, the cent of a rounding) goes to
+  -- the other lines of the part that have something left, in their order: the money and its shares
+  -- always meet
+  FOR r IN SELECT * FROM tax_share_targets WHERE in_part ORDER BY k LOOP
+    EXIT WHEN v_left <= 0;
+    v_share := LEAST(r.gross_left - r.taken, v_left);
+    CONTINUE WHEN v_share <= 0;
+    UPDATE tax_share_targets AS t SET taken = t.taken + v_share WHERE t.k = r.k;
+    v_left := v_left - v_share;
+  END LOOP;
+
+  FOR r IN SELECT * FROM tax_share_targets WHERE taken > 0 ORDER BY k LOOP
+    v_tax := CASE
+      WHEN r.taken >= r.gross_left THEN r.tax_left
+      WHEN (r.rate #>> '{}') IS NULL OR (r.rate #>> '{}')::numeric = 0 THEN 0
+      ELSE LEAST(r.tax_left, round(r.taken * (r.rate #>> '{}')::numeric / (100 + (r.rate #>> '{}')::numeric), 2))
+    END;
+
+    v_out := v_out || jsonb_build_array(jsonb_build_object(
+      'kind', r.kind, 'orderItemId', r.item_id, 'name', r.name, 'quantity', NULL,
+      'unitNet', NULL, 'rate', r.rate, 'rule', r.rule, 'country', r.country,
+      'net', v_sign * (r.taken - v_tax), 'tax', v_sign * v_tax, 'gross', v_sign * r.taken
+    ));
+  END LOOP;
+
+  RETURN v_out;
+END;
+$$;
+
+-- The shares of the line a line of money names (coversId), in the share of its sum, turned round:
+-- money that came back to the shop for a part of a line that went to the buyer gives back the tax of
+-- that part. Each share half up, the last one the rest. Internal: the trigger of the journal calls
+-- it.
+CREATE OR REPLACE FUNCTION cartlify.money_reversed_tax_shares (p_line cartlify.money_log) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_source cartlify.money_log%ROWTYPE;
+  v_ratio numeric;
+  v_out jsonb := '[]'::jsonb;
+  v_gross_left numeric;
+  v_tax_left numeric;
+  v_count integer;
+  v_n integer := 0;
+  v_gross numeric;
+  v_tax numeric;
+  e jsonb;
+BEGIN
+  SELECT * INTO v_source FROM cartlify.money_log AS m WHERE m.id = p_line."coversId";
+  IF NOT FOUND OR v_source."taxShares" IS NULL OR v_source.amount = 0 THEN
+    RETURN NULL;
+  END IF;
+
+  v_ratio := LEAST(1, abs(p_line.amount) / abs(v_source.amount));
+  v_gross_left := round(-(SELECT SUM((x ->> 'gross')::numeric) FROM jsonb_array_elements(v_source."taxShares") AS x) * v_ratio, 2);
+  v_tax_left := round(-(SELECT SUM((x ->> 'tax')::numeric) FROM jsonb_array_elements(v_source."taxShares") AS x) * v_ratio, 2);
+  v_count := jsonb_array_length(v_source."taxShares");
+
+  FOR e IN SELECT x FROM jsonb_array_elements(v_source."taxShares") AS x LOOP
+    v_n := v_n + 1;
+    IF v_n = v_count THEN
+      v_gross := v_gross_left;
+      v_tax := v_tax_left;
+    ELSE
+      v_gross := round(-(e ->> 'gross')::numeric * v_ratio, 2);
+      v_tax := round(-(e ->> 'tax')::numeric * v_ratio, 2);
+    END IF;
+    v_out := v_out || jsonb_build_array(e || jsonb_build_object(
+      'net', v_gross - v_tax, 'tax', v_tax, 'gross', v_gross
+    ));
+    v_gross_left := v_gross_left - v_gross;
+    v_tax_left := v_tax_left - v_tax;
+  END LOOP;
+
+  RETURN v_out;
+END;
+$$;
+
+-- The rows of statements a line of the money journal is about: the rows its meta names (returnItemId)
+-- and the rows split off them since, their units with a result of their own ("splitFromId"). Internal
+-- step.
+CREATE OR REPLACE FUNCTION cartlify.money_line_return_rows (p_line_id integer) RETURNS TABLE (return_item_id integer) LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  WITH RECURSIVE named AS (
+    SELECT DISTINCT (e.value ->> 'returnItemId')::integer AS id
+    FROM cartlify.money_log AS l
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE WHEN jsonb_typeof(l.meta) = 'array' THEN l.meta ELSE '[]'::jsonb END
+    ) AS e (value)
+    WHERE l.id = p_line_id AND e.value ? 'returnItemId'
+    UNION
+    SELECT i.id FROM cartlify.return_items AS i JOIN named AS n ON i."splitFromId" = n.id
+  )
+  SELECT n.id FROM named AS n
+$$;
+
+-- The last line of a statement that paid a row with its own money, as it stood before the failure
+-- given (being written): a transfer or money sent outside the app, of the goods, not turned round by
+-- another failure, naming the row or a row it was split off. Null when none did. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.return_row_line_before (p_item_id integer, p_failure_id integer) RETURNS integer LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  WITH RECURSIVE origin AS (
+    SELECT i.id, i."splitFromId" FROM cartlify.return_items AS i WHERE i.id = p_item_id
+    UNION ALL
+    SELECT i.id, i."splitFromId" FROM cartlify.return_items AS i JOIN origin AS o ON i.id = o."splitFromId"
+  )
+  SELECT max(l.id)
+  FROM cartlify.money_log AS l
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(l.meta) = 'array' THEN l.meta ELSE '[]'::jsonb END
+  ) AS e (value)
+  WHERE l."returnId" = (SELECT i."returnId" FROM cartlify.return_items AS i WHERE i.id = p_item_id)
+    AND l.purpose = 'return'
+    AND l.part = 'goods'
+    AND l.event IN ('money.refund', 'money.outside')
+    AND (e.value ->> 'returnItemId')::integer IN (SELECT o.id FROM origin AS o)
+    AND NOT EXISTS (
+      SELECT 1 FROM cartlify.money_log AS f
+      WHERE f.event = 'money.refund_failed' AND f."coversId" = l.id AND f.id IS DISTINCT FROM p_failure_id
+    )
+$$;
+
+-- The last line of a statement that paid a row with its own money (a transfer or money sent outside
+-- the app, of the goods, not turned round by a failure), naming the row or a row it was split off.
+-- Null when none did. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.return_row_line (p_item_id integer) RETURNS integer LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  WITH RECURSIVE origin AS (
+    SELECT i.id, i."splitFromId" FROM cartlify.return_items AS i WHERE i.id = p_item_id
+    UNION ALL
+    SELECT i.id, i."splitFromId" FROM cartlify.return_items AS i JOIN origin AS o ON i.id = o."splitFromId"
+  )
+  SELECT max(l.id)
+  FROM cartlify.money_log AS l
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(l.meta) = 'array' THEN l.meta ELSE '[]'::jsonb END
+  ) AS e (value)
+  WHERE l."returnId" = (SELECT i."returnId" FROM cartlify.return_items AS i WHERE i.id = p_item_id)
+    AND l.purpose = 'return'
+    AND l.part = 'goods'
+    AND l.event IN ('money.refund', 'money.outside')
+    AND (e.value ->> 'returnItemId')::integer IN (SELECT o.id FROM origin AS o)
+    AND NOT EXISTS (
+      SELECT 1 FROM cartlify.money_log AS f WHERE f.event = 'money.refund_failed' AND f."coversId" = l.id
+    )
+$$;
+
+-- What money already with the buyer pays of the rows of the statements of an order: no row names a
+-- line, the marks of the rows say it. The shares the decisions gave the items (money given back by
+-- hand or taken by a bank whose money reached the buyer, money_source_lost; the meta of the line:
+-- { orderItemId, quantity, unitPrice, amount, at }) go to the units of the rows of the item marked as
+-- paid ("paidUnits"), in the order things happened, so what a row took never changes later: the units
+-- by when they came back, the shares by when they were decided. A share gives its units to the marked
+-- units that have room, each taking up to its room of what is left of the share (15 for two units
+-- at 10: one unit all of it, the next 5). A share takes units no share took (4 off a unit and then 10
+-- for a unit bought back: two units; the 10 waits for its unit while none is marked), unless the
+-- shares of the item up to it are for more units than the order has: then it tops up the units other
+-- shares took first and takes new ones after (the system shares a line among all the units of the
+-- order on top of a part off one), so what a row took never moves to a unit marked later. The
+-- delivery shares, at most what the delivery still had to give back (its price less the own money
+-- of the statements that gave it). The room of a unit is its price, at most what its row gives back for it (a row lowered takes
+-- no more). A share decided after the own money of a row moved (a transfer, money sent outside the
+-- app) does not go to it: the row was paid, the share is of other units; unless the unit was marked
+-- after the decision (the reception found it is the unit the money paid); less what the reception found the row had had another way already, a loss of the shop
+-- the line records ({ lost, lostOrderItemId, lostReturnItemId }: record_return_paid_units). quantity
+-- counts the units the shares pay all of (bought back at their price). The shares of the delivery go
+-- to the row that took the delivery back ("paidDelivery"). A row whose money was refused takes none.
+-- at: when the row took it. p_with_lost: the money that never reached the buyer too (a refund made by
+-- hand that failed, money_source_lost), for what tells the story of the money. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.return_row_shares_of (p_order_id integer, p_with_lost boolean) RETURNS TABLE (
+  return_item_id integer,
+  return_id integer,
+  source_id integer,
+  order_item_id integer,
+  part text,
+  amount numeric,
+  quantity integer,
+  at timestamp
+) LANGUAGE plpgsql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_item  record;
+  v_share record;
+  v_row   record;
+  v_slots jsonb;
+  v_slot  jsonb;
+  v_n     integer;
+  v_k     integer;
+  v_unit  integer;
+  v_pass  integer;
+  v_used  integer[];
+  v_cum   integer;
+  v_stack boolean;
+  v_dcap  numeric;
+  v_given numeric;
+  v_room  numeric;
+  v_take  numeric;
+  v_got   jsonb;
+  v_key   text;
+  v_lost  numeric;
+BEGIN
+  FOR v_item IN
+    SELECT DISTINCT i."orderItemId" AS id, oi."unitPrice" AS price, oi.quantity AS units
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
+    JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
+    WHERE r."orderId" = p_order_id AND i."paidUnits" > 0 AND i.money <> 'refused'
+  LOOP
+    v_cum := 0;
+    -- the units marked, in their order: [{ row, return, setAt, room }]
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+             'row', x.id, 'return', x."returnId", 'setAt', x.set_at, 'ownAt', x.own_at,
+             'room', x.room, 'cap', x.room
+           ) ORDER BY x.set_at, x.created, x."returnId", x.id, x.n), '[]'::jsonb)
+    INTO v_slots
+    FROM (
+      SELECT
+        i.id,
+        i."returnId",
+        r."createdAt" AS created,
+        COALESCE(i."goodsSetAt", i."createdAt") AS set_at,
+        (SELECT o."createdAt" FROM cartlify.money_log AS o WHERE o.id = cartlify.return_row_line (i.id)) AS own_at,
+        LEAST(v_item.price, CASE
+          WHEN g.n < i.quantity THEN round(i.amount / i.quantity, 2)
+          ELSE i.amount - round(i.amount / i.quantity, 2) * (i.quantity - 1)
+        END) AS room,
+        g.n
+      FROM cartlify.return_items AS i
+      JOIN cartlify.returns AS r ON r.id = i."returnId"
+      CROSS JOIN LATERAL generate_series(1, i."paidUnits") AS g (n)
+      WHERE r."orderId" = p_order_id AND i."orderItemId" = v_item.id AND i."paidUnits" > 0 AND i.money <> 'refused'
+    ) AS x;
+    -- what each row took of each share: { "row:line": { amount, full, at } }
+    v_got := '{}'::jsonb;
+    FOR v_share IN
+      SELECT
+        l.id AS line_id,
+        (x.e ->> 'quantity')::integer AS units,
+        (x.e ->> 'amount')::numeric AS amount,
+        COALESCE((x.e ->> 'at')::timestamp, l."createdAt") AS decided_at
+      FROM cartlify.money_log AS l
+      CROSS JOIN LATERAL jsonb_array_elements(l.meta) WITH ORDINALITY AS x (e, o)
+      WHERE l."orderId" = p_order_id
+        AND l."moneyUse" IS NOT NULL
+        AND jsonb_typeof(l.meta) = 'array'
+        AND ((l.event = 'money.refund' AND l.purpose = 'hand') OR l.event = 'money.dispute_withdrawn')
+        AND (p_with_lost OR NOT cartlify.money_source_lost (l.id))
+        AND x.e ? 'orderItemId'
+        AND x.e ? 'amount'
+        AND (x.e ->> 'orderItemId')::integer = v_item.id
+        AND COALESCE((x.e ->> 'quantity')::integer, 0) > 0
+      ORDER BY COALESCE((x.e ->> 'at')::timestamp, l."createdAt"), l.id, x.o
+    LOOP
+      v_given := v_share.amount;
+      v_unit := 0;
+      v_n := jsonb_array_length(v_slots);
+      v_used := '{}';
+      v_cum := v_cum + v_share.units;
+      v_stack := v_cum > v_item.units;
+      -- the units no share took; stacking, the units other shares took first, then new ones
+      FOR v_pass IN 1..2 LOOP
+        CONTINUE WHEN v_pass = 2 AND NOT v_stack;
+        v_k := 0;
+        WHILE v_unit < v_share.units AND v_k < v_n AND v_given > 0 LOOP
+          v_slot := v_slots -> v_k;
+          v_room := (v_slot ->> 'room')::numeric;
+          IF v_room > 0 AND NOT (v_k = ANY (v_used))
+             AND (
+               CASE
+                 WHEN v_stack AND v_pass = 1 THEN v_room < (v_slot ->> 'cap')::numeric
+                 ELSE v_room >= (v_slot ->> 'cap')::numeric
+               END
+             )
+             AND (
+               v_slot ->> 'ownAt' IS NULL
+               OR (v_slot ->> 'ownAt')::timestamp > v_share.decided_at
+               OR (v_slot ->> 'setAt')::timestamp >= v_share.decided_at
+             ) THEN
+            v_used := v_used || v_k;
+            v_unit := v_unit + 1;
+            v_take := LEAST(v_given, v_room);
+            v_given := v_given - v_take;
+            v_slots := jsonb_set(v_slots, ARRAY[v_k::text, 'room'], to_jsonb(v_room - v_take));
+            v_key := (v_slot ->> 'row') || ':' || v_share.line_id::text;
+            v_got := v_got || jsonb_build_object(v_key, jsonb_build_object(
+              'row', (v_slot ->> 'row')::integer,
+              'return', (v_slot ->> 'return')::integer,
+              'line', v_share.line_id,
+              'amount', COALESCE((v_got -> v_key ->> 'amount')::numeric, 0) + v_take,
+              'full', COALESCE((v_got -> v_key ->> 'full')::integer, 0)
+                + CASE WHEN v_room - v_take <= 0 THEN 1 ELSE 0 END,
+              'at', GREATEST((v_slot ->> 'setAt')::timestamp, v_share.decided_at)
+            ));
+          END IF;
+          v_k := v_k + 1;
+        END LOOP;
+      END LOOP;
+    END LOOP;
+    FOR v_row IN
+      SELECT e.value AS got FROM jsonb_each(v_got) AS e
+      ORDER BY (e.value ->> 'row')::integer, (e.value ->> 'line')::integer
+    LOOP
+      v_lost := COALESCE((
+        SELECT SUM((m ->> 'lost')::numeric)
+        FROM cartlify.money_log AS l
+        CROSS JOIN LATERAL jsonb_array_elements(l.meta) AS m
+        WHERE l.id = (v_row.got ->> 'line')::integer AND m ? 'lost'
+          AND (m ->> 'lostReturnItemId')::integer = (v_row.got ->> 'row')::integer
+      ), 0);
+      return_item_id := (v_row.got ->> 'row')::integer;
+      return_id := (v_row.got ->> 'return')::integer;
+      source_id := (v_row.got ->> 'line')::integer;
+      order_item_id := v_item.id;
+      part := 'goods';
+      amount := GREATEST((v_row.got ->> 'amount')::numeric - v_lost, 0);
+      quantity := CASE WHEN v_lost = 0 THEN (v_row.got ->> 'full')::integer ELSE 0 END;
+      at := (v_row.got ->> 'at')::timestamp;
+      RETURN NEXT;
+    END LOOP;
+  END LOOP;
+  FOR v_row IN
+    SELECT i.id, i."returnId", COALESCE(i."goodsSetAt", i."createdAt") AS set_at
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
+    WHERE r."orderId" = p_order_id AND i."paidDelivery" AND i.money <> 'refused'
+    ORDER BY r."createdAt", r.id, i.id
+    LIMIT 1
+  LOOP
+    -- what the delivery still had to give back: the price less what the own money of the statements
+    -- of the order gave back of it (a transfer, money sent outside the app, not failed)
+    v_dcap := COALESCE((SELECT d.price FROM cartlify.order_deliveries AS d WHERE d."orderId" = p_order_id), 0)
+      + COALESCE((
+        SELECT SUM(l.amount)
+        FROM cartlify.money_log AS l
+        JOIN cartlify.returns AS r ON r.id = l."returnId"
+        WHERE r."orderId" = p_order_id
+          AND l.purpose = 'return'
+          AND l.part = 'delivery'
+          AND l.event IN ('money.refund', 'money.outside')
+          AND NOT EXISTS (
+            SELECT 1 FROM cartlify.money_log AS f WHERE f.event = 'money.refund_failed' AND f."coversId" = l.id
+          )
+      ), 0);
+    FOR v_share IN
+      SELECT l.id AS line_id, (x.e ->> 'delivery')::numeric AS amount,
+             COALESCE((x.e ->> 'at')::timestamp, l."createdAt") AS decided_at
+      FROM cartlify.money_log AS l
+      CROSS JOIN LATERAL jsonb_array_elements(l.meta) AS x (e)
+      WHERE l."orderId" = p_order_id
+        AND l."moneyUse" IS NOT NULL
+        AND jsonb_typeof(l.meta) = 'array'
+        AND ((l.event = 'money.refund' AND l.purpose = 'hand') OR l.event = 'money.dispute_withdrawn')
+        AND (p_with_lost OR NOT cartlify.money_source_lost (l.id))
+        AND x.e ? 'delivery'
+      ORDER BY COALESCE((x.e ->> 'at')::timestamp, l."createdAt"), l.id
+    LOOP
+      EXIT WHEN v_dcap <= 0;
+      CONTINUE WHEN v_share.amount <= 0;
+      return_item_id := v_row.id;
+      return_id := v_row."returnId";
+      source_id := v_share.line_id;
+      order_item_id := NULL;
+      part := 'delivery';
+      amount := LEAST(v_share.amount, v_dcap);
+      quantity := 0;
+      at := GREATEST(v_row.set_at, v_share.decided_at);
+      v_dcap := v_dcap - amount;
+      RETURN NEXT;
+    END LOOP;
+  END LOOP;
+END;
+$$;
+
+-- What money already with the buyer pays of the rows of the statements of an order, the money that
+-- reached the buyer only (return_row_shares_of): what the rows have. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.return_row_shares (p_order_id integer) RETURNS TABLE (
+  return_item_id integer,
+  return_id integer,
+  source_id integer,
+  order_item_id integer,
+  part text,
+  amount numeric,
+  quantity integer,
+  at timestamp
+) LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT * FROM cartlify.return_row_shares_of (p_order_id, false)
+$$;
+
+-- The line of money that went back to the buyer which a line of money that came back to the shop is
+-- about: the line it names (coversId); for money the buyer gave back outside the app for rows of a
+-- statement, the line that paid the first of the rows (its own, return_row_line, or the money already
+-- with the buyer its marks take, return_row_shares). Null when there is none. Internal.
+CREATE OR REPLACE FUNCTION cartlify.money_returned_source (p_line cartlify.money_log) RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT COALESCE(
+    p_line."coversId",
+    CASE WHEN p_line.event = 'money.received' AND p_line.purpose = 'return' THEN (
+      SELECT COALESCE(
+        cartlify.return_row_line (ri.id),
+        (
+          SELECT min(sh.source_id)
+          FROM cartlify.return_row_shares (p_line."orderId") AS sh
+          WHERE sh.return_item_id = ri.id AND sh.part = 'goods'
+        )
+      )
+      FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_line.meta) = 'array' THEN p_line.meta ELSE '[]'::jsonb END) WITH ORDINALITY AS e (value, o)
+      JOIN cartlify.return_items AS ri ON ri.id = (e.value ->> 'returnItemId')::integer
+      WHERE cartlify.return_row_line (ri.id) IS NOT NULL OR ri."paidUnits" > 0
+      ORDER BY e.o
+      LIMIT 1
+    ) END
+  )
+$$;
+
+-- The tax of money that came back to the shop after it went to the buyer (docs/taxes.md), turned
+-- round from the line it is about: a refund that failed after it was sent takes back all of it;
+-- money the buyer gave back outside the app takes back its share of it (the part of the sum); for
+-- rows of a statement, the share of the item of each row of the line that paid it. Null when there is no such line or it has no tax. Internal: the
+-- trigger of the journal calls it.
+CREATE OR REPLACE FUNCTION cartlify.money_returned_tax_shares (p_line cartlify.money_log) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_source integer := cartlify.money_returned_source(p_line);
+  v_line cartlify.money_log%ROWTYPE;
+  v_out jsonb := '[]'::jsonb;
+  v_share jsonb;
+  v_ratio numeric;
+  v_gross numeric;
+  v_tax numeric;
+  e record;
+BEGIN
+  IF p_line."orderId" IS NULL OR p_line.purpose IN ('late_payment', 'shipping') OR v_source IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  IF p_line.event = 'money.refund_failed' THEN
+    RETURN (
+      SELECT jsonb_agg(x.e || jsonb_build_object(
+        'net', -(x.e ->> 'net')::numeric, 'tax', -(x.e ->> 'tax')::numeric, 'gross', -(x.e ->> 'gross')::numeric
+      ) ORDER BY x.o)
+      FROM cartlify.money_log AS m
+      CROSS JOIN LATERAL jsonb_array_elements(m."taxShares") WITH ORDINALITY AS x (e, o)
+      WHERE m.id = v_source
+    );
+  END IF;
+
+  -- money given back outside the app for rows of a statement: each row the share of its item in the
+  -- lines that paid it (its own line and the money already with the buyer its marks take,
+  -- return_row_shares), each in the part of the row it paid
+  IF p_line.event = 'money.received' AND p_line."coversId" IS NULL THEN
+    FOR e IN
+      SELECT (x.value ->> 'amount')::numeric * p.amount / NULLIF(ri.amount, 0) AS amount,
+             ri."orderItemId" AS item_id, p.line_id
+      FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_line.meta) = 'array' THEN p_line.meta ELSE '[]'::jsonb END) AS x (value)
+      JOIN cartlify.return_items AS ri ON ri.id = (x.value ->> 'returnItemId')::integer
+      CROSS JOIN LATERAL (
+        SELECT sh.source_id AS line_id, sh.amount
+        FROM cartlify.return_row_shares (p_line."orderId") AS sh
+        WHERE sh.return_item_id = ri.id AND sh.part = 'goods'
+        UNION ALL
+        SELECT cartlify.return_row_line (ri.id),
+               ri.amount - COALESCE((
+                 SELECT SUM(sh.amount)
+                 FROM cartlify.return_row_shares (p_line."orderId") AS sh
+                 WHERE sh.return_item_id = ri.id AND sh.part = 'goods'
+               ), 0)
+        WHERE cartlify.return_row_line (ri.id) IS NOT NULL
+      ) AS p
+    LOOP
+      SELECT sh INTO v_share
+      FROM cartlify.money_log AS m
+      CROSS JOIN LATERAL jsonb_array_elements(m."taxShares") AS sh
+      WHERE m.id = e.line_id AND sh ->> 'kind' = 'item' AND (sh ->> 'orderItemId')::integer = e.item_id
+      LIMIT 1;
+      CONTINUE WHEN v_share IS NULL OR (v_share ->> 'gross')::numeric = 0 OR e.amount IS NULL OR e.amount <= 0;
+      v_ratio := LEAST(1, e.amount / abs((v_share ->> 'gross')::numeric));
+      v_gross := round(-(v_share ->> 'gross')::numeric * v_ratio, 2);
+      v_tax := round(-(v_share ->> 'tax')::numeric * v_ratio, 2);
+      v_out := v_out || jsonb_build_array(v_share || jsonb_build_object(
+        'net', v_gross - v_tax, 'tax', v_tax, 'gross', v_gross
+      ));
+    END LOOP;
+    RETURN CASE WHEN jsonb_array_length(v_out) = 0 THEN NULL ELSE v_out END;
+  END IF;
+
+  -- the share of the sum of the line it is about, turned round
+  v_line := p_line;
+  v_line."coversId" := v_source;
+  RETURN cartlify.money_reversed_tax_shares(v_line);
+END;
+$$;
+
+-- Whether a line is money given back by hand or taken by a bank: what it was for is a decision
+-- (the meta of the line), and so are its tax and its documents. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.money_line_decided_later (p_line cartlify.money_log) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT (p_line.event = 'money.refund' AND p_line.purpose = 'hand')
+    OR p_line.event = 'money.dispute_withdrawn'
+$$;
+
+-- The tax of a decision of what money given back by hand or taken by a bank was for (docs/taxes.md):
+-- the items of the order it names by their sums, the delivery, and for money given back by hand
+-- the rest, a compensation, by what every line has left; what a bank took past the goods is a loss
+-- of the shop and lowers no tax. Each share with the time of the decision (at) and its number
+-- (decision: 1, 2, ...); a decision made again first turns round the shares the line had (p_old, with
+-- the number of the new one), so the shares of the line always add up to its decision now and each
+-- counts in its own time. Internal: the trigger of the journal calls it.
+CREATE OR REPLACE FUNCTION cartlify.money_decision_tax_shares (p_line cartlify.money_log, p_old jsonb) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_at       text := to_jsonb((now() AT TIME ZONE 'UTC')::timestamp(3)) #>> '{}';
+  v_number   integer := COALESCE((
+    SELECT max((e ->> 'decision')::integer) FROM jsonb_array_elements(COALESCE(p_old, '[]'::jsonb)) AS e
+  ), 0) + 1;
+  v_part     cartlify.money_log := p_line;
+  v_items    jsonb;
+  v_goods    numeric;
+  v_delivery numeric;
+  v_lost     numeric;
+  v_rest     numeric;
+  v_out      jsonb := '[]'::jsonb;
+BEGIN
+  -- the shares of the decision the line had (its own, not the ones it turned round), turned round
+  v_out := COALESCE((
+    SELECT jsonb_agg(e || jsonb_build_object(
+      'net', -(e ->> 'net')::numeric, 'tax', -(e ->> 'tax')::numeric, 'gross', -(e ->> 'gross')::numeric,
+      'at', v_at, 'decision', v_number, 'reverses', true
+    ) ORDER BY o)
+    FROM jsonb_array_elements(COALESCE(p_old, '[]'::jsonb)) WITH ORDINALITY AS x (e, o)
+    WHERE (e ->> 'decision')::integer = v_number - 1 AND NOT COALESCE((e ->> 'reverses')::boolean, false)
+  ), '[]'::jsonb);
+
+  IF jsonb_typeof(p_line.meta) <> 'array' THEN
+    RETURN v_out;
+  END IF;
+
+  -- the items less what the reception found lost of them (the shop had paid the rows another way
+  -- already: a loss, which lowers no tax)
+  v_items := COALESCE((
+    SELECT jsonb_agg(e || jsonb_build_object('amount', (e ->> 'amount')::numeric - COALESCE((
+      SELECT SUM((x ->> 'lost')::numeric)
+      FROM jsonb_array_elements(p_line.meta) AS x
+      WHERE x ? 'lost' AND (x ->> 'lostOrderItemId')::integer = (e ->> 'orderItemId')::integer
+    ), 0)))
+    FROM jsonb_array_elements(p_line.meta) AS e
+    WHERE e ? 'orderItemId'
+  ), '[]'::jsonb);
+  v_goods := COALESCE((SELECT SUM((e ->> 'amount')::numeric) FROM jsonb_array_elements(v_items) AS e), 0);
+  v_delivery := COALESCE((
+    SELECT SUM((e ->> 'delivery')::numeric) FROM jsonb_array_elements(p_line.meta) AS e WHERE e ? 'delivery'
+  ), 0);
+  v_lost := COALESCE((
+    SELECT SUM((e ->> 'lost')::numeric) FROM jsonb_array_elements(p_line.meta) AS e WHERE e ? 'lost'
+  ), 0);
+  v_rest := abs(p_line.amount) - v_goods - v_delivery - v_lost;
+
+  IF v_goods > 0 THEN
+    v_part.part := 'goods';
+    v_part.amount := -v_goods;
+    v_part.meta := v_items;
+    v_out := v_out || COALESCE(cartlify.money_line_tax_shares(v_part), '[]'::jsonb);
+  END IF;
+  IF v_delivery > 0 THEN
+    v_part.part := 'delivery';
+    v_part.amount := -v_delivery;
+    v_part.meta := NULL;
+    v_out := v_out || COALESCE(cartlify.money_line_tax_shares(v_part), '[]'::jsonb);
+  END IF;
+  IF v_rest > 0 AND p_line.purpose = 'hand' THEN
+    v_part.part := 'whole';
+    v_part.amount := -v_rest;
+    v_part.meta := NULL;
+    v_out := v_out || COALESCE(cartlify.money_line_tax_shares(v_part), '[]'::jsonb);
+  END IF;
+
+  -- the time and the number of the decision in each share of it
+  RETURN (
+    SELECT COALESCE(jsonb_agg(CASE WHEN e ? 'at' THEN e ELSE e || jsonb_build_object('at', v_at, 'decision', v_number) END ORDER BY o), '[]'::jsonb)
+    FROM jsonb_array_elements(v_out) WITH ORDINALITY AS x (e, o)
+  );
+END;
+$$;
+
+-- The tax of a line of money of an order, kept with it (money_line_tax_shares): a payment, money
+-- that went back to the buyer when it went (a refund once it is sent, money sent outside the app),
+-- money that came back to the shop (the tax of the line it names, turned round). Money given back by
+-- hand and what a bank took hold none when they move, as what they were for is not known: the
+-- decision (the meta of the line: decide_money_use, share_money_line) gives them
+-- (money_decision_tax_shares), and a decision made again gives the old ones turned round and the
+-- new ones. Written by the database only: what a writer of the line puts there is dropped.
+CREATE OR REPLACE FUNCTION cartlify.money_log_tax_shares () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  IF cartlify.money_line_decided_later(NEW) THEN
+    IF TG_OP = 'INSERT' THEN
+      NEW."taxShares" := NULL;
+      IF jsonb_typeof(NEW.meta) = 'array' THEN
+        NEW."taxShares" := cartlify.money_decision_tax_shares(NEW, NULL);
+      END IF;
+    ELSE
+      NEW."taxShares" := OLD."taxShares";
+      IF NEW.meta IS DISTINCT FROM OLD.meta THEN
+        NEW."taxShares" := COALESCE(OLD."taxShares", '[]'::jsonb)
+          || cartlify.money_decision_tax_shares(NEW, OLD."taxShares");
+      END IF;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'UPDATE' THEN
+    NEW."taxShares" := OLD."taxShares";
+    IF OLD."taxShares" IS NOT NULL OR NEW.event <> 'money.refund'
+       OR NEW.state IS DISTINCT FROM 'sent' OR OLD.state IS NOT DISTINCT FROM 'sent' THEN
+      RETURN NEW;
+    END IF;
+  ELSE
+    NEW."taxShares" := NULL;
+    IF NEW.event = 'money.refund' AND NEW.state IS DISTINCT FROM 'sent' THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  IF NEW.event IN ('money.refund_failed', 'money.received') THEN
+    NEW."taxShares" := cartlify.money_returned_tax_shares(NEW);
+  ELSIF NEW.event IN ('money.payment', 'money.refund', 'money.outside') THEN
+    NEW."taxShares" := cartlify.money_line_tax_shares(NEW);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_money_log_tax_shares ON cartlify.money_log;
+
+CREATE TRIGGER trg_money_log_tax_shares
+BEFORE INSERT OR UPDATE OF state, meta ON cartlify.money_log FOR EACH ROW
+EXECUTE FUNCTION cartlify.money_log_tax_shares ();
+
+-- Makes the document a line of money for the goods or the delivery of an order gives, when the
+-- order has an invoice (docs/taxes.md): money that went back to the buyer (a refund once it is
+-- sent, money sent outside the app) gives a credit note that lowers the invoice by its lines; money
+-- that came back to the shop after that (a refund that failed after it was sent, money the buyer
+-- gave back) gives an invoice that reverses the credit note. Money given back by hand and what a
+-- bank took give theirs at the decision (make_money_decision_documents). A refund in
+-- several lines (the goods, the delivery: one transfer, or one movement with no transfer written at
+-- once, log_money_changes: money already with the buyer, money sent outside the app) gives one
+-- credit note of all of them, which names the lines it holds (details.moneyLogIds); the documents
+-- of a line are made once. Internal: the trigger of the journal calls it.
+CREATE OR REPLACE FUNCTION cartlify.make_money_tax_document (p_line_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_line cartlify.money_log%ROWTYPE;
+  v_invoice cartlify.tax_documents%ROWTYPE;
+  v_credit cartlify.tax_documents%ROWTYPE;
+  v_lines jsonb;
+  v_ids integer[];
+  v_kind cartlify."TaxDocumentKind";
+  v_series text;
+  v_id integer;
+  v_other integer;
+BEGIN
+  SELECT * INTO v_line FROM cartlify.money_log AS m WHERE m.id = p_line_id;
+
+  IF v_line."orderId" IS NULL
+     OR v_line.purpose IN ('late_payment', 'shipping')
+     OR v_line.part NOT IN ('goods', 'delivery', 'whole')
+     OR EXISTS (
+       SELECT 1 FROM cartlify.tax_documents AS d
+       WHERE d.kind IN ('invoice', 'credit_note')
+         AND (d."moneyLogId" = p_line_id OR d.details -> 'moneyLogIds' @> to_jsonb(p_line_id))
+     ) THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT * INTO v_invoice
+  FROM cartlify.tax_documents AS d
+  WHERE d."orderId" = v_line."orderId" AND d.kind = 'invoice' AND d."correctsId" IS NULL
+  ORDER BY d.id
+  LIMIT 1;
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_line.amount < 0 THEN
+    v_kind := 'credit_note';
+    -- the lines of the same transfer that went out with it, each for the lines of the invoice it is
+    -- about (the goods the items, the delivery the delivery)
+    v_ids := ARRAY[p_line_id];
+    IF v_line.event = 'money.refund' AND v_line."transferKey" IS NOT NULL THEN
+      v_ids := ARRAY(
+        SELECT m.id
+        FROM cartlify.money_log AS m
+        WHERE m."orderId" = v_line."orderId"
+          AND m.event = 'money.refund'
+          AND m."transferKey" = v_line."transferKey"
+          AND m.state = 'sent'
+          AND m.amount < 0
+          AND m.part IN ('goods', 'delivery', 'whole')
+          AND NOT EXISTS (
+            SELECT 1 FROM cartlify.tax_documents AS d
+            WHERE d.kind = 'credit_note'
+              AND (d."moneyLogId" = m.id OR d.details -> 'moneyLogIds' @> to_jsonb(m.id))
+          )
+        ORDER BY m.id
+      );
+    ELSIF v_line."transferKey" IS NULL AND v_line."returnId" IS NOT NULL
+          AND v_line.event IN ('money.refund', 'money.outside') THEN
+      -- the lines of one movement of a statement with no transfer (money already with the buyer, money
+      -- sent outside the app), written by one statement (log_money_changes) in this transaction
+      v_ids := ARRAY(
+        SELECT m.id
+        FROM cartlify.money_log AS m
+        WHERE m."orderId" = v_line."orderId"
+          AND m."returnId" = v_line."returnId"
+          AND m.event = v_line.event
+          AND m."transferKey" IS NULL
+          AND m."createdAt" = v_line."createdAt"
+          AND (m.event <> 'money.refund' OR m.state = 'sent')
+          AND m.amount < 0
+          AND m.part IN ('goods', 'delivery', 'whole')
+          AND NOT EXISTS (
+            SELECT 1 FROM cartlify.tax_documents AS d
+            WHERE d.kind = 'credit_note'
+              AND (d."moneyLogId" = m.id OR d.details -> 'moneyLogIds' @> to_jsonb(m.id))
+          )
+        ORDER BY m.id
+      );
+    END IF;
+
+    -- the tax each of them holds, share by share (money_log.taxShares, money_line_tax_shares)
+    v_lines := '[]'::jsonb;
+    FOREACH v_other IN ARRAY v_ids LOOP
+      v_lines := v_lines || COALESCE(
+        (SELECT m."taxShares" FROM cartlify.money_log AS m WHERE m.id = v_other), '[]'::jsonb
+      );
+    END LOOP;
+  ELSE
+    -- money the buyer has had counts again for the shop (a refund that failed after it was sent,
+    -- money the buyer gave back): an invoice that reverses the credit note of the line it is about
+    -- (the latest one not reversed, a decision made again gives a new one) by the shares of this line
+    SELECT * INTO v_credit
+    FROM cartlify.tax_documents AS d
+    WHERE d.kind = 'credit_note'
+      AND (
+        d."moneyLogId" = cartlify.money_returned_source(v_line)
+        OR d.details -> 'moneyLogIds' @> to_jsonb(cartlify.money_returned_source(v_line))
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM cartlify.tax_documents AS x
+        WHERE x.kind = 'invoice' AND x."correctsId" = d.id AND x.details ->> 'event' <> 'money.received'
+      )
+    ORDER BY d.id DESC
+    LIMIT 1;
+    IF NOT FOUND THEN
+      RETURN NULL;
+    END IF;
+    v_ids := ARRAY[p_line_id];
+    v_kind := 'invoice';
+    IF v_line.event = 'money.refund_failed' THEN
+      -- a transfer fails whole: its credit note turned round, once, whichever of its lines comes first
+      IF EXISTS (
+        SELECT 1 FROM cartlify.tax_documents AS d
+        WHERE d.kind = 'invoice' AND d."correctsId" = v_credit.id AND d.details ->> 'event' = 'money.refund_failed'
+      ) THEN
+        RETURN NULL;
+      END IF;
+      v_lines := (
+        SELECT COALESCE(jsonb_agg(e || jsonb_build_object(
+          'net', -(e ->> 'net')::numeric, 'tax', -(e ->> 'tax')::numeric, 'gross', -(e ->> 'gross')::numeric
+        )), '[]'::jsonb)
+        FROM jsonb_array_elements(v_credit.lines) AS e
+      );
+    ELSE
+      v_lines := COALESCE(v_line."taxShares", '[]'::jsonb);
+    END IF;
+  END IF;
+
+  IF jsonb_array_length(v_lines) = 0 THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN cartlify.add_money_tax_document(
+    v_kind, v_invoice, CASE WHEN v_kind = 'credit_note' THEN v_invoice.id ELSE v_credit.id END,
+    v_line, v_lines, v_ids
+  );
+END;
+$$;
+
+-- Writes a document a line of money of an order gives (a credit note of the invoice, an invoice that
+-- reverses a credit note) with its lines, numbered in its series (a correction of an invoice made
+-- whenever the shop had a series, tax_document_series), with the copies of the invoice, and its
+-- receipt. Null when the shop has no series or there are no lines. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.add_money_tax_document (
+  p_kind cartlify."TaxDocumentKind",
+  p_invoice cartlify.tax_documents,
+  p_corrects integer,
+  p_line cartlify.money_log,
+  p_lines jsonb,
+  p_ids integer[]
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_series text;
+  v_id integer;
+BEGIN
+  IF p_lines IS NULL OR jsonb_array_length(p_lines) = 0 THEN
+    RETURN NULL;
+  END IF;
+
+  v_series := cartlify.tax_document_series(p_kind, true);
+  IF v_series IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  INSERT INTO cartlify.tax_documents (
+    kind, series, "orderId", "moneyLogId", "correctsId", locale, currency, seller, buyer, lines,
+    totals, details, net, tax, gross, "taxCountry", "taxRule"
+  )
+  VALUES (
+    p_kind, v_series, p_invoice."orderId", p_line.id, p_corrects,
+    p_invoice.locale, p_invoice.currency, p_invoice.seller, p_invoice.buyer, p_lines,
+    cartlify.tax_document_totals(p_lines),
+    jsonb_build_object(
+      'orderId', p_invoice."orderId",
+      'invoice', p_invoice.series || '-' || p_invoice.number,
+      'corrects', (SELECT d.series || '-' || d.number FROM cartlify.tax_documents AS d WHERE d.id = p_corrects),
+      'moneyLogIds', to_jsonb(p_ids),
+      'returnId', p_line."returnId",
+      'event', p_line.event,
+      'method', p_line.method,
+      'footer', p_invoice.details -> 'footer'
+    ),
+    (SELECT SUM((e ->> 'net')::numeric) FROM jsonb_array_elements(p_lines) AS e),
+    (SELECT SUM((e ->> 'tax')::numeric) FROM jsonb_array_elements(p_lines) AS e),
+    (SELECT SUM((e ->> 'gross')::numeric) FROM jsonb_array_elements(p_lines) AS e),
+    p_invoice."taxCountry", p_invoice."taxRule"
+  )
+  RETURNING id INTO v_id;
+
+  PERFORM cartlify.make_document_receipt(v_id);
+
+  RETURN v_id;
+END;
+$$;
+
+-- The documents of a decision of what money given back by hand or taken by a bank was for, when the
+-- order has an invoice (docs/taxes.md): the credit note the line had and nothing reversed is
+-- reversed by an invoice (a decision made again), and the shares of the decision now give a new
+-- credit note (none for a loss of the shop). Internal: the trigger of the journal calls it.
+CREATE OR REPLACE FUNCTION cartlify.make_money_decision_documents (p_line_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_line cartlify.money_log%ROWTYPE;
+  v_invoice cartlify.tax_documents%ROWTYPE;
+  v_credit cartlify.tax_documents%ROWTYPE;
+  v_number integer;
+  v_lines jsonb;
+BEGIN
+  SELECT * INTO v_line FROM cartlify.money_log AS m WHERE m.id = p_line_id;
+  IF v_line."orderId" IS NULL OR v_line.purpose IN ('late_payment', 'shipping') THEN
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_invoice
+  FROM cartlify.tax_documents AS d
+  WHERE d."orderId" = v_line."orderId" AND d.kind = 'invoice' AND d."correctsId" IS NULL
+  ORDER BY d.id
+  LIMIT 1;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_credit
+  FROM cartlify.tax_documents AS d
+  WHERE d.kind = 'credit_note' AND d."moneyLogId" = p_line_id
+    AND NOT EXISTS (SELECT 1 FROM cartlify.tax_documents AS x WHERE x.kind = 'invoice' AND x."correctsId" = d.id)
+  ORDER BY d.id DESC
+  LIMIT 1;
+  IF FOUND THEN
+    PERFORM cartlify.add_money_tax_document(
+      'invoice', v_invoice, v_credit.id, v_line,
+      (
+        SELECT jsonb_agg(e || jsonb_build_object(
+          'net', -(e ->> 'net')::numeric, 'tax', -(e ->> 'tax')::numeric, 'gross', -(e ->> 'gross')::numeric
+        ))
+        FROM jsonb_array_elements(v_credit.lines) AS e
+      ),
+      ARRAY[p_line_id]
+    );
+  END IF;
+
+  -- the shares of the decision now: those of its number, not the old ones it turned round
+  v_number := (
+    SELECT max((e ->> 'decision')::integer)
+    FROM jsonb_array_elements(COALESCE(v_line."taxShares", '[]'::jsonb)) AS e
+  );
+  v_lines := (
+    SELECT jsonb_agg(e - 'at' - 'decision' - 'reverses' ORDER BY o)
+    FROM jsonb_array_elements(COALESCE(v_line."taxShares", '[]'::jsonb)) WITH ORDINALITY AS x (e, o)
+    WHERE (e ->> 'decision')::integer = v_number AND NOT COALESCE((e ->> 'reverses')::boolean, false)
+  );
+  PERFORM cartlify.add_money_tax_document('credit_note', v_invoice, v_invoice.id, v_line, v_lines, ARRAY[p_line_id]);
+END;
+$$;
+
+-- The documents of the journal (docs/taxes.md): a refund when it is sent, a line written as it is
+-- (money sent outside the app, a refund that failed after it was sent, money the buyer gave back),
+-- and the decision of what money given back by hand or taken by a bank was for make their documents
+-- in the same transaction.
+CREATE OR REPLACE FUNCTION cartlify.money_log_tax_documents () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  IF NEW.event = 'money.refund' THEN
+    IF NEW.state = 'sent' AND (TG_OP = 'INSERT' OR OLD.state IS DISTINCT FROM 'sent') THEN
+      PERFORM cartlify.make_money_tax_document(NEW.id);
+    END IF;
+  ELSIF TG_OP = 'INSERT' AND NEW.event IN ('money.outside', 'money.refund_failed', 'money.received') THEN
+    PERFORM cartlify.make_money_tax_document(NEW.id);
+  END IF;
+
+  -- a decision of what money given back by hand or taken by a bank was for
+  IF cartlify.money_line_decided_later(NEW) AND jsonb_typeof(NEW.meta) = 'array'
+     AND (TG_OP = 'INSERT' OR NEW.meta IS DISTINCT FROM OLD.meta) THEN
+    PERFORM cartlify.make_money_decision_documents(NEW.id);
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_money_log_tax_documents ON cartlify.money_log;
+
+CREATE TRIGGER trg_money_log_tax_documents
+AFTER INSERT OR UPDATE OF state, meta ON cartlify.money_log FOR EACH ROW
+EXECUTE FUNCTION cartlify.money_log_tax_documents ();
+
+-- The fiscal receipt of a document of ours (docs/taxes.md): a receipt for an invoice (a sale, or an
+-- invoice that reverses a credit note), a return receipt for a credit note, when the shop makes
+-- receipts (root wrote the moment of the receipt, receiptMoment). The row waits for the worker of
+-- the receipts, which registers it at the provider of the app (RECEIPT_PROVIDER, the env: the
+-- database does not know it, the row takes the name at its first try). A correction follows the
+-- receipt it corrects: a credit note of an invoice without a receipt (the sale was not registered:
+-- the shop made no receipts then, or the receipt waits for the shipment) gets none now, the
+-- shipment makes it after the receipt of the sale. Once a document. Internal: the steps that make
+-- the documents call it.
+CREATE OR REPLACE FUNCTION cartlify.make_document_receipt (p_document_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_doc cartlify.tax_documents%ROWTYPE;
+  v_kind cartlify."TaxDocumentKind";
+  v_corrects integer;
+  v_id integer;
+BEGIN
+  IF (cartlify.shop_setting_now('receiptMoment') #>> '{}') IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT * INTO v_doc FROM cartlify.tax_documents AS d WHERE d.id = p_document_id;
+  IF NOT FOUND OR v_doc.kind NOT IN ('invoice', 'credit_note')
+     OR EXISTS (SELECT 1 FROM cartlify.tax_documents AS r WHERE r."documentId" = v_doc.id) THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_doc.kind = 'invoice' AND v_doc."correctsId" IS NULL THEN
+    v_kind := 'receipt';
+  ELSE
+    -- a credit note corrects the receipt of its invoice; an invoice that reverses a credit note the
+    -- return receipt of that credit note
+    SELECT r.id INTO v_corrects
+    FROM cartlify.tax_documents AS r
+    WHERE r."documentId" = v_doc."correctsId";
+    IF v_corrects IS NULL THEN
+      RETURN NULL;
+    END IF;
+    v_kind := CASE WHEN v_doc.kind = 'credit_note' THEN 'return_receipt' ELSE 'receipt' END;
+  END IF;
+
+  INSERT INTO cartlify.tax_documents (
+    kind, "orderId", "moneyLogId", "correctsId", "documentId", locale, currency, seller, buyer,
+    lines, totals, details, net, tax, gross, "taxCountry", "taxRule", "receiptState",
+    "receiptStateAt", "receiptNextAt"
+  )
+  VALUES (
+    v_kind, v_doc."orderId", v_doc."moneyLogId", v_corrects, v_doc.id, v_doc.locale, v_doc.currency,
+    v_doc.seller, v_doc.buyer, v_doc.lines, v_doc.totals,
+    jsonb_build_object('document', v_doc.series || '-' || v_doc.number),
+    v_doc.net, v_doc.tax, v_doc.gross, v_doc."taxCountry", v_doc."taxRule", 'pending',
+    clock_timestamp() AT TIME ZONE 'UTC', clock_timestamp() AT TIME ZONE 'UTC'
+  )
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+-- The receipt of the sale when the order is sent (receiptMoment shipment; a pickup is ready when it
+-- is marked sent), and after it the receipts of the credit notes and of the invoices that reversed
+-- them, which came before (a part refunded before the parcel went), in their order.
+CREATE OR REPLACE FUNCTION cartlify.orders_receipt_at_shipment () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_doc integer;
+BEGIN
+  IF (cartlify.shop_setting_now('receiptMoment') #>> '{}') IS DISTINCT FROM 'shipment' THEN
+    RETURN NULL;
+  END IF;
+
+  FOR v_doc IN
+    SELECT d.id
+    FROM cartlify.tax_documents AS d
+    WHERE d."orderId" = NEW.id AND d.kind IN ('invoice', 'credit_note')
+    ORDER BY d.id
+  LOOP
+    PERFORM cartlify.make_document_receipt(v_doc);
+  END LOOP;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_orders_receipt_at_shipment ON cartlify.orders;
+
+CREATE TRIGGER trg_orders_receipt_at_shipment
+AFTER UPDATE OF status ON cartlify.orders FOR EACH ROW
+WHEN (OLD.status = 'paid' AND NEW.status = 'shipped')
+EXECUTE FUNCTION cartlify.orders_receipt_at_shipment ();
+
+-- The answer of the provider for a receipt that waits, written by the worker of the receipts (the
+-- system): the provider that took it, the state (pending: to send again at p_next_at, or taken and
+-- registered later; registered; refused: its data needs a person, no more tries), what the provider
+-- gave (its number, the link to check it, the code and the text to print; null keeps what was
+-- there) and the last error. A receipt that does not wait any more (another try wrote it, an admin
+-- confirmed it by hand) is left as it is. True when the receipt became registered with this
+-- answer: the buyer gets the mail of the receipt once.
+CREATE OR REPLACE FUNCTION cartlify.record_receipt_result (
+  p_document_id integer,
+  p_provider text,
+  p_state text,
+  p_number text,
+  p_url text,
+  p_code text,
+  p_text text,
+  p_error text,
+  p_next_at timestamp
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_doc cartlify.tax_documents%ROWTYPE;
+  v_state cartlify."ReceiptState";
+BEGIN
+  IF NOT cartlify.is_system() THEN
+    RAISE EXCEPTION 'RECEIPT_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_state NOT IN ('pending', 'registered', 'refused') OR p_provider IS NULL
+     OR (p_state = 'pending' AND p_next_at IS NULL) THEN
+    RAISE EXCEPTION 'RECEIPT_RESULT_INVALID';
+  END IF;
+  v_state := p_state::cartlify."ReceiptState";
+
+  SELECT * INTO v_doc
+  FROM cartlify.tax_documents AS d
+  WHERE d.id = p_document_id AND d.kind IN ('receipt', 'return_receipt')
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'RECEIPT_NOT_FOUND';
+  END IF;
+  IF v_doc."receiptState" <> 'pending' THEN
+    RETURN false;
+  END IF;
+
+  UPDATE cartlify.tax_documents AS d
+  SET provider = p_provider,
+    "receiptState" = v_state,
+    "receiptStateAt" = CASE
+      WHEN v_state <> v_doc."receiptState" THEN clock_timestamp() AT TIME ZONE 'UTC'
+      ELSE d."receiptStateAt"
+    END,
+    "receiptNumber" = COALESCE(left(p_number, 100), d."receiptNumber"),
+    -- a link to check the receipt on https only (tax_documents_receipt_url_chk): another one is
+    -- not kept
+    "receiptUrl" = COALESCE(
+      CASE WHEN length(p_url) <= 2048 AND p_url ~ '^https://[^[:space:]]+$' THEN p_url END,
+      d."receiptUrl"
+    ),
+    -- the image of the code a provider gives, within a size: another one is not kept
+    "receiptCode" = COALESCE(CASE WHEN length(p_code) <= 200000 THEN p_code END, d."receiptCode"),
+    "receiptText" = COALESCE(left(p_text, 500), d."receiptText"),
+    "receiptAttempts" = d."receiptAttempts" + 1,
+    "receiptError" = left(p_error, 500),
+    "receiptNextAt" = CASE WHEN v_state = 'pending' THEN p_next_at END
+  WHERE d.id = p_document_id;
+
+  RETURN v_state = 'registered';
+END;
+$$;
+
+-- An admin or root made the receipt by hand at the fiscal service (the provider refused it, or does
+-- not answer for long): the receipt is confirmed with the number it got there, and the link when
+-- there is one; it is not sent any more. p_provider is the provider of the app. A receipt that
+-- is registered, or confirmed already, is not confirmed again (RECEIPT_STATE_INVALID).
+CREATE OR REPLACE FUNCTION cartlify.confirm_receipt_manual (
+  p_document_id integer,
+  p_provider text,
+  p_number text,
+  p_url text
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_doc cartlify.tax_documents%ROWTYPE;
+BEGIN
+  IF NOT cartlify.is_admin() OR cartlify.current_actor_id() IS NULL THEN
+    RAISE EXCEPTION 'RECEIPT_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+
+  -- the link the admin gives is shown to the buyer: https only
+  IF btrim(COALESCE(p_number, '')) = '' OR length(p_number) > 100 OR p_provider IS NULL
+     OR length(COALESCE(p_url, '')) > 2048
+     OR (btrim(COALESCE(p_url, '')) <> '' AND btrim(p_url) !~ '^https://[^[:space:]]+$') THEN
+    RAISE EXCEPTION 'RECEIPT_RESULT_INVALID';
+  END IF;
+
+  SELECT * INTO v_doc
+  FROM cartlify.tax_documents AS d
+  WHERE d.id = p_document_id AND d.kind IN ('receipt', 'return_receipt')
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'RECEIPT_NOT_FOUND';
+  END IF;
+  IF v_doc."receiptState" NOT IN ('pending', 'refused') THEN
+    RAISE EXCEPTION 'RECEIPT_STATE_INVALID';
+  END IF;
+
+  UPDATE cartlify.tax_documents AS d
+  SET provider = COALESCE(d.provider, p_provider),
+    "receiptState" = 'manual',
+    "receiptStateAt" = clock_timestamp() AT TIME ZONE 'UTC',
+    "receiptNumber" = btrim(p_number),
+    "receiptUrl" = NULLIF(btrim(COALESCE(p_url, '')), ''),
+    "receiptNextAt" = NULL,
+    "receiptConfirmedById" = cartlify.current_actor_id()
+  WHERE d.id = p_document_id;
+END;
+$$;
 
 ------------------------------------------------------------
 -- RETURNS: THE STATEMENTS OF WITHDRAWAL AND OF RETURN
@@ -6776,22 +9187,32 @@ $$;
 -- callers check who may (receive_return_items for an admin, create_return for the cancels that bring
 -- the goods back at once). Internal step: runs as the owner, the app has no execute right (db/01).
 -- All the results or none, on an order that is not cancelled (RETURN_ORDER_NOT_RETURNABLE: a cancel
--- puts the units back itself). p_results is a list of { itemId, quantity, goods, notAcceptedReason }:
--- the units of a row that waits for its goods (RETURN_ITEM_NOT_EXPECTED) get one of to_stock,
--- written_off, lost (the parcel confirmed first: receive_return_items asks for it), not_accepted
--- (with the reason, RETURN_NOT_ACCEPTED_REASON_REQUIRED) or not_arrived. A result for fewer units
--- than the row holds splits it: the units with the result are a row of their own, the rest waits
--- on, so one unit may come late or be refused alone; the money of each row is the price of its
--- units, and units whose money was settled ahead of the goods keep that state in both rows. The
--- units that come back move the stock (return_units_to_batches); the units that are not accepted
--- or never came have their money refused with the goods, which only a row with no money settled
--- takes (RETURN_ITEM_MONEY_SETTLED), nor goods not accepted whose item money already with the
--- buyer pays (a share no statement took: they are taken in or written off); goods paid ahead that
--- never came are not arrived with their money back. A row paid in part (the payment held only some of
--- it, return_row_paid) takes the result of all its units at once and is not refused until the rest
--- is paid (RETURN_ITEM_MONEY_SETTLED). The results are shaped first, then worked in the order of the
--- variants of the rows, so two admins that take in the same variants in another order do not
--- lock them crosswise. The statement is closed when every row has its result (refresh_return_state).
+-- puts the units back itself). p_results is a list of { itemId, quantity, goods, notAcceptedReason,
+-- paidUnits }: the units of a row that waits for its goods (RETURN_ITEM_NOT_EXPECTED) get one of
+-- to_stock, written_off, lost (the parcel confirmed first: receive_return_items asks for it),
+-- not_accepted (with the reason, RETURN_NOT_ACCEPTED_REASON_REQUIRED) or not_arrived. A result for
+-- fewer units than the row holds splits it: the units with the result are a row of their own, which
+-- names the row it was split off ("splitFromId"), the rest waits on, so one unit may come late or be
+-- refused alone; the money of each row is the price of its units, and units whose money was settled
+-- ahead of the goods keep that state in both rows. The units that come back move the stock
+-- (return_units_to_batches); the units that are not accepted or never came have their money refused
+-- with the goods, which only a row with no money settled takes (RETURN_ITEM_MONEY_SETTLED); goods paid
+-- ahead that never came are not arrived with their money back. A row paid in part (the payment held
+-- only some of it, return_row_paid) takes the result of all its units at once and is not refused until
+-- the rest is paid (RETURN_ITEM_MONEY_SETTLED).
+-- The units money already with the buyer was given for (a decision on a refund made by hand or on what
+-- a bank took: a unit bought back, or a part of its price off; money_item_units_left): the admin says
+-- how many of the units that came back (to_stock, written_off, lost) are such units (paidUnits, at
+-- most the units of the result and, all the results together, the units left: RETURN_PAID_UNITS_INVALID;
+-- none for a unit not accepted or not arrived), required while units of the item may still come in
+-- another statement (RETURN_PAID_UNITS_REQUIRED). When no other unit of the item is left to come (every
+-- unit of it is in a statement), there is no choice: the units that came back are marked by themselves,
+-- as many as are left, and the units the money pays are not refused (RETURN_ITEM_MONEY_SETTLED). The
+-- marks pay the rows (return_row_shares); a row the shop had paid another way already gives what the
+-- marks have no room for to a loss of the shop (record_return_paid_units), and a row they pay all of
+-- is refunded at once (return_settle_paid_rows). The results are shaped first, then worked in the
+-- order of the variants of the rows, so two admins that take in the same variants in another order do
+-- not lock them crosswise. The statement is closed when every row has its result (refresh_return_state).
 CREATE OR REPLACE FUNCTION cartlify.apply_return_results (p_return_id integer, p_results jsonb, p_actor integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -6809,19 +9230,22 @@ DECLARE
   v_target   integer;
   v_part     numeric;
   v_refused  boolean;
+  v_item     record;
+  v_marks    jsonb := '{}'::jsonb;
+  v_n        integer;
+  v_paid     integer;
+  v_auto     integer;
+  v_given_marks boolean;
+  v_marked   integer[] := ARRAY[]::integer[];
 BEGIN
   v_order_id := cartlify.lock_return_order (p_return_id);
-
   SELECT o.status INTO v_status FROM cartlify.orders AS o WHERE o.id = v_order_id;
-
   IF v_status = 'cancelled' THEN
     RAISE EXCEPTION 'RETURN_ORDER_NOT_RETURNABLE';
   END IF;
-
   IF p_results IS NULL OR jsonb_typeof(p_results) <> 'array' OR jsonb_array_length(p_results) = 0 THEN
     RAISE EXCEPTION 'RETURN_ITEMS_REQUIRED';
   END IF;
-
   -- the shape of every result, before anything is read of a row
   FOR v_result IN SELECT e.value FROM jsonb_array_elements(p_results) AS e LOOP
     IF jsonb_typeof(v_result) <> 'object'
@@ -6830,17 +9254,14 @@ BEGIN
        OR (v_result ->> 'itemId')::bigint > 2147483647 THEN
       RAISE EXCEPTION 'RETURN_ITEMS_INVALID';
     END IF;
-
     IF jsonb_typeof(v_result -> 'quantity') IS DISTINCT FROM 'number'
        OR (v_result ->> 'quantity') !~ '^[1-9][0-9]{0,8}$' THEN
       RAISE EXCEPTION 'RETURN_QUANTITY_INVALID';
     END IF;
-
     IF (v_result ->> 'goods') IS NULL
        OR (v_result ->> 'goods') NOT IN ('to_stock', 'written_off', 'not_accepted', 'lost', 'not_arrived') THEN
       RAISE EXCEPTION 'RETURN_GOODS_INVALID';
     END IF;
-
     IF (v_result ->> 'goods') = 'not_accepted' THEN
       IF (v_result ->> 'notAcceptedReason') IS NULL
          OR (v_result ->> 'notAcceptedReason') NOT IN ('unsealed', 'mixed', 'used', 'damaged', 'other') THEN
@@ -6849,12 +9270,115 @@ BEGIN
     ELSIF (v_result ->> 'notAcceptedReason') IS NOT NULL THEN
       RAISE EXCEPTION 'RETURN_GOODS_INVALID';
     END IF;
+    IF v_result ? 'paidUnits' AND (
+      jsonb_typeof(v_result -> 'paidUnits') IS DISTINCT FROM 'number'
+      OR (v_result ->> 'paidUnits') !~ '^[0-9]{1,9}$'
+      OR (v_result ->> 'paidUnits')::integer > (v_result ->> 'quantity')::integer
+      OR ((v_result ->> 'goods') IN ('not_accepted', 'not_arrived') AND (v_result ->> 'paidUnits')::integer > 0)
+    ) THEN
+      RAISE EXCEPTION 'RETURN_PAID_UNITS_INVALID';
+    END IF;
   END LOOP;
-
+  -- the units money already with the buyer pays, by the item of the rows: the units left, whether
+  -- another unit of the item may still come (a choice), and the marks of each result (given, or by
+  -- themselves when there is no choice: as many as are left, on the units that came back in order)
+  FOR v_item IN
+    SELECT
+      i."orderItemId" AS item_id,
+      cartlify.money_item_units_left (v_order_id, i."orderItemId") AS units_left,
+      -- a choice: a unit of the item may still come in another statement, or waits in another row
+      oi.quantity > (
+        SELECT COALESCE(SUM(x.quantity), 0)
+        FROM cartlify.return_items AS x
+        WHERE x."orderItemId" = i."orderItemId" AND x.money <> 'refused'
+      )
+      OR (
+        SELECT COALESCE(SUM(x.quantity), 0)
+        FROM cartlify.return_items AS x
+        WHERE x."orderItemId" = i."orderItemId" AND x.money <> 'refused' AND x.goods = 'expected'
+      ) > SUM((e.value ->> 'quantity')::integer) AS more_to_come
+    FROM jsonb_array_elements(p_results) AS e (value)
+    JOIN cartlify.return_items AS i ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
+    JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
+    GROUP BY i."orderItemId", oi.quantity
+  LOOP
+    IF v_item.units_left <= 0 THEN
+      IF EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(p_results) AS e (value)
+        JOIN cartlify.return_items AS i ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
+        WHERE i."orderItemId" = v_item.item_id AND COALESCE((e.value ->> 'paidUnits')::integer, 0) > 0
+      ) THEN
+        RAISE EXCEPTION 'RETURN_PAID_UNITS_INVALID';
+      END IF;
+      CONTINUE;
+    END IF;
+    v_paid := 0;
+    v_auto := v_item.units_left;
+    v_given_marks := false;
+    v_n := 0;
+    FOR v_result IN
+      SELECT e.value
+      FROM jsonb_array_elements(p_results) WITH ORDINALITY AS e (value, n)
+      JOIN cartlify.return_items AS i ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
+      WHERE i."orderItemId" = v_item.item_id
+      ORDER BY e.n
+    LOOP
+      v_n := v_n + 1;
+      IF (v_result ->> 'goods') IN ('to_stock', 'written_off', 'lost') THEN
+        IF v_item.more_to_come THEN
+          IF NOT v_result ? 'paidUnits' THEN
+            RAISE EXCEPTION 'RETURN_PAID_UNITS_REQUIRED';
+          END IF;
+          v_paid := v_paid + (v_result ->> 'paidUnits')::integer;
+          v_marks := v_marks || jsonb_build_object(v_item.item_id::text || ':' || v_n::text, (v_result ->> 'paidUnits')::integer);
+        ELSIF v_result ? 'paidUnits' THEN
+          -- no choice, the marks given: they must come to what is to be marked (below)
+          v_given_marks := true;
+          v_paid := v_paid + (v_result ->> 'paidUnits')::integer;
+          v_marks := v_marks || jsonb_build_object(v_item.item_id::text || ':' || v_n::text, (v_result ->> 'paidUnits')::integer);
+        ELSE
+          v_marks := v_marks || jsonb_build_object(
+            v_item.item_id::text || ':' || v_n::text,
+            LEAST(v_auto, (v_result ->> 'quantity')::integer)
+          );
+          v_paid := v_paid + LEAST(v_auto, (v_result ->> 'quantity')::integer);
+          v_auto := v_auto - LEAST(v_auto, (v_result ->> 'quantity')::integer);
+        END IF;
+      END IF;
+    END LOOP;
+    IF v_paid > v_item.units_left THEN
+      RAISE EXCEPTION 'RETURN_PAID_UNITS_INVALID';
+    END IF;
+    -- no other unit can come: the marks given are all the units left, or all the units that came
+    IF NOT v_item.more_to_come AND v_given_marks AND v_paid <> LEAST(v_item.units_left, (
+      SELECT COALESCE(SUM((e.value ->> 'quantity')::integer), 0)
+      FROM jsonb_array_elements(p_results) AS e (value)
+      JOIN cartlify.return_items AS i ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
+      WHERE i."orderItemId" = v_item.item_id AND (e.value ->> 'goods') IN ('to_stock', 'written_off', 'lost')
+    )) THEN
+      RAISE EXCEPTION 'RETURN_PAID_UNITS_INVALID';
+    END IF;
+    -- no other unit can bring them: the units the money pays are among the ones that came back,
+    -- never refused nor missing
+    IF NOT v_item.more_to_come AND v_paid < v_item.units_left AND EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(p_results) AS e (value)
+      JOIN cartlify.return_items AS i ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
+      WHERE i."orderItemId" = v_item.item_id AND (e.value ->> 'goods') IN ('not_accepted', 'not_arrived')
+    ) THEN
+      RAISE EXCEPTION 'RETURN_ITEM_MONEY_SETTLED';
+    END IF;
+  END LOOP;
   -- the results in the order of the variants of their rows (a row that is not there last: it is
   -- refused when its turn comes), the results of one row in the order they were given
   FOR v_result IN
-    SELECT e.value
+    SELECT e.value || jsonb_build_object('n', (
+      SELECT count(*)
+      FROM jsonb_array_elements(p_results) WITH ORDINALITY AS y (value, m)
+      JOIN cartlify.return_items AS j ON j.id = (y.value ->> 'itemId')::integer AND j."returnId" = p_return_id
+      WHERE j."orderItemId" = i."orderItemId" AND y.m <= e.n
+    ))
     FROM jsonb_array_elements(p_results) WITH ORDINALITY AS e (value, n)
     LEFT JOIN cartlify.return_items AS i
       ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
@@ -6864,26 +9388,21 @@ BEGIN
     v_goods := (v_result ->> 'goods')::cartlify."ReturnGoods";
     v_reason := (v_result ->> 'notAcceptedReason')::cartlify."ReturnNotAcceptedReason";
     v_quantity := (v_result ->> 'quantity')::integer;
-
     SELECT i.*, oi."unitPrice" AS "unitPrice", oi."variantId" AS "variantId"
     INTO v_row
     FROM cartlify.return_items AS i
     JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
     WHERE i.id = (v_result ->> 'itemId')::integer AND i."returnId" = p_return_id
     FOR UPDATE OF i;
-
     IF NOT FOUND THEN
       RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
     END IF;
-
     IF v_row.goods <> 'expected' THEN
       RAISE EXCEPTION 'RETURN_ITEM_NOT_EXPECTED';
     END IF;
-
     IF v_quantity > v_row.quantity THEN
       RAISE EXCEPTION 'RETURN_QUANTITY_EXCEEDED';
     END IF;
-
     -- money already on its way or back is not refused with the goods (a transfer that failed sent
     -- nothing); goods paid ahead that never came are not arrived with their money back (the shop
     -- gets it back outside the app)
@@ -6891,7 +9410,6 @@ BEGIN
        AND NOT (v_goods = 'not_arrived' AND v_row.money = 'refunded') THEN
       RAISE EXCEPTION 'RETURN_ITEM_MONEY_SETTLED';
     END IF;
-
     -- a row paid in part (the payment held only some of it, the rest goes outside the app) stays
     -- whole until the rest is paid: the result of all its units at once, and its goods not refused
     IF v_row.money IN ('not_refunded', 'failed', 'pending')
@@ -6900,36 +9418,26 @@ BEGIN
        AND (v_goods IN ('not_accepted', 'not_arrived') OR v_quantity < v_row.quantity) THEN
       RAISE EXCEPTION 'RETURN_ITEM_MONEY_SETTLED';
     END IF;
-
-    -- goods money already with the buyer pays (a share of a refund made by hand or of what a bank
-    -- took that no statement took yet, money_item_share_left) are as goods paid ahead: the shop
-    -- takes them in or writes them off, it does not refuse them
-    IF v_goods = 'not_accepted' AND cartlify.money_item_share_left (v_order_id, v_row."orderItemId") > 0 THEN
-      RAISE EXCEPTION 'RETURN_ITEM_MONEY_SETTLED';
-    END IF;
-
+    v_paid := COALESCE((v_marks ->> (v_row."orderItemId"::text || ':' || (v_result ->> 'n')))::integer, 0);
     v_refused := v_goods IN ('not_accepted', 'not_arrived') AND v_row.money IN ('not_refunded', 'failed');
-
     IF v_quantity < v_row.quantity THEN
-      -- the units with the result are a row of their own, the rest of the row waits on; the money of
-      -- the row goes by the units and the line of the money journal that covers the row covers both.
-      -- Units refused with their goods carry none of the money
+      -- the units with the result are a row of their own, which names the row it came of (the lines
+      -- of the money journal name that one), the rest of the row waits on; the money of the row goes
+      -- by the units. Units refused with their goods carry none of the money
       v_part := round(v_row.amount * v_quantity / v_row.quantity, 2);
-
       UPDATE cartlify.return_items AS i
       SET quantity = i.quantity - v_quantity,
-          amount = i.amount - v_part
+          amount = i.amount - v_part,
+          "paidUnits" = LEAST(i."paidUnits", i.quantity - v_quantity)
       WHERE i.id = v_row.id;
-
       INSERT INTO cartlify.return_items (
         "returnId", "orderItemId", quantity, goods, "notAcceptedReason", money, amount, "amountNote",
-        "moneyLogId", "goodsSetAt", "goodsSetById", "createdAt", "updatedAt"
+        "paidUnits", "splitFromId", "goodsSetAt", "goodsSetById", "createdAt", "updatedAt"
       )
       VALUES (
         p_return_id, v_row."orderItemId", v_quantity, v_goods, v_reason,
         CASE WHEN v_refused THEN 'refused'::cartlify."ReturnMoney" ELSE v_row.money END,
-        v_part, v_row."amountNote",
-        CASE WHEN v_refused THEN NULL ELSE v_row."moneyLogId" END,
+        v_part, v_row."amountNote", v_paid, v_row.id,
         v_now, v_actor, v_row."createdAt", v_now
       )
       RETURNING id INTO v_target;
@@ -6938,19 +9446,25 @@ BEGIN
       SET goods = v_goods,
           "notAcceptedReason" = v_reason,
           money = CASE WHEN v_refused THEN 'refused' ELSE i.money END,
-          "moneyLogId" = CASE WHEN v_refused THEN NULL ELSE i."moneyLogId" END,
+          "paidUnits" = v_paid,
           "goodsSetAt" = v_now,
           "goodsSetById" = v_actor
       WHERE i.id = v_row.id;
-
       v_target := v_row.id;
     END IF;
-
+    IF v_paid > 0 THEN
+      v_marked := v_marked || v_target;
+    END IF;
     IF v_goods IN ('to_stock', 'written_off', 'lost') THEN
       PERFORM cartlify.return_units_to_batches (v_order_id, v_row."variantId", v_quantity, v_target, v_goods);
     END IF;
   END LOOP;
-
+  -- the marks pay the rows: what a row paid another way already has no room for is a loss, a row
+  -- they pay all of is refunded
+  FOR v_n IN SELECT unnest(v_marked) LOOP
+    PERFORM cartlify.record_return_paid_units (v_n);
+  END LOOP;
+  PERFORM cartlify.return_settle_paid_rows (v_order_id);
   PERFORM cartlify.refresh_return_state (v_order_id);
 END;
 $$;
@@ -7678,9 +10192,9 @@ BEFORE UPDATE ON cartlify.returns FOR EACH ROW
 EXECUTE FUNCTION cartlify.returns_update_columns ();
 
 -- Guard of the rows: the system functions that run as the owner set the result of the goods, the
--- money, the quantity a split leaves, the parcel a row not accepted went back in and the statement
--- a row moves to when its units leave for a new one (split_return_rows); the item the row names
--- never changes.
+-- money (and the units money already with the buyer pays: the marks, paidUnits, paidDelivery), the quantity a split leaves, the
+-- parcel a row not accepted went back in and the statement a row moves to when its units leave for
+-- a new one (split_return_rows); the item the row names never changes.
 CREATE OR REPLACE FUNCTION cartlify.return_items_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -7695,7 +10209,7 @@ BEGIN
   IF current_user = 'cartlify_owner'
      AND v_changed <@ ARRAY[
        'quantity', 'goods', 'notAcceptedReason', 'money', 'amount', 'amountNote', 'refusedCode',
-       'goodsSetAt', 'goodsSetById', 'moneyLogId', 'backShipmentId', 'returnId', 'updatedAt'
+       'goodsSetAt', 'goodsSetById', 'paidUnits', 'paidDelivery', 'backShipmentId', 'returnId', 'updatedAt'
      ] THEN
     RETURN NEW;
   END IF;
@@ -7751,8 +10265,57 @@ EXECUTE FUNCTION cartlify.order_batch_allocations_update_columns ();
 -- it was asked. Internal step: runs with the caller rights, and the policy of the journal
 -- (money_log_insert_owner, db/03) lets only the system functions that run as the owner write; the
 -- app has no execute right (db/01). Each function that moves money calls it in the same
--- transaction, a line at a time. MONEY_LOG_LINE_INVALID for a line that is not an object.
+-- transaction; the lines of one movement for the goods and the delivery of a statement that has no
+-- transfer to follow go in one statement (log_money_changes), so its credit note holds them all.
+-- MONEY_LOG_LINE_INVALID for a line that is not an object.
 CREATE OR REPLACE FUNCTION cartlify.log_money_change (p_line jsonb) RETURNS integer LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_row cartlify.money_log := cartlify.money_log_row_of (p_line);
+  v_id  integer;
+BEGIN
+  INSERT INTO cartlify.money_log SELECT (v_row).*
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+-- The same for the lines of one movement (a list of objects, in their order), written by one
+-- statement: the triggers after it see all of them (the credit note of the movement holds them
+-- all, make_money_tax_document). Returns their ids in that order. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.log_money_changes (p_lines jsonb) RETURNS integer[] LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_rows cartlify.money_log[] := ARRAY[]::cartlify.money_log[];
+  v_ids  integer[];
+  e      jsonb;
+BEGIN
+  IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' THEN
+    RAISE EXCEPTION 'MONEY_LOG_LINE_INVALID';
+  END IF;
+
+  FOR e IN SELECT x.value FROM jsonb_array_elements(p_lines) WITH ORDINALITY AS x (value, o) ORDER BY x.o LOOP
+    v_rows := v_rows || cartlify.money_log_row_of (e);
+  END LOOP;
+
+  WITH written AS (
+    INSERT INTO cartlify.money_log SELECT * FROM unnest(v_rows)
+    RETURNING id
+  )
+  SELECT COALESCE(array_agg(w.id ORDER BY w.id), ARRAY[]::integer[]) INTO v_ids FROM written AS w;
+
+  RETURN v_ids;
+END;
+$$;
+
+-- The row of the money journal a line given to log_money_change becomes (its id taken from the
+-- sequence, in the order the rows are made). Internal step.
+CREATE OR REPLACE FUNCTION cartlify.money_log_row_of (p_line jsonb) RETURNS cartlify.money_log LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -7760,7 +10323,6 @@ DECLARE
   v_row      cartlify.money_log;
   v_actor_id integer := cartlify.current_actor_id();
   v_now      timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
-  v_id       integer;
 BEGIN
   IF p_line IS NULL OR jsonb_typeof(p_line) <> 'object' THEN
     RAISE EXCEPTION 'MONEY_LOG_LINE_INVALID';
@@ -7792,10 +10354,7 @@ BEGIN
     v_row."stateAt" := COALESCE(v_row."stateAt", v_now);
   END IF;
 
-  INSERT INTO cartlify.money_log SELECT (v_row).*
-  RETURNING id INTO v_id;
-
-  RETURN v_id;
+  RETURN v_row;
 END;
 $$;
 
@@ -8142,25 +10701,28 @@ BEGIN
       -- with a part of what it owed owes the rest (outside the app): it waits again, naming no line;
       -- a row that came of a row the line paid (its units with a result of their own) is paid with it
       IF v_changed AND v_first.purpose = 'return' THEN
-        WITH paid AS (
+        WITH lines AS (
+          SELECT l.id FROM cartlify.money_log AS l WHERE l.id = ANY (v_ids) AND l.part = 'goods'
+        ),
+        paid AS (
           SELECT
             i.id,
             EXISTS (
               SELECT 1
-              FROM cartlify.money_log AS g
-              CROSS JOIN LATERAL jsonb_array_elements(g.meta) AS e (value)
-              WHERE g.id = i."moneyLogId" AND (e.value ->> 'returnItemId')::integer = i.id
+              FROM lines AS g
+              JOIN cartlify.money_log AS m ON m.id = g.id
+              CROSS JOIN LATERAL jsonb_array_elements(m.meta) AS e (value)
+              WHERE (e.value ->> 'returnItemId')::integer = i.id
             ) AND cartlify.return_row_owed (i.id) > 0 AS owes
           FROM cartlify.return_items AS i
           WHERE i.money = 'pending'
-            AND i."moneyLogId" IN (
-              SELECT l.id FROM cartlify.money_log AS l WHERE l.id = ANY (v_ids) AND l.part = 'goods'
+            AND i.id IN (
+              SELECT n.return_item_id FROM lines AS g CROSS JOIN LATERAL cartlify.money_line_return_rows (g.id) AS n
             )
         ),
         refunded AS (
           UPDATE cartlify.return_items AS i
-          SET money = CASE WHEN p.owes THEN 'not_refunded'::cartlify."ReturnMoney" ELSE 'refunded'::cartlify."ReturnMoney" END,
-              "moneyLogId" = CASE WHEN p.owes THEN NULL ELSE i."moneyLogId" END
+          SET money = CASE WHEN p.owes THEN 'not_refunded'::cartlify."ReturnMoney" ELSE 'refunded'::cartlify."ReturnMoney" END
           FROM paid AS p
           WHERE p.id = i.id
           RETURNING i.id
@@ -8218,17 +10780,19 @@ BEGIN
         PERFORM cartlify.remove_order_hold (v_line."orderId", 'hand_refund', to_jsonb(v_line.id));
       END IF;
 
-      -- the rows of a statement that the goods line paid go back to waiting for their money: they
-      -- name the line of the failure now; a row that was refunded opens its statement again
+      -- the rows of a statement that the goods line paid (the rows it names and the rows split off
+      -- them) go back to waiting for their money, the line of the failure names them; a row that was
+      -- refunded opens its statement again
       IF v_first.purpose = 'return' AND v_line.part = 'goods' THEN
         SELECT COALESCE(array_agg(i.id ORDER BY i.id), ARRAY[]::integer[]), COALESCE(bool_or(i.money = 'refunded'), false)
         INTO v_taken, v_sent_back_rows
         FROM cartlify.return_items AS i
-        WHERE i."moneyLogId" = v_line.id AND i.money IN ('pending', 'refunded');
-
+        WHERE i.id IN (SELECT n.return_item_id FROM cartlify.money_line_return_rows (v_line.id) AS n)
+          AND i.money IN ('pending', 'refunded')
+          AND cartlify.return_row_line_before (i.id, v_fail_id) = v_line.id;
         UPDATE cartlify.return_items AS i
-        SET money = 'failed', "moneyLogId" = v_fail_id
-        WHERE i."moneyLogId" = v_line.id AND i.money IN ('pending', 'refunded');
+        SET money = 'failed'
+        WHERE i.id = ANY (v_taken);
 
         v_row_ids := v_row_ids || v_taken;
         v_reopen := v_reopen OR v_sent_back_rows;
@@ -8245,12 +10809,11 @@ BEGIN
               CASE WHEN jsonb_typeof(v_line.meta) = 'array' THEN v_line.meta ELSE '[]'::jsonb END
             ) AS e (value)
           )
-          AND i."moneyLogId" IS DISTINCT FROM v_fail_id
+          AND NOT (i.id = ANY (v_row_ids))
           AND i.money IN ('refunded', 'not_refunded')
           AND cartlify.return_row_owed (i.id) > 0;
-
         UPDATE cartlify.return_items AS i
-        SET money = 'failed', "moneyLogId" = v_fail_id
+        SET money = 'failed'
         WHERE i.id = ANY (v_taken);
 
         v_row_ids := v_row_ids || v_taken;
@@ -8550,7 +11113,7 @@ $$;
 -- dispute with the id of the row), made sure of at every call that is not stale; its end lets the
 -- order go. A dispute of a late payment, or of an order already sent, holds nothing. A lost dispute
 -- of the payment of an order not sent shares what the bank took among its items and its delivery
--- (share_money_line_in): the statement the system makes to cancel it takes the money as covered; so
+-- (share_money_line_in): the statement the system makes to cancel it is paid by that money; so
 -- does one of an order the shop cancelled before it was sent (no current send) while a statement of
 -- it waits (not closed). A line that is all of the payment with no other money before it is shared
 -- so whatever the order is (money_line_is_whole). Of an order sent, or cancelled with its statements
@@ -9043,7 +11606,7 @@ $$;
 -- failed) become compensation (the shop gave the money for something the app does not follow;
 -- money for goods is decided before, decide_money_use). cancel: they are shared among the items and
 -- the delivery by their sums (share_money_line_in), money the buyer has back of the goods: the
--- statement of the cancel the app makes in the same transaction takes it as covered. A warning is
+-- statement of the cancel the app makes in the same transaction is paid by it. A warning is
 -- only let go: the statement and the transfer of a cancel are the app's. A refund by hand decided
 -- before, or one that failed, is left as it is. Every hold of the reason goes, the other reasons
 -- stay. Root or an admin root allowed to handle the money (money_manager), with an account, only (ORDER_HOLD_FORBIDDEN, the system too). ORDER_HOLD_DECISION_INVALID
@@ -9132,129 +11695,61 @@ BEGIN
 END;
 $$;
 
--- The rows of the open statements of an order whose money is owed and that the shares of money
--- already with the buyer cover all of (with the delivery that goes with them) get it at once: a
--- movement money.refund, sent, no key, the goods of the rows and the parts covered, nothing asked of
--- the provider, of the payment of the order (write_money_use after a decision, keep_return_goods
--- after goods kept). Returns [{ returnId, itemIds }]. The caller locked the order and refreshes the
--- state of its statements. Internal step.
+-- What a decision of root gives the rows of statements that wait for their money: the units of the
+-- rows of its items whose goods are in (on the shelf, written off, lost) and whose money is owed are
+-- marked as paid by money already with the buyer ("paidUnits"; the rows that came first first, as many
+-- as the shares of the item have units left, money_item_units_left), and a row it pays all of is
+-- refunded at once with the delivery that goes with them when its shares cover it
+-- (return_settle_paid_rows). A row whose goods are still on
+-- their way is marked at the reception. Nothing is asked of the provider. The answer is a list of
+-- { returnId, itemIds }: the rows refunded. Internal step.
 CREATE OR REPLACE FUNCTION cartlify.cover_open_statements (p_order_id integer) RETURNS jsonb LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_pay       record;
+  v_row       record;
+  v_units     integer;
+  v_settled   integer[];
   v_statement record;
-  v_ids       integer[];
-  v_due       numeric;
-  v_goods     numeric;
-  v_base      jsonb;
-  v_goods_id  integer;
-  v_needs     jsonb;
   v_covered   jsonb := '[]'::jsonb;
 BEGIN
-  SELECT o."userId", p.provider, p."paymentId"
-  INTO v_pay
-  FROM cartlify.orders AS o
-  LEFT JOIN LATERAL (
-    SELECT l.provider, l."paymentId"
-    FROM cartlify.money_log AS l
-    WHERE l."orderId" = o.id AND l.event = 'money.payment'
-    ORDER BY l.id
-    LIMIT 1
-  ) AS p ON true
-  WHERE o.id = p_order_id;
-
-  FOR v_statement IN
-    SELECT r.id
-    FROM cartlify.returns AS r
+  FOR v_row IN
+    SELECT i.id, i."orderItemId", i.quantity, i."paidUnits"
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
     WHERE r."orderId" = p_order_id
       AND r."closedAt" IS NULL
       AND (r.source <> 'form_manual' OR r."acceptedAt" IS NOT NULL)
-    ORDER BY r.id
-  LOOP
-    SELECT COALESCE(array_agg(i.id ORDER BY i.id), ARRAY[]::integer[])
-    INTO v_ids
-    FROM cartlify.return_items AS i
-    WHERE i."returnId" = v_statement.id
       AND i.money IN ('not_refunded', 'failed')
-      AND (i.goods IN ('to_stock', 'written_off', 'lost') OR (i.goods = 'expected' AND EXISTS (
-        SELECT 1 FROM cartlify.order_shipments AS sh
-        WHERE sh."returnId" = v_statement.id AND sh.direction = 'to_shop' AND sh."confirmedAt" IS NOT NULL
-      )))
-      AND cartlify.return_row_owed (i.id) > 0
-      AND cartlify.cover_return_rows (v_statement.id, ARRAY[i.id], 0, cartlify.return_row_owed (i.id), NULL) >= cartlify.return_row_owed (i.id);
-
-    CONTINUE WHEN cardinality(v_ids) = 0;
-
-    -- what the rows still owe, worked out before the lines that pay it are written
-    SELECT jsonb_object_agg(i.id::text, cartlify.return_row_owed (i.id)), SUM(cartlify.return_row_owed (i.id))
-    INTO v_needs, v_goods
-    FROM cartlify.return_items AS i
-    WHERE i.id = ANY (v_ids);
-    v_due := cartlify.return_delivery_due (p_order_id, v_ids);
-
-    -- all of it covered, the delivery that goes with the rows too, or nothing now
-    CONTINUE WHEN cartlify.cover_return_rows (v_statement.id, v_ids, v_due, v_goods + v_due, NULL) < v_goods + v_due;
-
-    v_base := jsonb_build_object(
-      'event', 'money.refund',
-      'purpose', 'return',
-      'orderId', p_order_id,
-      'userId', v_pay."userId",
-      'returnId', v_statement.id,
-      'provider', v_pay.provider,
-      'paymentId', v_pay."paymentId",
-      'state', 'sent'
-    );
-
-    v_goods_id := cartlify.log_money_change (
-      v_base || jsonb_build_object(
-        'part', 'goods',
-        'amount', -v_goods,
-        'meta', (
-          SELECT jsonb_agg(
-            jsonb_build_object(
-              'returnItemId', i.id, 'productId', oi."productId", 'variantId', oi."variantId",
-              'amount', (v_needs ->> i.id::text)::numeric,
-              'quantity', i.quantity - cartlify.return_row_units_out (i.id)
-            )
-            ORDER BY i.id
-          )
-          FROM cartlify.return_items AS i
-          JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
-          WHERE i.id = ANY (v_ids)
-        )
-      )
-    );
-
-    IF v_due > 0 THEN
-      PERFORM cartlify.log_money_change (
-        v_base || jsonb_build_object(
-          'part', 'delivery',
-          'amount', -v_due,
-          'meta', jsonb_build_array(jsonb_build_object('returnItemId', v_ids[cardinality(v_ids)], 'amount', v_due))
-        )
-      );
-    END IF;
-
-    PERFORM cartlify.cover_return_rows (v_statement.id, v_ids, v_due, v_goods + v_due, v_base, v_needs);
-
+      AND i.goods IN ('to_stock', 'written_off', 'lost')
+      AND i."paidUnits" < i.quantity
+    ORDER BY COALESCE(i."goodsSetAt", i."createdAt"), r."createdAt", r.id, i.id
+  LOOP
+    v_units := LEAST(v_row.quantity - v_row."paidUnits", cartlify.money_item_units_left (p_order_id, v_row."orderItemId"));
+    CONTINUE WHEN v_units <= 0;
     UPDATE cartlify.return_items AS i
-    SET money = 'refunded', "moneyLogId" = v_goods_id
-    WHERE i.id = ANY (v_ids);
-
-    v_covered := v_covered || jsonb_build_array(jsonb_build_object('returnId', v_statement.id, 'itemIds', to_jsonb(v_ids)));
+    SET "paidUnits" = i."paidUnits" + v_units
+    WHERE i.id = v_row.id;
   END LOOP;
-
+  v_settled := cartlify.return_settle_paid_rows (p_order_id);
+  FOR v_statement IN
+    SELECT i."returnId" AS id, array_agg(i.id ORDER BY i.id) AS ids
+    FROM cartlify.return_items AS i
+    WHERE i.id = ANY (v_settled)
+    GROUP BY i."returnId"
+    ORDER BY i."returnId"
+  LOOP
+    v_covered := v_covered || jsonb_build_array(jsonb_build_object('returnId', v_statement.id, 'itemIds', to_jsonb(v_statement.ids)));
+  END LOOP;
   RETURN v_covered;
 END;
 $$;
 
 -- Writes what a line of money given back by hand (money.refund, purpose hand) or taken by a bank
 -- (money.dispute_withdrawn) of an order was for (the callers checked who), and writes it again
--- while no line took its shares (a part covered of a statement, money the buyer gave back, a share
--- root gave up: a line that names it), MONEY_DECISION_DONE
+-- while nothing took its shares (a row of a statement its marks paid, return_row_shares; money the
+-- buyer gave back, a share root gave up: a line that names it), MONEY_DECISION_DONE
 -- once one did and for a line that failed; the new split takes the place of the old one: p_items,
 -- a list of { orderItemId, quantity, amount } (items of the order, units of it, a sum to the cent
 -- above 0: MONEY_DECISION_INVALID; never more than the units cost, the decisions of the order
@@ -9320,6 +11815,8 @@ BEGIN
     AND EXISTS (
       SELECT 1 FROM cartlify.money_log AS u WHERE u."coversId" = v_line.id AND u.event <> 'money.refund_failed'
     )
+  ) OR EXISTS (
+    SELECT 1 FROM cartlify.return_row_shares (v_line."orderId") AS sh WHERE sh.source_id = v_line.id
   ) THEN
     RAISE EXCEPTION 'MONEY_DECISION_DONE';
   END IF;
@@ -9405,7 +11902,8 @@ BEGIN
     v_meta := v_meta || jsonb_build_array(
       jsonb_build_object(
         'orderItemId', v_of.id, 'productId', v_of."productId", 'variantId', v_of."variantId",
-        'quantity', v_quantity, 'unitPrice', v_of."unitPrice", 'amount', v_amount
+        'quantity', v_quantity, 'unitPrice', v_of."unitPrice", 'amount', v_amount,
+        'at', (now() AT TIME ZONE 'UTC')::timestamp(3)
       )
     );
     v_sum := v_sum + v_amount;
@@ -9422,7 +11920,9 @@ BEGIN
       RAISE EXCEPTION 'MONEY_DECISION_EXCEEDS';
     END IF;
 
-    v_meta := v_meta || jsonb_build_array(jsonb_build_object('delivery', v_delivery));
+    v_meta := v_meta || jsonb_build_array(jsonb_build_object(
+      'delivery', v_delivery, 'at', (now() AT TIME ZONE 'UTC')::timestamp(3)
+    ));
     v_sum := v_sum + v_delivery;
   END IF;
 
@@ -9536,9 +12036,9 @@ $$;
 
 -- What the statements of an order paid for an item of it (the delivery with p_order_item_id NULL)
 -- with money of their own: the goods of their transfers, on their way or sent, and of the money
--- sent outside the app for the rows of the item (the parts delivery for the delivery), less what
--- money already with the buyer covered of them (the parts covered, which are a share of a decision
--- and are counted there); a failure gives its part back. Internal step.
+-- sent outside the app for the rows of the item (the parts delivery for the delivery); a failure
+-- gives its part back. What money already with the buyer paid of the rows is a share of a decision
+-- and is counted there. Internal step.
 CREATE OR REPLACE FUNCTION cartlify.money_item_statements_paid (p_order_id integer, p_order_item_id integer) RETURNS numeric LANGUAGE sql STABLE
 SET
   search_path = cartlify,
@@ -9546,7 +12046,6 @@ SET
   SELECT COALESCE(
     SUM(
       CASE WHEN l.event = 'money.refund_failed' THEN -1 ELSE 1 END
-      * CASE WHEN l.part = 'covered' THEN -1 ELSE 1 END
       * COALESCE((e.value ->> 'amount')::numeric, 0)
     ),
     0
@@ -9567,11 +12066,6 @@ SET
         )
       )
       OR (l.part = 'delivery' AND p_order_item_id IS NULL)
-      OR (
-        l.part = 'covered'
-        AND (e.value ->> 'returnItemId') IS NOT NULL
-        AND (e.value ->> 'orderItemId')::integer IS NOT DISTINCT FROM p_order_item_id
-      )
     )
 $$;
 
@@ -10419,29 +12913,159 @@ SET
   )
 $$;
 
--- The sum of a statement the buyer has had back: what its parts of the goods, the delivery and the
--- way back gave less the deduction and what failed, sent by the provider, outside the app or by
--- money already there. A part covered says where the money came from and is not counted again,
--- unless that money never reached the buyer (money_source_lost): the rows keep their money, the
--- statement owes the sum again. Internal step.
+-- The units of an item of an order that decisions gave money already with the buyer for (the units
+-- of the shares of the item, money_source_lost aside, at most the units bought: shares a line had
+-- among all the units of the order are on the same units) and that no row of a statement is marked
+-- with yet: a unit the reception may mark as one that money pays. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.money_item_units_left (p_order_id integer, p_order_item_id integer) RETURNS integer LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT GREATEST(
+    0,
+    LEAST(
+      (SELECT oi.quantity FROM cartlify.order_items AS oi WHERE oi.id = p_order_item_id),
+      COALESCE((
+      SELECT SUM((x.e ->> 'quantity')::integer)
+      FROM cartlify.money_log AS l
+      CROSS JOIN LATERAL jsonb_array_elements(l.meta) AS x (e)
+      WHERE l."orderId" = p_order_id
+        AND l."moneyUse" IS NOT NULL
+        AND jsonb_typeof(l.meta) = 'array'
+        AND ((l.event = 'money.refund' AND l.purpose = 'hand') OR l.event = 'money.dispute_withdrawn')
+        AND NOT cartlify.money_source_lost (l.id)
+        AND x.e ? 'orderItemId'
+        AND x.e ? 'amount'
+        AND (x.e ->> 'orderItemId')::integer = p_order_item_id
+    ), 0))
+    - COALESCE((
+      SELECT SUM(i."paidUnits")
+      FROM cartlify.return_items AS i
+      JOIN cartlify.returns AS r ON r.id = i."returnId"
+      WHERE r."orderId" = p_order_id AND i."orderItemId" = p_order_item_id AND i.money <> 'refused'
+    ), 0)
+  )::integer
+$$;
+
+-- The rows of the statements of an order whose goods are in and whose money is owed that the money
+-- already with the buyer pays all of by their marks (return_row_shares, nothing owed: return_row_owed):
+-- refunded now, with no line (the money moved once), a statement at a time, with the delivery that
+-- goes back with them when the shares of the delivery cover it (write_return_cover); a delivery no
+-- share covers goes by a transfer, and the rows with it (nothing owed of them, they wait). The
+-- statements count their sums again. The answer is the rows refunded. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.return_settle_paid_rows (p_order_id integer) RETURNS integer[] LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_statement record;
+  v_due       numeric;
+  v_ids       integer[] := ARRAY[]::integer[];
+BEGIN
+  FOR v_statement IN
+    SELECT i."returnId" AS id, array_agg(i.id ORDER BY i.id) AS ids
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
+    WHERE r."orderId" = p_order_id
+      AND i."paidUnits" > 0
+      AND i.money IN ('not_refunded', 'failed')
+      AND i.goods IN ('to_stock', 'written_off', 'lost')
+      AND cartlify.return_row_owed (i.id) <= 0
+    GROUP BY i."returnId"
+    ORDER BY i."returnId"
+  LOOP
+    v_due := cartlify.return_delivery_due (p_order_id, v_statement.ids);
+    CONTINUE WHEN v_due > 0
+      AND cartlify.cover_return_rows (v_statement.id, v_statement.ids, v_due, v_due) < v_due;
+    UPDATE cartlify.return_items AS i
+    SET money = 'refunded'
+    WHERE i.id = ANY (v_statement.ids);
+    IF v_due > 0 THEN
+      PERFORM cartlify.write_return_cover (v_statement.id, v_statement.ids, v_due, v_due);
+    END IF;
+    v_ids := v_ids || v_statement.ids;
+  END LOOP;
+  UPDATE cartlify.returns AS r
+  SET "refundedTotal" = cartlify.return_refunded_total (r.id)
+  WHERE r."orderId" = p_order_id;
+  RETURN v_ids;
+END;
+$$;
+
+-- What the reception finds when it marks units money already with the buyer pays on a row the shop had
+-- already paid another way (a transfer ahead of the goods, the proof of the parcel): the shares of the
+-- marks the row has no room for are a loss of the shop, written into the lines of the shares, the
+-- latest first ({ lost, lostOrderItemId, lostReturnItemId }: a correction of what the decision was
+-- for, no line; the tax of it is turned round, money_decision_tax_shares). Internal step: runs as the
+-- owner (the guard of the journal lets the owner write the loss only).
+CREATE OR REPLACE FUNCTION cartlify.record_return_paid_units (p_item_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_row   record;
+  v_over  numeric;
+  v_share record;
+  v_lost  numeric;
+BEGIN
+  SELECT i.id, i."orderItemId", i.amount, r."orderId"
+  INTO v_row
+  FROM cartlify.return_items AS i
+  JOIN cartlify.returns AS r ON r.id = i."returnId"
+  WHERE i.id = p_item_id;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+  v_over := cartlify.return_row_paid (v_row.id) - v_row.amount;
+  IF v_over <= 0 THEN
+    RETURN;
+  END IF;
+  FOR v_share IN
+    SELECT sh.source_id, sh.amount
+    FROM cartlify.return_row_shares (v_row."orderId") AS sh
+    WHERE sh.return_item_id = v_row.id AND sh.part = 'goods' AND sh.amount > 0
+    ORDER BY sh.at DESC, sh.source_id DESC
+  LOOP
+    EXIT WHEN v_over <= 0;
+    v_lost := LEAST(v_share.amount, v_over);
+    UPDATE cartlify.money_log AS l
+    SET meta = l.meta || jsonb_build_array(jsonb_build_object(
+      'lost', v_lost, 'lostOrderItemId', v_row."orderItemId", 'lostReturnItemId', v_row.id
+    ))
+    WHERE l.id = v_share.source_id;
+    v_over := v_over - v_lost;
+  END LOOP;
+END;
+$$;
+
+-- The sum of a statement the buyer has had back: what its lines of the goods, the delivery and the
+-- way back gave less the deduction and what failed, sent by the provider or outside the app, and
+-- what money already with the buyer pays of its rows by their marks (return_row_shares; never money
+-- that did not reach the buyer, money_source_lost: the statement owes that sum again). Internal step.
 CREATE OR REPLACE FUNCTION cartlify.return_refunded_total (p_return_id integer) RETURNS numeric LANGUAGE sql STABLE
 SET
   search_path = cartlify,
   pg_temp AS $$
-  SELECT COALESCE(-SUM(l.amount), 0)
-  FROM cartlify.money_log AS l
-  WHERE l."returnId" = p_return_id
-    AND l.purpose <> 'shipping'
-    AND NOT (
-      l.part = 'covered'
-      AND NOT cartlify.money_source_lost (
-        CASE WHEN l.event = 'money.refund_failed'
-          THEN (SELECT c."coversId" FROM cartlify.money_log AS c WHERE c.id = l."coversId")
-          ELSE l."coversId"
-        END
-      )
+  SELECT COALESCE(
+      (
+        SELECT -SUM(l.amount)
+        FROM cartlify.money_log AS l
+        WHERE l."returnId" = p_return_id AND l.purpose <> 'shipping'
+      ),
+      0
+    )
+    + COALESCE(
+      (
+        SELECT SUM(sh.amount)
+        FROM cartlify.return_row_shares (
+          (SELECT r."orderId" FROM cartlify.returns AS r WHERE r.id = p_return_id)
+        ) AS sh
+        WHERE sh.return_id = p_return_id
+      ),
+      0
     )
 $$;
+
 -- The shares of the money of an order that decisions gave its items and its delivery: one row a line
 -- and an item (order_item_id, NULL for the delivery), from the meta of the decided lines of money
 -- given back by hand or taken by a bank whose money reached the buyer (money_source_lost;
@@ -10461,166 +13085,53 @@ SET
     AND jsonb_typeof(l.meta) = 'array'
     AND ((l.event = 'money.refund' AND l.purpose = 'hand') OR l.event = 'money.dispute_withdrawn')
     AND NOT cartlify.money_source_lost (l.id)
+    AND (e.value ? 'amount' OR e.value ? 'delivery')
 $$;
 
--- What a share has left for the transfers: the share less the parts covered that name its line and
--- its item (or the delivery), with the failures of their transfers, which give a part back, and less
--- what the buyer gave back of it outside the app and what root gave up of it (money.received and
--- money.share_moved that name the line: record_overpaid_received, lose_overpaid). Never below 0.
--- Internal step.
-CREATE OR REPLACE FUNCTION cartlify.money_share_left (p_source_id integer, p_order_item_id integer) RETURNS numeric LANGUAGE sql STABLE
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-  SELECT GREATEST(
-    0,
-    COALESCE(
-      (
-        SELECT SUM(s.amount)
-        FROM cartlify.money_shares_of_order (
-          (SELECT l."orderId" FROM cartlify.money_log AS l WHERE l.id = p_source_id)
-        ) AS s
-        WHERE s.source_id = p_source_id AND s.order_item_id IS NOT DISTINCT FROM p_order_item_id
-      ),
-      0
-    )
-    - COALESCE(
-      (
-        SELECT SUM(c.amount)
-        FROM cartlify.money_log AS c
-        WHERE c.part = 'covered'
-          AND c.event IN ('money.refund', 'money.outside')
-          AND c."coversId" = p_source_id
-          AND (c.meta -> 0 ->> 'orderItemId')::integer IS NOT DISTINCT FROM p_order_item_id
-      ),
-      0
-    )
-    - COALESCE(
-      (
-        SELECT SUM(f.amount)
-        FROM cartlify.money_log AS f
-        JOIN cartlify.money_log AS c ON c.id = f."coversId"
-        WHERE f.event = 'money.refund_failed'
-          AND c.part = 'covered'
-          AND c."coversId" = p_source_id
-          AND (c.meta -> 0 ->> 'orderItemId')::integer IS NOT DISTINCT FROM p_order_item_id
-      ),
-      0
-    )
-    - COALESCE(
-      (
-        SELECT SUM(COALESCE((r.meta -> 0 ->> 'amount')::numeric, (r.meta -> 0 ->> 'delivery')::numeric))
-        FROM cartlify.money_log AS r
-        WHERE r.event IN ('money.received', 'money.share_moved')
-          AND r."coversId" = p_source_id
-          AND (r.meta -> 0 ->> 'orderItemId')::integer IS NOT DISTINCT FROM p_order_item_id
-      ),
-      0
-    )
-  )
-$$;
+DROP FUNCTION IF EXISTS cartlify.money_share_left (integer, integer);
 
--- What the shares of money already with the buyer have left for an item of an order (the delivery
--- with p_order_item_id NULL), all the lines together. Internal step.
-CREATE OR REPLACE FUNCTION cartlify.money_item_share_left (p_order_id integer, p_order_item_id integer) RETURNS numeric LANGUAGE sql STABLE
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-  SELECT COALESCE(SUM(cartlify.money_share_left (s.source_id, s.order_item_id)), 0)
-  FROM (
-    SELECT DISTINCT sh.source_id, sh.order_item_id
-    FROM cartlify.money_shares_of_order (p_order_id) AS sh
-    WHERE sh.order_item_id IS NOT DISTINCT FROM p_order_item_id
-  ) AS s
-$$;
+DROP FUNCTION IF EXISTS cartlify.money_item_share_left (integer, integer);
 
--- The shares of money already with the buyer that are overpaid: what each share (a line of money
--- given back by hand or taken by a bank, and an item or the delivery) has left for the items of the
--- order whose every unit came back in statements that are all over, with the delivery when every
--- item of the order is so: money the buyer has for goods no statement owes any more (a row lowered
--- or refused). A row a share with a sum above 0: the line, its purpose and its time, the item and
--- its variant (none for the delivery); the items first by their ids, the earliest line first, then
--- the delivery. Internal step.
-CREATE OR REPLACE FUNCTION cartlify.money_overpaid_shares (p_order_id integer) RETURNS TABLE (
-  source_id integer,
-  order_item_id integer,
-  variant_id integer,
-  purpose cartlify."MoneyPurpose",
-  source_at timestamp without time zone,
-  amount numeric
-) LANGUAGE sql STABLE
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-  WITH settled AS (
-    SELECT oi.id
-    FROM cartlify.order_items AS oi
-    WHERE oi."orderId" = p_order_id
-      AND oi.quantity <= COALESCE(
-        (
-          SELECT SUM(i.quantity)
-          FROM cartlify.return_items AS i
-          JOIN cartlify.returns AS r ON r.id = i."returnId"
-          WHERE i."orderItemId" = oi.id AND r."closedAt" IS NOT NULL
-        ),
-        0
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM cartlify.return_items AS i
-        JOIN cartlify.returns AS r ON r.id = i."returnId"
-        WHERE i."orderItemId" = oi.id AND r."closedAt" IS NULL
-      )
-  ),
-  every AS (
-    SELECT EXISTS (SELECT 1 FROM settled) AND NOT EXISTS (
-      SELECT 1 FROM cartlify.order_items AS oi
-      WHERE oi."orderId" = p_order_id AND oi.id NOT IN (SELECT st.id FROM settled AS st)
-    ) AS all_back
-  ),
-  shares AS (
-    SELECT DISTINCT sh.source_id, sh.order_item_id
-    FROM cartlify.money_shares_of_order (p_order_id) AS sh
-    WHERE sh.order_item_id IN (SELECT st.id FROM settled AS st)
-       OR (sh.order_item_id IS NULL AND (SELECT e.all_back FROM every AS e))
-  ),
-  lefts AS (
-    SELECT s.source_id, s.order_item_id, cartlify.money_share_left (s.source_id, s.order_item_id) AS amount
-    FROM shares AS s
-  )
-  SELECT x.source_id, x.order_item_id, oi."variantId", l.purpose, l."createdAt", x.amount
-  FROM lefts AS x
-  JOIN cartlify.money_log AS l ON l.id = x.source_id
-  LEFT JOIN cartlify.order_items AS oi ON oi.id = x.order_item_id
-  WHERE x.amount > 0
-  ORDER BY x.order_item_id NULLS LAST, x.source_id
-$$;
+DROP FUNCTION IF EXISTS cartlify.money_overpaid_shares (integer);
 
 -- What a row of a statement has had of its money: the goods of the transfers that pay it, on their
--- way or sent, and of the money sent outside the app, [{ returnItemId, amount }] in the meta; a
--- failure takes its part back. A row is paid in parts when the payment held only some of it (the rest
--- went outside the app), and is refunded once its parts give all of its amount; what it still owes
--- is its amount less this. A row whose money moved stays in its statement (split_return_rows), so
--- the lines of the statement are all of its money. Internal step.
+-- way or sent, and of the money sent outside the app, [{ returnItemId, amount }] in the meta (a
+-- failure takes its part back), and what money already with the buyer paid of it (the goods of its
+-- return_row_shares). A row is paid in parts when the payment held only some of it (the rest went outside the
+-- app, or money already with the buyer paid some), and is refunded once its parts give all of its
+-- amount; what it still owes is its amount less this. A row whose money moved stays in its statement
+-- (split_return_rows), so the lines of the statement and its rows are all of its money. Internal step.
 CREATE OR REPLACE FUNCTION cartlify.return_row_paid (p_item_id integer) RETURNS numeric LANGUAGE sql STABLE
 SET
   search_path = cartlify,
   pg_temp AS $$
   SELECT COALESCE(
-    SUM(
-      CASE WHEN l.event = 'money.refund_failed' THEN -1 ELSE 1 END * (e.value ->> 'amount')::numeric
-    ),
-    0
-  )
-  FROM cartlify.money_log AS l
-  CROSS JOIN LATERAL jsonb_array_elements(
-    CASE WHEN jsonb_typeof(l.meta) = 'array' THEN l.meta ELSE '[]'::jsonb END
-  ) AS e (value)
-  WHERE l."returnId" = (SELECT i."returnId" FROM cartlify.return_items AS i WHERE i.id = p_item_id)
-    AND l.purpose = 'return'
-    AND l.part = 'goods'
-    AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
-    AND (e.value ->> 'returnItemId')::integer = p_item_id
+      (
+        SELECT SUM(
+          CASE WHEN l.event = 'money.refund_failed' THEN -1 ELSE 1 END * (e.value ->> 'amount')::numeric
+        )
+        FROM cartlify.money_log AS l
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(l.meta) = 'array' THEN l.meta ELSE '[]'::jsonb END
+        ) AS e (value)
+        WHERE l."returnId" = (SELECT i."returnId" FROM cartlify.return_items AS i WHERE i.id = p_item_id)
+          AND l.purpose = 'return'
+          AND l.part = 'goods'
+          AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
+          AND (e.value ->> 'returnItemId')::integer = p_item_id
+      ),
+      0
+    )
+    + COALESCE(
+      (
+        SELECT SUM(sh.amount)
+        FROM cartlify.return_row_shares (
+          (SELECT r."orderId" FROM cartlify.return_items AS i JOIN cartlify.returns AS r ON r.id = i."returnId" WHERE i.id = p_item_id)
+        ) AS sh
+        WHERE sh.return_item_id = p_item_id AND sh.part = 'goods'
+      ),
+      0
+    )
 $$;
 
 -- What a row of a statement still owes: its amount less what it had (return_row_paid). Internal
@@ -10634,30 +13145,35 @@ SET
   WHERE i.id = p_item_id
 $$;
 
--- The units of a row of a statement the lines of its goods count already: the units go with the
--- part that ends the money of the row, a failure takes them back with its part. A part that goes
--- again after a failure carries only the units no other line counts, so the reports count the units
--- of a row once. Internal step.
+-- The units of a row of a statement its money counts already: the units go with the part that ends
+-- the money of the row (a line of its goods: what money already with the buyer pays of it carries
+-- none, the own money that ends the row carries them all), a failure takes them back with its part. A part that goes again after a failure
+-- carries only the units nothing else counts, so the reports count the units of a row once.
+-- Internal step.
 CREATE OR REPLACE FUNCTION cartlify.return_row_units_out (p_item_id integer) RETURNS integer LANGUAGE sql STABLE
 SET
   search_path = cartlify,
   pg_temp AS $$
-  SELECT COALESCE(
-    SUM(
-      CASE WHEN l.event = 'money.refund_failed' THEN -1 ELSE 1 END
-      * COALESCE((e.value ->> 'quantity')::integer, 0)
-    ),
-    0
+  SELECT (
+    COALESCE(
+      (
+        SELECT SUM(
+          CASE WHEN l.event = 'money.refund_failed' THEN -1 ELSE 1 END
+          * COALESCE((e.value ->> 'quantity')::integer, 0)
+        )
+        FROM cartlify.money_log AS l
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(l.meta) = 'array' THEN l.meta ELSE '[]'::jsonb END
+        ) AS e (value)
+        WHERE l."returnId" = (SELECT i."returnId" FROM cartlify.return_items AS i WHERE i.id = p_item_id)
+          AND l.purpose = 'return'
+          AND l.part = 'goods'
+          AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
+          AND (e.value ->> 'returnItemId')::integer = p_item_id
+      ),
+      0
+    )
   )::integer
-  FROM cartlify.money_log AS l
-  CROSS JOIN LATERAL jsonb_array_elements(
-    CASE WHEN jsonb_typeof(l.meta) = 'array' THEN l.meta ELSE '[]'::jsonb END
-  ) AS e (value)
-  WHERE l."returnId" = (SELECT i."returnId" FROM cartlify.return_items AS i WHERE i.id = p_item_id)
-    AND l.purpose = 'return'
-    AND l.part = 'goods'
-    AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
-    AND (e.value ->> 'returnItemId')::integer = p_item_id
 $$;
 
 -- What the other statements of an order than the one named still owe for their rows (the rows whose
@@ -10676,93 +13192,107 @@ SET
     AND i.goods IN ('expected', 'to_stock', 'written_off', 'lost')
 $$;
 
--- What the shares of the order have left covers the rows of a statement named and the delivery that
--- goes with them, at most p_cap in all: row by row (in the order of their ids), then the delivery,
--- each from the lines of its item, the earliest line first. A row needs what it still owes (its
--- amount less what it had, return_row_paid), or what p_needs gives it ({ "<row id>": sum }: the
--- part of it a movement pays, worked out before its lines are written). With p_base it writes a
--- part covered for each line and row (or the delivery) with the base of its movement (the event,
--- the key, the state): above 0, naming the line (coversId) and, in the meta, the row and the item;
--- without it only counts. Returns what it covered. The caller locked the order. Internal step.
-CREATE OR REPLACE FUNCTION cartlify.cover_return_rows (
+-- What money already with the buyer pays now of the delivery that goes back with the rows named: the
+-- goods of the rows it pays by their marks already (return_row_shares: what a row owes is the rest),
+-- the delivery by the shares of it no row took yet (a row took it, "paidDelivery": none), the
+-- earliest line first, at most p_delivery and p_cap. A list of { rowId (the last row), orderItemId
+-- (null), sourceId, amount }; p_needs is not read. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.return_cover_plan (
   p_return_id integer,
   p_ids integer[],
   p_delivery numeric,
   p_cap numeric,
-  p_base jsonb,
   p_needs jsonb DEFAULT NULL
-) RETURNS numeric LANGUAGE plpgsql
+) RETURNS jsonb LANGUAGE plpgsql STABLE
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
   v_order_id integer;
-  v_left     numeric := GREATEST(COALESCE(p_cap, 0), 0);
-  v_done     numeric := 0;
-  v_taken    jsonb := '{}'::jsonb;
-  v_row      record;
+  v_left     numeric := LEAST(GREATEST(COALESCE(p_delivery, 0), 0), GREATEST(COALESCE(p_cap, 0), 0));
+  v_plan     jsonb := '[]'::jsonb;
   v_source   record;
-  v_need     numeric;
-  v_have     numeric;
   v_take     numeric;
-  v_key      text;
   v_last     integer := p_ids[cardinality(p_ids)];
 BEGIN
   SELECT r."orderId" INTO v_order_id FROM cartlify.returns AS r WHERE r.id = p_return_id;
-
-  FOR v_row IN
-    SELECT x.row_id, x.item_id, x.need
-    FROM (
-      SELECT
-        i.id AS row_id,
-        i."orderItemId" AS item_id,
-        COALESCE((p_needs ->> i.id::text)::numeric, cartlify.return_row_owed (i.id)) AS need,
-        0 AS place
-      FROM cartlify.return_items AS i
-      WHERE i.id = ANY (p_ids)
-      UNION ALL
-      SELECT v_last, NULL::integer, p_delivery, 1 WHERE COALESCE(p_delivery, 0) > 0
-    ) AS x
-    ORDER BY x.place, x.row_id
+  IF v_left <= 0 OR v_last IS NULL OR EXISTS (
+    SELECT 1
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
+    WHERE r."orderId" = v_order_id AND i."paidDelivery" AND i.money <> 'refused'
+  ) THEN
+    RETURN v_plan;
+  END IF;
+  FOR v_source IN
+    SELECT s.source_id, SUM(s.amount) AS amount
+    FROM cartlify.money_shares_of_order (v_order_id) AS s
+    WHERE s.order_item_id IS NULL
+    GROUP BY s.source_id
+    ORDER BY s.source_id
   LOOP
-    v_need := LEAST(v_row.need, v_left);
-
-    FOR v_source IN
-      SELECT DISTINCT s.source_id
-      FROM cartlify.money_shares_of_order (v_order_id) AS s
-      WHERE s.order_item_id IS NOT DISTINCT FROM v_row.item_id
-      ORDER BY s.source_id
-    LOOP
-      EXIT WHEN v_need <= 0;
-
-      v_key := v_source.source_id::text || ':' || COALESCE(v_row.item_id::text, 'delivery');
-      v_have := cartlify.money_share_left (v_source.source_id, v_row.item_id)
-        - COALESCE((v_taken ->> v_key)::numeric, 0);
-      v_take := LEAST(GREATEST(v_have, 0), v_need);
-      CONTINUE WHEN v_take <= 0;
-
-      IF p_base IS NOT NULL THEN
-        PERFORM cartlify.log_money_change (
-          p_base || jsonb_build_object(
-            'part', 'covered',
-            'amount', v_take,
-            'coversId', v_source.source_id,
-            'meta', jsonb_build_array(
-              jsonb_build_object('returnItemId', v_row.row_id, 'orderItemId', v_row.item_id, 'amount', v_take)
-            )
-          )
-        );
-      ELSE
-        v_taken := v_taken || jsonb_build_object(v_key, COALESCE((v_taken ->> v_key)::numeric, 0) + v_take);
-      END IF;
-
-      v_need := v_need - v_take;
-      v_left := v_left - v_take;
-      v_done := v_done + v_take;
-    END LOOP;
+    EXIT WHEN v_left <= 0;
+    v_take := LEAST(v_source.amount, v_left);
+    CONTINUE WHEN v_take <= 0;
+    v_plan := v_plan || jsonb_build_array(jsonb_build_object(
+      'rowId', v_last, 'orderItemId', NULL, 'sourceId', v_source.source_id, 'amount', v_take
+    ));
+    v_left := v_left - v_take;
   END LOOP;
+  RETURN v_plan;
+END;
+$$;
 
-  RETURN v_done;
+-- The old form, which wrote lines covered into the journal: dropped once dev and prod run the plan
+-- (db:snapshot:check:db). Temporary.
+DROP FUNCTION IF EXISTS cartlify.cover_return_rows (integer, integer[], numeric, numeric, jsonb, jsonb);
+
+-- What the shares of the order have left would pay of the rows named and their delivery
+-- (return_cover_plan), the sum. Internal step.
+CREATE OR REPLACE FUNCTION cartlify.cover_return_rows (
+  p_return_id integer,
+  p_ids integer[],
+  p_delivery numeric,
+  p_cap numeric,
+  p_needs jsonb DEFAULT NULL
+) RETURNS numeric LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT COALESCE(SUM((e.value ->> 'amount')::numeric), 0)
+  FROM jsonb_array_elements(cartlify.return_cover_plan (p_return_id, p_ids, p_delivery, p_cap, p_needs)) AS e (value)
+$$;
+
+-- Money already with the buyer pays the delivery that goes back with the rows named
+-- (return_cover_plan): no line of the journal, the money moved once; the last row records that it
+-- took the delivery back ("paidDelivery"), and the statement counts its sum again. The goods of the
+-- rows its marks paid already (return_row_shares). The answer is { total, rows (none), delivery }.
+-- Internal step.
+CREATE OR REPLACE FUNCTION cartlify.write_return_cover (
+  p_return_id integer,
+  p_ids integer[],
+  p_delivery numeric,
+  p_cap numeric,
+  p_needs jsonb DEFAULT NULL
+) RETURNS jsonb LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_delivery numeric := COALESCE((
+    SELECT SUM((e.value ->> 'amount')::numeric)
+    FROM jsonb_array_elements(cartlify.return_cover_plan (p_return_id, p_ids, p_delivery, p_cap, p_needs)) AS e (value)
+  ), 0);
+BEGIN
+  IF v_delivery > 0 THEN
+    UPDATE cartlify.return_items AS i
+    SET "paidDelivery" = true
+    WHERE i.id = p_ids[cardinality(p_ids)];
+  END IF;
+  UPDATE cartlify.returns AS r
+  SET "refundedTotal" = cartlify.return_refunded_total (r.id)
+  WHERE r.id = p_return_id;
+  RETURN jsonb_build_object('total', v_delivery, 'rows', '{}'::jsonb, 'delivery', v_delivery);
 END;
 $$;
 
@@ -10794,7 +13324,14 @@ BEGIN
         AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
     ),
     0
-  ) > 0 THEN
+  ) > 0
+  -- or money already with the buyer paid it
+  OR EXISTS (
+    SELECT 1
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
+    WHERE r."orderId" = p_order_id AND i."paidDelivery" AND i.money <> 'refused'
+  ) THEN
     RETURN 0;
   END IF;
 
@@ -10848,11 +13385,12 @@ DECLARE
   v_covered  numeric := 0;
   v_left     numeric := 0;
   v_others   numeric := 0;
+  v_shared     numeric := 0;
+  v_shared_due numeric := 0;
 BEGIN
   IF NOT cartlify.is_admin () THEN
     RAISE EXCEPTION 'RETURN_FORBIDDEN';
   END IF;
-
   SELECT r.id, r."orderId", r."closedAt", o."paymentId"
   INTO v_return
   FROM cartlify.returns AS r
@@ -10889,8 +13427,18 @@ BEGIN
 
   IF cardinality(v_due_ids) > 0 THEN
     v_due_del := cartlify.return_delivery_due (v_return."orderId", v_due_ids);
-    v_covered := cartlify.cover_return_rows (p_return_id, v_due_ids, v_due_del, v_due + v_due_del, NULL);
+    v_covered := cartlify.cover_return_rows (p_return_id, v_due_ids, v_due_del, v_due + v_due_del);
   END IF;
+  -- the rows whole: what their marks take of money already with the buyer is covered of them
+  SELECT
+    COALESCE(SUM(sh.amount) FILTER (WHERE sh.return_item_id = ANY (v_ids)), 0),
+    COALESCE(SUM(sh.amount) FILTER (WHERE sh.return_item_id = ANY (v_due_ids)), 0)
+  INTO v_shared, v_shared_due
+  FROM cartlify.return_row_shares (v_return."orderId") AS sh
+  WHERE sh.return_id = p_return_id AND sh.part = 'goods';
+  v_rows := v_rows + v_shared;
+  v_due := v_due + v_shared_due;
+  v_covered := v_covered + v_shared_due;
 
   IF v_return."paymentId" IS NOT NULL THEN
     v_left := cartlify.money_paid_left (v_return."paymentId");
@@ -10915,329 +13463,13 @@ BEGIN
 END;
 $$;
 
--- What the shares of money already with the buyer (a refund made by hand, what a bank took, by the
--- decisions on them: money_shares_of_order) have left for the items of an order whose every unit
--- came back in statements that are all over, with the delivery when every item of the order is so:
--- money the buyer had for goods no statement owes any more (a row lowered or refused after the bank
--- or a refund by hand gave all of it): the sum of money_overpaid_shares. Root or an admin with the
--- right of the money records what the buyer gave back (record_overpaid_received), gives it up
--- (lose_overpaid), or keeps the goods that are still in the shop (keep_return_goods). Admin and root
--- (RETURN_FORBIDDEN otherwise); 0 when none.
-CREATE OR REPLACE FUNCTION cartlify.order_money_overpaid (p_order_id integer) RETURNS numeric LANGUAGE plpgsql SECURITY DEFINER
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-BEGIN
-  IF NOT cartlify.is_admin () THEN
-    RAISE EXCEPTION 'RETURN_FORBIDDEN';
-  END IF;
+DROP FUNCTION IF EXISTS cartlify.order_money_overpaid (integer);
 
-  RETURN round(COALESCE((SELECT SUM(s.amount) FROM cartlify.money_overpaid_shares (p_order_id) AS s), 0), 2);
-END;
-$$;
+DROP FUNCTION IF EXISTS cartlify.record_overpaid_received (integer, numeric, cartlify."OutsideMethod", text, timestamp without time zone);
 
--- Root or an admin root allowed to handle the money (money_manager), with an account, records money
--- the buyer gave back outside the app of what is overpaid (MONEY_RECEIVED_FORBIDDEN for anyone else, the system too): an order that is there
--- (MONEY_RECEIVED_NOT_FOUND), a sum to the cent above 0 (MONEY_RECEIVED_INVALID), the way and a note
--- of 1 to 500 (MONEY_RECEIVED_NOTE_REQUIRED), never more than is overpaid (MONEY_RECEIVED_EXCEEDS),
--- the day it really came, not before the money of the shares went and not of the future
--- (MONEY_RECEIVED_AT_INVALID). It pays the overpaid shares back in their order
--- (money_overpaid_shares), a line money.received a share: the purpose of the line of the share, the
--- whole, above 0, naming the line (coversId), the item ({ orderItemId, variantId, amount }) or the
--- delivery ({ delivery }) in meta, no statement (what the statements had back stays). The answer is
--- { orderId, amount, overpaid }.
-CREATE OR REPLACE FUNCTION cartlify.record_overpaid_received (
-  p_order_id integer,
-  p_amount numeric,
-  p_method cartlify."OutsideMethod",
-  p_note text,
-  p_at timestamp without time zone
-) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-DECLARE
-  v_now      timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
-  v_note     text := btrim(p_note);
-  v_order    record;
-  v_share    record;
-  v_total    numeric;
-  v_first    timestamp;
-  v_left     numeric;
-  v_part     numeric;
-  v_currency text;
-BEGIN
-  IF NOT cartlify.money_manager () OR cartlify.current_actor_id () IS NULL THEN
-    RAISE EXCEPTION 'MONEY_RECEIVED_FORBIDDEN';
-  END IF;
+DROP FUNCTION IF EXISTS cartlify.lose_overpaid (integer);
 
-  SELECT o.id, o."userId", o."paymentId" INTO v_order FROM cartlify.orders AS o WHERE o.id = p_order_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'MONEY_RECEIVED_NOT_FOUND';
-  END IF;
-
-  -- the payment, then the order, as every change of its money
-  IF v_order."paymentId" IS NOT NULL THEN
-    PERFORM cartlify.lock_money_payment (v_order."paymentId");
-  END IF;
-
-  PERFORM 1 FROM cartlify.orders AS o WHERE o.id = p_order_id FOR UPDATE;
-
-  IF p_amount IS NULL OR p_amount <= 0 OR p_amount <> round(p_amount, 2) THEN
-    RAISE EXCEPTION 'MONEY_RECEIVED_INVALID';
-  END IF;
-
-  IF p_method IS NULL OR v_note IS NULL OR v_note = '' OR char_length(v_note) > 500 THEN
-    RAISE EXCEPTION 'MONEY_RECEIVED_NOTE_REQUIRED';
-  END IF;
-
-  SELECT COALESCE(SUM(s.amount), 0), MIN(s.source_at)
-  INTO v_total, v_first
-  FROM cartlify.money_overpaid_shares (p_order_id) AS s;
-
-  IF p_amount > round(v_total, 2) THEN
-    RAISE EXCEPTION 'MONEY_RECEIVED_EXCEEDS';
-  END IF;
-
-  IF p_at IS NULL OR p_at > v_now OR p_at < v_first THEN
-    RAISE EXCEPTION 'MONEY_RECEIVED_AT_INVALID';
-  END IF;
-
-  SELECT l.currency INTO v_currency
-  FROM cartlify.money_log AS l
-  WHERE l."orderId" = p_order_id AND l.event = 'money.payment'
-  ORDER BY l.id
-  LIMIT 1;
-
-  v_left := p_amount;
-
-  FOR v_share IN SELECT * FROM cartlify.money_overpaid_shares (p_order_id) LOOP
-    EXIT WHEN v_left <= 0;
-    v_part := LEAST(v_left, v_share.amount);
-
-    PERFORM cartlify.log_money_change (
-      jsonb_build_object(
-        'event', 'money.received',
-        'purpose', v_share.purpose,
-        'part', 'whole',
-        'amount', v_part,
-        'currency', v_currency,
-        'orderId', p_order_id,
-        'userId', v_order."userId",
-        'coversId', v_share.source_id,
-        'method', p_method,
-        'note', v_note,
-        'happenedAt', p_at,
-        'meta', CASE
-          WHEN v_share.order_item_id IS NULL THEN jsonb_build_array(jsonb_build_object('delivery', v_part))
-          ELSE jsonb_build_array(
-            jsonb_build_object('orderItemId', v_share.order_item_id, 'variantId', v_share.variant_id, 'amount', v_part)
-          )
-        END
-      )
-    );
-
-    v_left := v_left - v_part;
-  END LOOP;
-
-  RETURN jsonb_build_object(
-    'orderId', p_order_id,
-    'amount', to_char(p_amount, 'FM99999999990.00'),
-    'overpaid', to_char(
-      round(COALESCE((SELECT SUM(s.amount) FROM cartlify.money_overpaid_shares (p_order_id) AS s), 0), 2),
-      'FM99999999990.00'
-    )
-  );
-END;
-$$;
-
--- The same people give what is overpaid up (MONEY_OVERPAID_FORBIDDEN for anyone else,
--- the system too): of an order that is there (MONEY_OVERPAID_NOT_FOUND) with something overpaid
--- (MONEY_OVERPAID_NONE). A line money.share_moved an overpaid share: of 0 (it moves no money: what
--- part of a line was for changes), the purpose of the line of the share, the whole, naming the line,
--- the item ({ orderItemId, variantId, amount }) or the delivery ({ delivery }) in meta, moneyUse
--- compensation for money given back by hand, loss for what a bank took. The answer is
--- { orderId, moved }.
-CREATE OR REPLACE FUNCTION cartlify.lose_overpaid (p_order_id integer) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-DECLARE
-  v_order    record;
-  v_share    record;
-  v_total    numeric;
-  v_currency text;
-BEGIN
-  IF NOT cartlify.money_manager () OR cartlify.current_actor_id () IS NULL THEN
-    RAISE EXCEPTION 'MONEY_OVERPAID_FORBIDDEN';
-  END IF;
-
-  SELECT o.id, o."userId", o."paymentId" INTO v_order FROM cartlify.orders AS o WHERE o.id = p_order_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'MONEY_OVERPAID_NOT_FOUND';
-  END IF;
-
-  IF v_order."paymentId" IS NOT NULL THEN
-    PERFORM cartlify.lock_money_payment (v_order."paymentId");
-  END IF;
-
-  PERFORM 1 FROM cartlify.orders AS o WHERE o.id = p_order_id FOR UPDATE;
-
-  SELECT COALESCE(SUM(s.amount), 0) INTO v_total FROM cartlify.money_overpaid_shares (p_order_id) AS s;
-
-  IF round(v_total, 2) <= 0 THEN
-    RAISE EXCEPTION 'MONEY_OVERPAID_NONE';
-  END IF;
-
-  SELECT l.currency INTO v_currency
-  FROM cartlify.money_log AS l
-  WHERE l."orderId" = p_order_id AND l.event = 'money.payment'
-  ORDER BY l.id
-  LIMIT 1;
-
-  FOR v_share IN SELECT * FROM cartlify.money_overpaid_shares (p_order_id) LOOP
-    PERFORM cartlify.log_money_change (
-      jsonb_build_object(
-        'event', 'money.share_moved',
-        'purpose', v_share.purpose,
-        'part', 'whole',
-        'amount', 0,
-        'currency', v_currency,
-        'orderId', p_order_id,
-        'userId', v_order."userId",
-        'coversId', v_share.source_id,
-        'moneyUse', CASE WHEN v_share.purpose = 'hand' THEN 'compensation' ELSE 'loss' END,
-        'meta', CASE
-          WHEN v_share.order_item_id IS NULL THEN jsonb_build_array(jsonb_build_object('delivery', v_share.amount))
-          ELSE jsonb_build_array(
-            jsonb_build_object('orderItemId', v_share.order_item_id, 'variantId', v_share.variant_id, 'amount', v_share.amount)
-          )
-        END
-      )
-    );
-  END LOOP;
-
-  RETURN jsonb_build_object('orderId', p_order_id, 'moved', to_char(round(v_total, 2), 'FM99999999990.00'));
-END;
-$$;
-
--- The same people keep goods the shop did not accept that are still in the shop when money already
--- with the buyer is on their item (RETURN_FORBIDDEN for anyone else, the system
--- too; RETURN_NOT_FOUND for a statement that is not there): p_items is a list of { itemId, goods },
--- each row of the statement once (RETURN_ITEM_NOT_FOUND for another), goods to_stock or written_off
--- (RETURN_KEEP_INVALID); each a row not accepted whose money was refused, not sent back, whose units
--- no other statement holds and whose item has a share left (RETURN_KEEP_NOT_ALLOWED). The goods come
--- back as at the parcel (return_units_to_batches), the row owes its money again and the statement
--- opens again; then the shares pay the rows they cover all of at once (cover_open_statements), what
--- they do not cover goes by the usual transfer. The answer is { returnId, orderId, covered }.
-CREATE OR REPLACE FUNCTION cartlify.keep_return_goods (p_return_id integer, p_items jsonb) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-DECLARE
-  v_now      timestamp := now() AT TIME ZONE 'UTC';
-  v_actor    integer := cartlify.current_actor_id();
-  v_payment  text;
-  v_order_id integer;
-  v_item     jsonb;
-  v_row      record;
-  v_goods    cartlify."ReturnGoods";
-  v_seen     integer[] := ARRAY[]::integer[];
-  v_covered  jsonb;
-BEGIN
-  IF NOT cartlify.money_manager () OR v_actor IS NULL THEN
-    RAISE EXCEPTION 'RETURN_FORBIDDEN';
-  END IF;
-
-  SELECT o."paymentId" INTO v_payment
-  FROM cartlify.returns AS r
-  JOIN cartlify.orders AS o ON o.id = r."orderId"
-  WHERE r.id = p_return_id;
-
-  IF v_payment IS NOT NULL THEN
-    PERFORM cartlify.lock_money_payment (v_payment);
-  END IF;
-
-  v_order_id := cartlify.lock_return_order (p_return_id);
-
-  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
-    RAISE EXCEPTION 'RETURN_KEEP_INVALID';
-  END IF;
-
-  FOR v_item IN SELECT e.value FROM jsonb_array_elements(p_items) AS e LOOP
-    IF jsonb_typeof(v_item) <> 'object'
-       OR jsonb_typeof(v_item -> 'itemId') IS DISTINCT FROM 'number'
-       OR (v_item ->> 'itemId') !~ '^[1-9][0-9]{0,9}$'
-       OR (v_item ->> 'itemId')::bigint > 2147483647
-       OR (v_item ->> 'goods') IS NULL
-       OR (v_item ->> 'goods') NOT IN ('to_stock', 'written_off')
-       OR (v_item ->> 'itemId')::integer = ANY (v_seen) THEN
-      RAISE EXCEPTION 'RETURN_KEEP_INVALID';
-    END IF;
-
-    v_seen := v_seen || (v_item ->> 'itemId')::integer;
-  END LOOP;
-
-  -- the rows in the order of their variants, as at the parcel
-  FOR v_item IN
-    SELECT e.value
-    FROM jsonb_array_elements(p_items) WITH ORDINALITY AS e (value, n)
-    LEFT JOIN cartlify.return_items AS i
-      ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
-    LEFT JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
-    ORDER BY oi."variantId" NULLS LAST, i.id NULLS LAST, e.n
-  LOOP
-    SELECT i.*, oi."variantId" AS "variantId", oi.quantity AS "itemQuantity"
-    INTO v_row
-    FROM cartlify.return_items AS i
-    JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
-    WHERE i.id = (v_item ->> 'itemId')::integer AND i."returnId" = p_return_id
-    FOR UPDATE OF i;
-
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
-    END IF;
-
-    IF v_row.goods <> 'not_accepted' OR v_row.money <> 'refused' OR v_row."backShipmentId" IS NOT NULL
-       OR v_row.quantity + COALESCE(
-         (
-           SELECT SUM(o.quantity) FROM cartlify.return_items AS o
-           WHERE o."orderItemId" = v_row."orderItemId" AND o.id <> v_row.id AND o.money <> 'refused'
-         ),
-         0
-       ) > v_row."itemQuantity"
-       OR cartlify.money_item_share_left (v_order_id, v_row."orderItemId") <= 0 THEN
-      RAISE EXCEPTION 'RETURN_KEEP_NOT_ALLOWED';
-    END IF;
-
-    v_goods := (v_item ->> 'goods')::cartlify."ReturnGoods";
-
-    UPDATE cartlify.return_items AS i
-    SET goods = v_goods,
-        "notAcceptedReason" = NULL,
-        money = 'not_refunded',
-        "moneyLogId" = NULL,
-        "goodsSetAt" = v_now,
-        "goodsSetById" = v_actor
-    WHERE i.id = v_row.id;
-
-    PERFORM cartlify.return_units_to_batches (v_order_id, v_row."variantId", v_row.quantity, v_row.id, v_goods);
-  END LOOP;
-
-  -- the statement owes money again
-  UPDATE cartlify.returns AS r
-  SET "closedAt" = NULL, "closedById" = NULL
-  WHERE r.id = p_return_id AND r."closedAt" IS NOT NULL;
-
-  v_covered := cartlify.cover_open_statements (v_order_id);
-
-  PERFORM cartlify.refresh_return_state (v_order_id);
-
-  RETURN jsonb_build_object('returnId', p_return_id, 'orderId', v_order_id, 'covered', v_covered);
-END;
-$$;
+DROP FUNCTION IF EXISTS cartlify.keep_return_goods (integer, jsonb);
 
 -- The delivery that really went back with a statement of the order: the sum of the delivery lines
 -- of the transfers that were sent (not the ones in transit, not the ones that failed before they
@@ -11260,8 +13492,9 @@ SET
 $$;
 
 -- Counts again the sum a statement gave back (return_refunded_total) at every line of the money
--- journal that names it, and of the statements whose parts covered name the line a failure or money
--- sent another way is of, so each statement always carries it. Counts again at every line of the money journal that names
+-- journal that names it, and of the statements of the order of a failure or money sent another way
+-- of money already with the buyer (its marks on rows took it, return_row_shares), so each statement
+-- always carries it. Counts again at every line of the money journal that names
 -- the statement (a trigger), so the statement always carries it; the money the shop pays a carrier is
 -- not the buyer's. Internal: a trigger, it runs as the owner whoever wrote the line.
 CREATE OR REPLACE FUNCTION cartlify.money_log_count_return () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
@@ -11273,11 +13506,10 @@ BEGIN
   SET "refundedTotal" = cartlify.return_refunded_total (r.id)
   WHERE r.id = NEW."returnId"
      OR (
+       -- the money of a line the marks of rows may take failed or went another way: every statement
+       -- of the order counts again (a source that failed is no more among the shares)
        NEW."coversId" IS NOT NULL AND NEW.event IN ('money.refund_failed', 'money.outside')
-       AND r.id IN (
-         SELECT c."returnId" FROM cartlify.money_log AS c
-         WHERE c.part = 'covered' AND c."coversId" = NEW."coversId" AND c."returnId" IS NOT NULL
-       )
+       AND NEW."returnId" IS NULL AND r."orderId" = NEW."orderId"
      );
 
   RETURN NULL;
@@ -11318,22 +13550,21 @@ EXECUTE FUNCTION cartlify.money_log_count_return ();
 -- one part way_back, when the payment holds it beside the money the other statements of the order
 -- still owe (RETURN_REFUND_EXCEEDS_PAID otherwise: it waits for them, or goes outside the app); the
 -- answer then names no row. Nothing owed at all is RETURN_ITEMS_REQUIRED. What decisions
--- gave the items of the rows and the delivery of the money sent by hand or taken by a bank, and
--- that other transfers did not use, is used first (cover_return_rows): the provider is asked for the
--- rest only. The transfer is
--- written in parts into the money journal under one new key: the goods (below 0, with the rows it
--- pays in the meta, each with what the transfer pays of it), the delivery (below 0), the deduction
--- and what is covered (above 0, a part for each source it uses, naming it), all in transit; the sum
--- of the
--- parts is what the provider is asked for, at most what is left of the payment. A row owes what it
+-- gave the items of the rows and the delivery of the money sent by hand or taken by a bank pays
+-- first: the goods by the marks of the rows (return_row_shares: a row owes the rest), the delivery
+-- that no row took yet (write_return_cover; no line, the money moved once): the provider is asked
+-- for the rest only, and a row it pays all of is refunded at once. The transfer is written in parts into the money journal under one new key: the goods (below
+-- 0, with the rows it pays in the meta, each with what the transfer pays of it), the delivery (below
+-- 0), the deduction (above 0), all in transit; the sum of the parts is what the provider is asked for, at most what is left of the payment. A row owes what it
 -- did not have yet (return_row_paid): a payment that holds less than the transfer gets what is left
 -- of it, taken off the goods of the last rows, never off what money already with the buyer covers
 -- of them; those rows owe the rest (outside the app, mark_return_refunded_outside), the rows the
 -- provider pays nothing of are not in the transfer, and the goods part names each row with what it
 -- pays of it, and with its units only when it pays the rest of it (the reports count the units once). With nothing left of the payment, or a deduction for the way back in a transfer that
 -- does not fit, RETURN_REFUND_EXCEEDS_PAID. When the covering money is all of it nothing is asked of the
--- provider: the lines are sent at once, the rows are refunded and the key is null. The rows become
--- pending (or refunded) and name the goods line (moneyLogId). The answer says what to ask the
+-- provider: the lines are sent at once, the rows are refunded and the key is null; rows lowered
+-- down to what money already with the buyer pays of them are refunded with nothing sent. The rows
+-- become pending (or refunded); the goods line names them. The answer says what to ask the
 -- provider for: { key, returnId, orderId, provider, paymentId, amount, itemIds, lowered, deduction,
 -- wayBack, covered, settled }, lowered: the rows root lowered in this call, { itemId, from, to,
 -- note }, for the journal of the admins.
@@ -11383,6 +13614,9 @@ DECLARE
   v_k          integer;
   v_upto       numeric;
   v_take       numeric;
+  v_lines      jsonb;
+  v_paid       jsonb;
+  v_own        jsonb;
 BEGIN
   IF NOT cartlify.is_admin () THEN
     RAISE EXCEPTION 'RETURN_FORBIDDEN';
@@ -11598,9 +13832,15 @@ BEGIN
       WHERE i.id = (v_red ->> 'itemId')::integer;
 
       -- a row lowered to nothing could never be settled: it has no money to send and its goods
-      -- are back, so it would keep the statement open; a row paid in part keeps more than it had
+      -- are back, so it would keep the statement open; a row paid in part keeps more than it had,
+      -- and never less than what money already with the buyer pays of it (lowered down to that, it
+      -- is paid all of with nothing to send)
       IF v_amount <= 0 OR v_amount > v_price
-         OR v_amount <= cartlify.return_row_paid ((v_red ->> 'itemId')::integer) THEN
+         OR v_amount < cartlify.return_row_paid ((v_red ->> 'itemId')::integer)
+         OR (v_amount = cartlify.return_row_paid ((v_red ->> 'itemId')::integer) AND NOT EXISTS (
+           SELECT 1 FROM cartlify.return_row_shares (v_order_id) AS sh
+           WHERE sh.return_item_id = (v_red ->> 'itemId')::integer AND sh.part = 'goods' AND sh.amount > 0
+         )) THEN
         RAISE EXCEPTION 'RETURN_AMOUNT_INVALID';
       END IF;
 
@@ -11645,7 +13885,13 @@ BEGIN
   SELECT COALESCE(SUM((e.value ->> 'amount')::numeric), 0)
   INTO v_deduction
   FROM cartlify.return_items AS i
-  JOIN cartlify.money_log AS f ON f.id = i."moneyLogId"
+  JOIN LATERAL (
+    SELECT max(x.id) AS id
+    FROM cartlify.money_log AS x
+    WHERE x.event = 'money.refund_failed' AND x.part = 'goods' AND x."returnId" = i."returnId"
+      AND i.id IN (SELECT n.return_item_id FROM cartlify.money_line_return_rows (x.id) AS n)
+  ) AS fl ON true
+  JOIN cartlify.money_log AS f ON f.id = fl.id
   JOIN cartlify.money_log AS g ON g.id = f."coversId"
   JOIN cartlify.money_log AS d
     ON d."transferKey" = g."transferKey" AND d.event = 'money.refund' AND d.part = 'deduction'
@@ -11684,7 +13930,24 @@ BEGIN
   END IF;
 
   v_sum := v_goods + v_delivery - v_deduction;
-
+  -- rows lowered down to what money already with the buyer pays of them: paid all of, nothing to send
+  IF v_sum <= 0 AND p_shipping_deduction IS NULL AND v_delivery = 0 AND v_lowered <> '[]'::jsonb
+     AND NOT EXISTS (
+       SELECT 1 FROM cartlify.return_items AS i WHERE i.id = ANY (v_ids) AND cartlify.return_row_owed (i.id) > 0
+     ) THEN
+    UPDATE cartlify.return_items AS i
+    SET money = 'refunded'
+    WHERE i.id = ANY (v_ids);
+    UPDATE cartlify.returns AS r
+    SET "refundedTotal" = cartlify.return_refunded_total (r.id)
+    WHERE r.id = p_return_id;
+    PERFORM cartlify.refresh_return_state (v_order_id);
+    RETURN jsonb_build_object(
+      'key', NULL, 'returnId', p_return_id, 'orderId', v_order_id, 'provider', v_provider::text,
+      'paymentId', v_payment_id, 'amount', '0.00', 'itemIds', to_jsonb(v_ids), 'lowered', v_lowered,
+      'deduction', '0.00', 'wayBack', '0.00', 'covered', '0.00', 'settled', true
+    );
+  END IF;
   IF v_sum <= 0 THEN
     IF p_shipping_deduction IS NOT NULL THEN
       RAISE EXCEPTION 'RETURN_DEDUCTION_INVALID';
@@ -11706,7 +13969,7 @@ BEGIN
   END IF;
 
   -- money that already reached the buyer another way and is tied to this statement is used first
-  v_cover := cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum, NULL, v_needs);
+  v_cover := cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum, v_needs);
   v_net := v_sum + v_way - v_cover;
 
   -- the payment holds the goods first, of this statement and of the other statements of the order
@@ -11735,9 +13998,9 @@ BEGIN
       EXIT WHEN v_short <= 0;
 
       v_rest := (v_needs ->> v_ids[v_k]::text)::numeric;
-      v_upto := cartlify.cover_return_rows (p_return_id, v_ids[1:v_k], 0, v_sum, NULL, v_needs)
+      v_upto := cartlify.cover_return_rows (p_return_id, v_ids[1:v_k], 0, v_sum, v_needs)
         - CASE
-          WHEN v_k > 1 THEN cartlify.cover_return_rows (p_return_id, v_ids[1:v_k - 1], 0, v_sum, NULL, v_needs)
+          WHEN v_k > 1 THEN cartlify.cover_return_rows (p_return_id, v_ids[1:v_k - 1], 0, v_sum, v_needs)
           ELSE 0
         END;
       v_take := LEAST(GREATEST(v_rest - v_upto, 0), v_short);
@@ -11764,7 +14027,7 @@ BEGIN
     SELECT COALESCE(SUM((v_needs ->> x::text)::numeric), 0) INTO v_goods FROM unnest(v_ids) AS x;
 
     v_sum := v_goods + v_delivery;
-    v_cover := cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum, NULL, v_needs);
+    v_cover := cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum, v_needs);
     v_net := v_sum - v_cover;
   END IF;
 
@@ -11788,38 +14051,62 @@ BEGIN
     'state', CASE WHEN v_net > 0 THEN 'in_transit' ELSE 'sent' END
   );
 
-  v_goods_id := cartlify.log_money_change (
-    v_base || jsonb_build_object(
-      'part', 'goods',
-      'amount', -v_goods,
-      'meta', (
-        SELECT jsonb_agg(
-          jsonb_build_object(
-            'returnItemId', i.id, 'productId', oi."productId", 'variantId', oi."variantId",
-            'amount', (v_needs ->> i.id::text)::numeric,
-            -- the units go with the part that ends the money of the row, once
-            'quantity', CASE
-              WHEN (v_needs ->> i.id::text)::numeric < cartlify.return_row_owed (i.id) THEN 0
-              ELSE i.quantity - cartlify.return_row_units_out (i.id)
-            END
-          )
-          ORDER BY i.id
-        )
-        FROM cartlify.return_items AS i
-        JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
-        WHERE i.id = ANY (v_ids)
-      )
-    )
+  -- the money already with the buyer pays first, in the rows; the lines are what the transfer sends
+  v_paid := cartlify.write_return_cover (p_return_id, v_ids, v_delivery, v_sum, v_needs);
+  v_own := (
+    SELECT COALESCE(jsonb_object_agg(x.id::text, x.own), '{}'::jsonb)
+    FROM (
+      SELECT i.id, (v_needs ->> i.id::text)::numeric - COALESCE((v_paid -> 'rows' ->> i.id::text)::numeric, 0) AS own
+      FROM cartlify.return_items AS i
+      WHERE i.id = ANY (v_ids)
+    ) AS x
+    WHERE x.own > 0
   );
 
-  IF v_delivery > 0 THEN
-    PERFORM cartlify.log_money_change (
+  -- the goods and the delivery in one statement: one credit note of both
+  v_lines := '[]'::jsonb;
+  IF v_own <> '{}'::jsonb THEN
+    v_lines := jsonb_build_array(
       v_base || jsonb_build_object(
-        'part', 'delivery',
-        'amount', -v_delivery,
-        'meta', jsonb_build_array(jsonb_build_object('returnItemId', v_last, 'amount', v_delivery))
+        'part', 'goods',
+        'amount', -(SELECT SUM(x.value::numeric) FROM jsonb_each_text(v_own) AS x),
+        'meta', (
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'returnItemId', i.id, 'productId', oi."productId", 'variantId', oi."variantId",
+              'amount', (v_own ->> i.id::text)::numeric,
+              -- the units go with the part that ends the money of the row, once
+              'quantity', CASE
+                WHEN (v_own ->> i.id::text)::numeric < cartlify.return_row_owed (i.id) THEN 0
+                ELSE i.quantity - cartlify.return_row_units_out (i.id)
+              END
+            )
+            ORDER BY i.id
+          )
+          FROM cartlify.return_items AS i
+          JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
+          WHERE (v_own ->> i.id::text) IS NOT NULL
+        )
       )
     );
+  END IF;
+  IF v_delivery - (v_paid ->> 'delivery')::numeric > 0 THEN
+    v_lines := v_lines || jsonb_build_array(
+      v_base || jsonb_build_object(
+        'part', 'delivery',
+        'amount', -(v_delivery - (v_paid ->> 'delivery')::numeric),
+        'meta', jsonb_build_array(jsonb_build_object(
+          'returnItemId', v_last, 'amount', v_delivery - (v_paid ->> 'delivery')::numeric
+        ))
+      )
+    );
+  END IF;
+  IF jsonb_array_length(v_lines) > 0 THEN
+    v_goods_id := (cartlify.log_money_changes (v_lines))[1];
+    -- the delivery alone: no line of the goods
+    IF v_own = '{}'::jsonb THEN
+      v_goods_id := NULL;
+    END IF;
   END IF;
 
   IF v_deduction > 0 THEN
@@ -11842,13 +14129,13 @@ BEGIN
     );
   END IF;
 
-  -- what the shares of the items cover
-  PERFORM cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum, v_base, v_needs);
-
-
+  -- a row the money already with the buyer paid all of is refunded now; the others wait for the
+  -- transfer, which names them
   UPDATE cartlify.return_items AS i
-  SET money = CASE WHEN v_net > 0 THEN 'pending'::cartlify."ReturnMoney" ELSE 'refunded'::cartlify."ReturnMoney" END,
-      "moneyLogId" = v_goods_id
+  SET money = CASE
+        WHEN v_net > 0 AND (v_own ->> i.id::text) IS NOT NULL THEN 'pending'::cartlify."ReturnMoney"
+        ELSE 'refunded'::cartlify."ReturnMoney"
+      END
   WHERE i.id = ANY (v_ids);
 
   PERFORM cartlify.refresh_return_state (v_order_id);
@@ -11864,7 +14151,10 @@ BEGIN
     'lowered', v_lowered,
     'deduction', to_char(v_deduction, 'FM99999999990.00'),
     'wayBack', to_char(v_way, 'FM99999999990.00'),
-    'covered', to_char(v_cover, 'FM99999999990.00'),
+    'covered', to_char(v_cover + COALESCE((
+      SELECT SUM(sh.amount) FROM cartlify.return_row_shares (v_order_id) AS sh
+      WHERE sh.return_item_id = ANY (v_ids) AND sh.part = 'goods'
+    ), 0), 'FM99999999990.00'),
     'settled', v_net = 0
   );
 END;
@@ -11886,9 +14176,10 @@ $$;
 -- rows (below 0, with the rows in the meta), the delivery that goes with them when they make the
 -- order whole, the deduction (what the failed transfers of the rows meant to take for the way back
 -- the buyer owes, and p_shipping_deduction, the rules of begin_return_refund), the way back, and
--- first what money the buyer already has covers (a part covered for each source it uses, naming
--- it): only the rest went outside the app. A row owes what it did not have yet (a row a transfer
--- paid in part owes the rest, return_row_paid). The rows become refunded and name the goods line. The
+-- first what money the buyer already has pays (the rows by their marks, the delivery by
+-- write_return_cover): only the rest went
+-- outside the app. A row owes what it did not have yet (a row a transfer
+-- paid in part owes the rest, return_row_paid). The rows become refunded; the goods line names them. The
 -- answer is { returnId, orderId, itemIds, amount, wayBack, covered }, amount what went outside.
 CREATE OR REPLACE FUNCTION cartlify.mark_return_refunded_outside (
   p_return_id integer,
@@ -11929,6 +14220,9 @@ DECLARE
   v_goods_id   integer;
   v_needs      jsonb;
   v_base       jsonb;
+  v_lines      jsonb := '[]'::jsonb;
+  v_paid       jsonb;
+  v_own        jsonb := '{}'::jsonb;
 BEGIN
   IF NOT cartlify.money_manager () OR v_actor IS NULL THEN
     RAISE EXCEPTION 'RETURN_FORBIDDEN';
@@ -12068,7 +14362,13 @@ BEGIN
     SELECT COALESCE(SUM((e.value ->> 'amount')::numeric), 0)
     INTO v_deduction
     FROM cartlify.return_items AS i
-    JOIN cartlify.money_log AS f ON f.id = i."moneyLogId"
+    JOIN LATERAL (
+    SELECT max(x.id) AS id
+    FROM cartlify.money_log AS x
+    WHERE x.event = 'money.refund_failed' AND x.part = 'goods' AND x."returnId" = i."returnId"
+      AND i.id IN (SELECT n.return_item_id FROM cartlify.money_line_return_rows (x.id) AS n)
+  ) AS fl ON true
+  JOIN cartlify.money_log AS f ON f.id = fl.id
     JOIN cartlify.money_log AS g ON g.id = f."coversId"
     JOIN cartlify.money_log AS d
       ON d."transferKey" = g."transferKey" AND d.event = 'money.refund' AND d.part = 'deduction'
@@ -12113,7 +14413,7 @@ BEGIN
 
   -- money that already reached the buyer another way and is tied to this statement is used first:
   -- only the rest went outside the app
-  v_cover := cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum - v_way, NULL, v_needs);
+  v_cover := cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum - v_way, v_needs);
 
   v_base := jsonb_build_object(
     'event', 'money.outside',
@@ -12128,36 +14428,57 @@ BEGIN
     'happenedAt', p_at
   );
 
-  IF cardinality(v_ids) > 0 THEN
-    v_goods_id := cartlify.log_money_change (
+  -- the money already with the buyer pays first, in the rows; the lines are what went outside
+  v_paid := cartlify.write_return_cover (p_return_id, v_ids, v_delivery, v_sum - v_way, v_needs);
+  v_own := (
+    SELECT COALESCE(jsonb_object_agg(x.id::text, x.own), '{}'::jsonb)
+    FROM (
+      SELECT i.id, (v_needs ->> i.id::text)::numeric - COALESCE((v_paid -> 'rows' ->> i.id::text)::numeric, 0) AS own
+      FROM cartlify.return_items AS i
+      WHERE i.id = ANY (v_ids)
+    ) AS x
+    WHERE x.own > 0
+  );
+
+  -- the goods and the delivery in one statement: one credit note of both
+  IF v_own <> '{}'::jsonb THEN
+    v_lines := jsonb_build_array(
       v_base || jsonb_build_object(
         'part', 'goods',
-        'amount', -v_goods,
+        'amount', -(SELECT SUM(x.value::numeric) FROM jsonb_each_text(v_own) AS x),
         'meta', (
           SELECT jsonb_agg(
             jsonb_build_object(
               'returnItemId', i.id, 'productId', oi."productId", 'variantId', oi."variantId",
-              'amount', (v_needs ->> i.id::text)::numeric,
+              'amount', (v_own ->> i.id::text)::numeric,
               'quantity', i.quantity - cartlify.return_row_units_out (i.id)
             )
             ORDER BY i.id
           )
           FROM cartlify.return_items AS i
           JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
-          WHERE i.id = ANY (v_ids)
+          WHERE (v_own ->> i.id::text) IS NOT NULL
         )
       )
     );
   END IF;
-
-  IF v_delivery > 0 THEN
-    PERFORM cartlify.log_money_change (
+  IF v_delivery - (v_paid ->> 'delivery')::numeric > 0 THEN
+    v_lines := v_lines || jsonb_build_array(
       v_base || jsonb_build_object(
         'part', 'delivery',
-        'amount', -v_delivery,
-        'meta', jsonb_build_array(jsonb_build_object('returnItemId', v_last, 'amount', v_delivery))
+        'amount', -(v_delivery - (v_paid ->> 'delivery')::numeric),
+        'meta', jsonb_build_array(jsonb_build_object(
+          'returnItemId', v_last, 'amount', v_delivery - (v_paid ->> 'delivery')::numeric
+        ))
       )
     );
+  END IF;
+  IF jsonb_array_length(v_lines) > 0 THEN
+    v_goods_id := (cartlify.log_money_changes (v_lines))[1];
+    -- the delivery alone: no line of the goods
+    IF v_own = '{}'::jsonb THEN
+      v_goods_id := NULL;
+    END IF;
   END IF;
 
   IF v_deduction > 0 THEN
@@ -12180,14 +14501,9 @@ BEGIN
     );
   END IF;
 
-  -- what the shares of the items cover
-  PERFORM cartlify.cover_return_rows (p_return_id, v_ids, v_delivery, v_sum - v_way, v_base, v_needs);
-
-
   IF cardinality(v_ids) > 0 THEN
     UPDATE cartlify.return_items AS i
-    SET money = 'refunded',
-        "moneyLogId" = v_goods_id
+    SET money = 'refunded'
     WHERE i.id = ANY (v_ids);
   END IF;
 
@@ -12199,7 +14515,10 @@ BEGIN
     'itemIds', to_jsonb(v_ids),
     'amount', to_char(v_sum - v_cover, 'FM99999999990.00'),
     'wayBack', to_char(v_way, 'FM99999999990.00'),
-    'covered', to_char(v_cover, 'FM99999999990.00')
+    'covered', to_char(v_cover + COALESCE((
+      SELECT SUM(sh.amount) FROM cartlify.return_row_shares (v_order_id) AS sh
+      WHERE sh.return_item_id = ANY (v_ids) AND sh.part = 'goods'
+    ), 0), 'FM99999999990.00')
   );
 END;
 $$;
@@ -12288,7 +14607,6 @@ BEGIN
   SET goods = 'not_arrived',
       money = 'refused',
       "refusedCode" = p_code,
-      "moneyLogId" = NULL,
       "goodsSetAt" = v_now,
       "goodsSetById" = v_actor
   WHERE i.id = ANY (v_ids);
@@ -12584,12 +14902,12 @@ BEGIN
 
       INSERT INTO cartlify.return_items (
         "returnId", "orderItemId", quantity, goods, "notAcceptedReason", money, amount, "amountNote",
-        "refusedCode", "moneyLogId", "backShipmentId", "goodsSetAt", "goodsSetById", "createdAt",
+        "refusedCode", "splitFromId", "backShipmentId", "goodsSetAt", "goodsSetById", "createdAt",
         "updatedAt"
       )
       VALUES (
         p_return_id, v_row."orderItemId", v_quantity, v_row.goods, v_row."notAcceptedReason",
-        v_row.money, v_part, v_row."amountNote", v_row."refusedCode", v_row."moneyLogId", v_id,
+        v_row.money, v_part, v_row."amountNote", v_row."refusedCode", v_row.id, v_id,
         v_row."goodsSetAt", v_row."goodsSetById", v_row."createdAt", v_now
       );
     ELSE

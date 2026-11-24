@@ -79,6 +79,8 @@ const whereOf = (
     shippedTo: q.shippedTo,
     holds: q.holds,
     fraudWarnedFrom: q.fraudWarnedFrom,
+    receipts: q.receipts,
+    receiptsMadeTo: q.receiptsMadeTo,
     parcelOrderIds,
     withoutParcels: q.parcels === 'none',
     sortBy: q.sortBy,

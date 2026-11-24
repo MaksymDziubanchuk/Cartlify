@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { moveClock } from '../../../helpers/payments.js';
 import {
   closeSessions,
   createProduct,
@@ -353,5 +354,22 @@ describe('a sale through the change of a variant', () => {
       saleEndsAt: endsAt,
       salePriorPrice: 20,
     });
+  });
+
+  // the times of the log of prices are of the database; the app may run behind it (another
+  // machine, a clock of its own), and the price the same request replaced still counts
+  it('counts the price the same request replaced as the lowest of the days before, the clock of the app behind the database', async () => {
+    const product = await newProduct();
+    const { endsAt } = sale();
+    const clock = moveClock(-3_000);
+    let res: Awaited<ReturnType<typeof change>>;
+    try {
+      res = await change(product, { price: 50, sale: { percent: 10, endsAt } });
+    } finally {
+      clock.restore();
+    }
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().variant).toMatchObject({ price: 50, salePrice: 45, salePriorPrice: 20 });
   });
 });

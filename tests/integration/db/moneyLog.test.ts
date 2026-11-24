@@ -164,15 +164,18 @@ describe('the money journal is only added to', () => {
         useAgain: await update(`"moneyUse" = 'goods'`),
         shares: await update(`meta = '[]'::jsonb`),
         sharesAgain: await update(`meta = '[{"delivery": 1}]'::jsonb`),
-        // a part covered of a statement took the shares: the decision stays
+        // money root sent another way names the line: the decision stays (so it does once a row of a
+        // statement took the shares, return_items.paidBy: db/moneyDecisions.test.ts)
         taken: await writeLine(q, {
-          event: 'money.refund',
-          purpose: 'return',
-          part: 'covered',
-          amount: 1,
+          event: 'money.outside',
+          purpose: 'hand',
+          part: 'whole',
+          amount: -1,
           coversId: id,
           paymentId: 'pi_guard',
-          state: 'sent',
+          method: 'bank_transfer',
+          note: 'To the account of the buyer.',
+          happenedAt: '2026-11-01T10:00:00',
         }),
         useTaken: await update(`"moneyUse" = 'compensation'`),
         sharesTaken: await update(`meta = '[]'::jsonb`),
@@ -250,7 +253,9 @@ describe('the money journal is only added to', () => {
     expect(outcomes.wordsBack).toMatchObject({ ok: false, code: '42501' });
   });
 
-  // the guards run before a change; the trigger that counts the sum of a statement runs after a line
+  // the guards run before a change, and so does the trigger that writes the shares of the tax a
+  // refund holds once it is sent (an insert, or the update of its state: db/taxShares.test.ts); the
+  // trigger that counts the sum of a statement runs after a line
   it('has a guard on the table that refuses an update and a delete besides the policies', async () => {
     const guards = await inRolledBackTx((db) =>
       db.rows<{ name: string; events: string }>(
@@ -264,7 +269,10 @@ describe('the money journal is only added to', () => {
       ),
     );
 
-    expect(guards).toEqual([{ name: 'trg_money_log_append_only', events: 'update,delete' }]);
+    expect(guards).toEqual([
+      { name: 'trg_money_log_append_only', events: 'update,delete' },
+      { name: 'trg_money_log_tax_shares', events: 'update' },
+    ]);
   });
 });
 

@@ -153,8 +153,9 @@ describe('returnConditions', () => {
       /"statedAt" >= .* and .*"statedAt" </,
     );
     expect(textOf({ closedFrom: from })).toContain('"closedAt" >=');
-    // the money went back when the line of the money journal that sent it was written
-    expect(textOf({ refundedTo: to })).toContain('m.id = i."moneyLogId"');
+    // the money went back when a line of the money journal of the statement that sent it was
+    // written, for a row it names
+    expect(textOf({ refundedTo: to })).toContain('cartlify.money_line_return_rows(m.id)');
     expect(textOf({ refundedTo: to })).toContain('m."createdAt" <');
     expect(textOf({ refundedFrom: from })).not.toContain('m."createdAt" <');
     expect(textOf({ refundedFrom: from })).toContain('m."createdAt" >=');

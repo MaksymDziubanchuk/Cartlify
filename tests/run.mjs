@@ -9,6 +9,8 @@
 //   npm test -- --workers=1           integration files one by one (by default one more than the
 //                                     cores docker has, at most 6 at a time)
 //   npm test -- api:auth service:sendgrid   a service of SERVICES for real instead of its mock
+//   npm test -- integration skip:stripe       its own files left out (mock:<name> keeps the mock,
+//                                     as every service not named in the words)
 //   npm test -- unit -- -t "cursor"   everything after a second -- goes to jest unchanged
 
 import { spawnSync } from 'node:child_process';
@@ -16,10 +18,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { availableParallelism } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { styleText } from 'node:util';
 
 import { cloudinaryQuota } from './setup/cloudinaryQuota.mjs';
 import { guessOf, modeOf, readPace, recordRun, runKeyOf, writePace } from './setup/runPace.mjs';
+import { Separator, selectPrompt } from './setup/selectPrompt.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cacheDir = path.join(rootDir, 'node_modules', '.cache', 'cartlify-tests');
@@ -62,21 +64,63 @@ function defaultWorkers() {
 
 const DEFAULT_WORKERS = defaultWorkers();
 
-// external services the tests answer from a mock unless the run names them (a checkbox under
-// Services, service:<name> in the arguments); jest gets the named ones in TEST_REAL_SERVICES.
+// external services the tests answer from a mock unless the run takes them for real. Each is in one
+// of three states: not run (skip: its own files are left out, the contract of its kind, the check
+// of its mock against the real service, its webhook; every other test that goes through it takes
+// the mock), its mock, or the real service; jest gets the real ones in TEST_REAL_SERVICES and the
+// files left out in TEST_SKIP_FILES (jest.config.js). In the list a service is not run unless the
+// selection saved says otherwise; by the words of a run it is the mock unless they name it
+// (service:<name> real, mock:<name>, skip:<name>); without a terminal (GitHub) every one is the mock.
 // real: false means the real mode is not set up yet, the mock answers all the same
 const SERVICES = [
-  { name: 'sendgrid', real: true },
-  { name: 'cloudinary', real: true },
-  { name: 'stripe', real: true },
-  { name: 'openai', real: true },
+  {
+    name: 'sendgrid',
+    real: true,
+    files: [
+      'tests/integration/providers/mail.contract.test.ts',
+      'tests/integration/api/newsletters/sendgridWebhook.test.ts',
+    ],
+  },
+  { name: 'cloudinary', real: true, files: ['tests/integration/providers/files.contract.test.ts'] },
+  {
+    name: 'stripe',
+    real: true,
+    files: [
+      'tests/integration/providers/payments.contract.test.ts',
+      'tests/integration/api/payments/stripeAnswers.test.ts',
+      'tests/integration/api/payments/webhook.test.ts',
+    ],
+  },
+  { name: 'openai', real: true, files: ['tests/integration/providers/ai.contract.test.ts'] },
   // the dummy secrets of Cloudflare need no account and no secret: nothing is taken from .env
-  { name: 'turnstile', real: true },
-  // ShippyPro has no sandbox: every parcel of its contract takes a label of the account, so it runs
-  // for real only when the words of the run name it, never from a saved selection or a checkbox
-  { name: 'shippypro', real: true, explicitOnly: true },
+  {
+    name: 'turnstile',
+    real: true,
+    files: ['tests/integration/providers/captcha.contract.test.ts'],
+  },
+  // ShippyPro has no sandbox: the real mode asks the account all it can without a label, every
+  // parcel is made by the mock in both modes (tests/helpers/shippyPro.ts)
+  {
+    name: 'shippypro',
+    real: true,
+    files: [
+      'tests/integration/providers/delivery.contract.test.ts',
+      'tests/integration/providers/deliveryMock.test.ts',
+      'tests/integration/api/delivery/webhook.test.ts',
+    ],
+  },
+  // fiskaly SIGN ES in TEST: the receipts go to the test of the tax authority of Spain, nothing
+  // reaches a real one
+  {
+    name: 'fiskaly',
+    real: true,
+    files: ['tests/integration/providers/receipts.contract.test.ts'],
+  },
 ];
+// the words of a run that set a service: real, its mock, not run
 const SERVICE_PREFIX = 'service:';
+const MODE_PREFIXES = { [SERVICE_PREFIX]: 'real', 'mock:': 'mock', 'skip:': 'skip' };
+const modeWordOf = (word) => Object.keys(MODE_PREFIXES).find((prefix) => word.startsWith(prefix));
 
 // one part per test folder: unit, api:<module>, then every other integration folder
 function discoverParts() {
@@ -151,7 +195,7 @@ function resolveWords(words, parts) {
   const picked = new Set();
 
   for (const word of words) {
-    if (word.startsWith(SERVICE_PREFIX)) continue;
+    if (modeWordOf(word)) continue;
 
     const matched = groups[word]?.() ?? parts.filter((part) => part.name === word);
 
@@ -170,23 +214,35 @@ function resolveWords(words, parts) {
   return parts.filter((part) => picked.has(part.name));
 }
 
-// the services named for real among the words, or among the names of a saved selection
-function resolveServices(words) {
-  const names = words
-    .filter((word) => word.startsWith(SERVICE_PREFIX))
-    .map((word) => word.slice(SERVICE_PREFIX.length));
+// the state of every service: the one the words (or the names of a saved selection) give it, else
+// the one given; a name in a saved selection the list no longer has is left out (a run never stops on
+// a file of an older launcher)
+function resolveServices(words, fallback, { saved = false } = {}) {
+  const modes = Object.fromEntries(SERVICES.map((service) => [service.name, fallback]));
 
-  for (const name of names) {
-    if (!SERVICES.some((service) => service.name === name)) {
+  for (const word of words) {
+    const prefix = modeWordOf(word);
+    if (!prefix) continue;
+    const name = word.slice(prefix.length);
+    const service = SERVICES.find((one) => one.name === name);
+    if (!service && saved) continue;
+    if (!service) {
       fail(
         `Unknown service "${name}".\n` +
-          `Services: ${SERVICES.map((service) => `${SERVICE_PREFIX}${service.name}`).join(', ')}`,
+          `Services: ${SERVICES.map((one) => one.name).join(', ')} ` +
+          '(service:<name> real, mock:<name>, skip:<name>)',
       );
     }
+    modes[name] = MODE_PREFIXES[prefix];
   }
 
-  return SERVICES.filter((service) => names.includes(service.name));
+  return modes;
 }
+
+const realServices = (modes) =>
+  SERVICES.filter((service) => modes[service.name] === 'real' && service.real);
+const skippedFiles = (modes) =>
+  SERVICES.filter((service) => modes[service.name] === 'skip').flatMap((service) => service.files);
 
 function loadSelection() {
   try {
@@ -197,22 +253,25 @@ function loadSelection() {
   }
 }
 
-function saveSelection({ selected, services }) {
+// the parts and the services that run, each in its state
+function saveSelection({ selected, modes }) {
   mkdirSync(cacheDir, { recursive: true });
   writeFileSync(
     selectionFile,
     JSON.stringify([
       ...selected.map((part) => part.name),
-      ...services
-        .filter((service) => !service.explicitOnly)
-        .map((service) => `${SERVICE_PREFIX}${service.name}`),
+      ...SERVICES.flatMap((service) => {
+        const mode = modes[service.name];
+        if (mode === 'real') return [`${SERVICE_PREFIX}${service.name}`];
+        return mode === 'skip' ? [] : [`mock:${service.name}`];
+      }),
     ]),
   );
 }
 
 async function promptSelection(parts) {
-  const { checkbox, Separator } = await import('@inquirer/prompts');
   const saved = loadSelection();
+  const savedModes = resolveServices(saved, 'skip', { saved: true });
 
   const toChoice = (part) => ({
     name: part.name.replace(/^api:/, 'api: ') + (part.files ? '' : '  (no tests yet)'),
@@ -224,11 +283,12 @@ async function promptSelection(parts) {
     ...parts.filter((part) => !part.integration).map(toChoice),
     new Separator('-- integration (builds the docker test database, removes it after) --'),
     ...parts.filter((part) => part.integration).map(toChoice),
-    new Separator('-- services (checked: the real service, unchecked: its mock) --'),
-    ...SERVICES.filter((service) => !service.explicitOnly).map((service) => ({
+    new Separator('-- services (skip: its own files are left out, mock, real) --'),
+    ...SERVICES.map((service) => ({
       name: service.name + (service.real ? '' : '  (real mode not set up yet)'),
-      value: `${SERVICE_PREFIX}${service.name}`,
-      checked: saved.includes(`${SERVICE_PREFIX}${service.name}`),
+      value: service.name,
+      states: ['skip', 'mock', 'real'],
+      state: savedModes[service.name],
     })),
   ];
 
@@ -238,27 +298,11 @@ async function promptSelection(parts) {
   const pageSize = Math.max(3, Math.min(choices.length, rows - 4));
 
   try {
-    const names = await checkbox({
-      message: 'Select test parts to run',
-      choices,
-      pageSize,
-      // stop at the first and last part instead of jumping around a scrolled list
-      loop: false,
-      required: true,
-      // plain check boxes instead of the default circles
-      theme: {
-        icon: {
-          checked: styleText('green', '[x]'),
-          unchecked: '[ ]',
-          disabledChecked: styleText('green', '[x]'),
-          disabledUnchecked: '[-]',
-        },
-      },
-    });
+    const answer = await selectPrompt({ message: 'Select test parts to run', choices, pageSize });
 
     return {
-      selected: parts.filter((part) => names.includes(part.name)),
-      services: resolveServices(names),
+      selected: parts.filter((part) => answer.parts.includes(part.name)),
+      modes: answer.services,
     };
   } catch (err) {
     // ctrl+c closes the prompt with this error
@@ -271,10 +315,10 @@ async function promptSelection(parts) {
   }
 }
 
-// the parts to run and the services to take for real
+// the parts to run and the state of each service
 async function chooseParts(parts, { words, failedOnly }) {
   if (words.length) {
-    const choice = { selected: resolveWords(words, parts), services: resolveServices(words) };
+    const choice = { selected: resolveWords(words, parts), modes: resolveServices(words, 'mock') };
     saveSelection(choice);
     return choice;
   }
@@ -284,7 +328,7 @@ async function chooseParts(parts, { words, failedOnly }) {
     const saved = loadSelection();
     return {
       selected: parts.filter((part) => saved.includes(part.name)),
-      services: resolveServices(saved),
+      modes: resolveServices(saved, 'skip', { saved: true }),
     };
   }
 
@@ -298,13 +342,15 @@ async function chooseParts(parts, { words, failedOnly }) {
     'No interactive terminal, running all test parts with mocked services ' +
       '(pass part names and service:<name> to choose).',
   );
-  return { selected: parts, services: [] };
+  return { selected: parts, modes: resolveServices([], 'mock') };
 }
 
-// which services answer for real and which from a mock
-function describeServices(services) {
+// which services answer for real, which from a mock and which are not run
+function describeServices(modes) {
   return SERVICES.map((service) => {
-    if (!services.includes(service)) return `${service.name}: mock`;
+    const mode = modes[service.name];
+    if (mode === 'skip') return `${service.name}: not run`;
+    if (mode === 'mock') return `${service.name}: mock`;
     return service.real
       ? `${service.name}: real`
       : `${service.name}: mock (real asked for, its real mode is not set up yet)`;
@@ -404,7 +450,7 @@ async function cloudinaryUseOf(selected, before, { failedOnly, jestFlags }) {
 // The test files the run takes: the ones jest is handed by path (--runTestsByPath), or every file
 // of the parts picked. filtered: another option of jest goes with them (a name of a test, a
 // pattern), so the files do not run whole and the run tells nothing of their time
-function filesOf(selected, jestFlags) {
+function filesOf(selected, jestFlags, skipped) {
   const slashes = (file) => String(file).split(path.sep).join('/');
   const at = jestFlags.indexOf('--runTestsByPath');
 
@@ -419,18 +465,20 @@ function filesOf(selected, jestFlags) {
     };
   }
 
-  const files = selected.flatMap((part) =>
-    existsSync(path.join(rootDir, part.dir))
-      ? readdirSync(path.join(rootDir, part.dir), { recursive: true })
-          .filter((file) => String(file).endsWith('.test.ts'))
-          .map((file) => `${part.dir}/${slashes(file)}`)
-      : [],
-  );
+  const files = selected
+    .flatMap((part) =>
+      existsSync(path.join(rootDir, part.dir))
+        ? readdirSync(path.join(rootDir, part.dir), { recursive: true })
+            .filter((file) => String(file).endsWith('.test.ts'))
+            .map((file) => `${part.dir}/${slashes(file)}`)
+        : [],
+    )
+    .filter((file) => !skipped.includes(file));
 
   return { files, byHand: false, filtered: jestFlags.length > 0 };
 }
 
-function runJest(selected, services, { failedOnly, jestFlags, workers }, guess) {
+function runJest(selected, modes, { failedOnly, jestFlags, workers }, guess) {
   const needsDb = selected.some((part) => part.integration);
 
   rmSync(resultFile, { force: true });
@@ -461,12 +509,12 @@ function runJest(selected, services, { failedOnly, jestFlags, workers }, guess) 
   ];
 
   console.log(`\n> Running: ${selected.map((part) => part.name).join(', ')}`);
-  console.log(`> Services: ${describeServices(services)}`);
+  console.log(`> Services: ${describeServices(modes)}`);
   if (needsDb) console.log(`> Integration files at a time: ${workers}`);
   console.log('');
 
   // only the services with a real mode; set here and not left to the shell
-  const real = services.filter((service) => service.real).map((service) => service.name);
+  const real = realServices(modes).map((service) => service.name);
 
   const result = spawnSync(process.execPath, args, {
     cwd: rootDir,
@@ -474,6 +522,7 @@ function runJest(selected, services, { failedOnly, jestFlags, workers }, guess) 
     env: {
       ...process.env,
       TEST_REAL_SERVICES: real.join(','),
+      TEST_SKIP_FILES: skippedFiles(modes).join(','),
       // the guess of the launcher, for the "estimated" of jest (tests/setup/sequencer.mjs)
       ...(guess
         ? { TEST_GUESS_MS: String(guess.ms), TEST_GUESS_WORKERS: String(guess.workers) }
@@ -492,13 +541,7 @@ function readResults() {
   }
 }
 
-function printSummary(
-  selected,
-  services,
-  parts,
-  results,
-  { failedOnly, jestFlags, cloudinaryUse },
-) {
+function printSummary(selected, modes, parts, results, { failedOnly, jestFlags, cloudinaryUse }) {
   const rows = selected.map((part) => {
     const row = { part: part.name, files: 0, passed: 0, failed: 0, skipped: 0, note: '' };
 
@@ -540,7 +583,7 @@ function printSummary(
   }
 
   if (selected.some((part) => part.integration)) {
-    console.log(`\nServices: ${describeServices(services)}`);
+    console.log(`\nServices: ${describeServices(modes)}`);
     if (cloudinaryUse) console.log(cloudinaryUse);
   }
 
@@ -558,24 +601,22 @@ function printSummary(
 
 const options = parseArgs(process.argv.slice(2));
 const parts = discoverParts();
-const { selected, services } = await chooseParts(parts, options);
+const { selected, modes } = await chooseParts(parts, options);
 
 if (!selected.length) fail('No test parts selected.');
 
 const needsDb = selected.some((part) => part.integration);
-const realCloudinary = needsDb && services.some((service) => service.name === 'cloudinary');
+const realCloudinary = needsDb && modes.cloudinary === 'real';
 
 const quotaBefore = realCloudinary ? await checkCloudinaryQuota(selected) : null;
 
 // how long the tests take, for the "estimated" of jest: by the record of the runs before, the mocks
 // and each set of real services apart
 const pace = readPace(paceFile);
-const mode = modeOf(
-  needsDb ? services.filter((service) => service.real).map((service) => service.name) : [],
-);
+const mode = modeOf(needsDb ? realServices(modes).map((service) => service.name) : []);
 // unit files alone take the workers jest gives them: every core but one
 const jestWorkers = needsDb ? options.workers : Math.max(1, availableParallelism() - 1);
-const picked = filesOf(selected, options.jestFlags);
+const picked = filesOf(selected, options.jestFlags, skippedFiles(modes));
 const whole = !options.failedOnly && !picked.filtered;
 const runKey =
   whole && !picked.byHand
@@ -592,7 +633,7 @@ const startedAt = Date.now();
 
 const status = runJest(
   selected,
-  services,
+  modes,
   options,
   guessed ? { ms: guessed.ms, workers: jestWorkers } : null,
 );
@@ -616,7 +657,7 @@ const cloudinaryUse = quotaBefore ? await cloudinaryUseOf(selected, quotaBefore,
 
 if (needsDb && !options.keepDb) removeTestDatabase();
 
-printSummary(selected, services, parts, results, { ...options, cloudinaryUse });
+printSummary(selected, modes, parts, results, { ...options, cloudinaryUse });
 
 if (needsDb && options.keepDb) {
   console.log('The test database is still running, remove it with: npm run db:test:down\n');

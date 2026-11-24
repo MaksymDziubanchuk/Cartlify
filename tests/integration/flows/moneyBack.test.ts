@@ -22,24 +22,24 @@ import {
   deliver,
   realStripe,
   refundAtStripe,
+  refundsOf,
   stripeEvent,
 } from '../../helpers/stripe.js';
 
 // The money that comes back to the shop outside the app, each step with what its actor sees:
 // a carrier loses a send and pays the shop for it; root records it on the
 // send, money of the shop that changes no cost of the send. And money already with the buyer for
-// goods the shop did not accept: the buyer sent the lamps back used and the shop did not accept
-// them, then an admin gave half of the payment back by hand and root said it was for a lamp; an
-// admin with the right of the money (as root may) finds the statement in the alert of the money
-// given too much and keeps the lamps that are still in the shop, records what the buyer gave back,
-// or gives it up. The rules and the refusals are api/orders/carrierMoney.test.ts,
-// api/returns/overpaid.test.ts and api/admin/alertsMoney.test.ts
+// units of the order: an admin gave money back by hand in the dashboard of Stripe and an admin with
+// the right of the money (as root may) said it was for a lamp, all its price (the shop bought it
+// back) or a part of it (a scratch); the lamps come back in a statement and the admin marks at the
+// reception which of them that money paid. The rules and the refusals are
+// api/orders/carrierMoney.test.ts and db/returnMoney.test.ts
 
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
 let root: TestUser;
-// an admin root gave the right of the money: it works what is overpaid as root does
+// an admin root gave the right of the money: it says what money given back by hand was for, as root does
 let cashier: TestUser;
 const userIds: number[] = [];
 const products: TestProduct[] = [];
@@ -119,126 +119,203 @@ describe('money a carrier pays for a send it lost', () => {
   });
 });
 
-describe('money already with the buyer for goods the shop did not accept', () => {
-  // the buyer sent the lamps back used and the shop did not accept them; then an admin gave half of
-  // the payment back by hand in the dashboard of Stripe and root said it was for one lamp: the
-  // buyer has the lamps and the money of one. Root finds the statement in the alert of the money
-  // given too much
-  async function overpaidLamps() {
+describe('money already with the buyer for a lamp of the order', () => {
+  type Row = {
+    id: number;
+    quantity: number;
+    money: string;
+    paidUnits: number;
+    paidUnitsLeft: number;
+  };
+  type Card = {
+    items: Row[];
+    refundedTotal: number;
+    closedAt: string | null;
+    money: { part: string; amount: number; coversId: number | null }[];
+  };
+  const cardOf = async (returnId: number): Promise<Card> => {
+    const res = await j.get(admin, `/api/returns/${returnId}`);
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  };
+  // what money already with the buyer paid of the statement: the parts covered of its card
+  const coveredOf = (card: Card) =>
+    card.money.filter((one) => one.part === 'covered').map((one) => [one.amount, one.coversId]);
+  // the refunds of the payment at Stripe, by their sums
+  const stripeSums = async (paymentId: string) =>
+    (await refundsOf(paymentId)).map((one) => one.amount).sort((a, b) => a - b);
+
+  // the order of two lamps at 10 went; an admin gave money back by hand in the dashboard of Stripe,
+  // and the admin with the right of the money, finding it among the refunds to say what they were
+  // for, says it was for one lamp
+  async function paidByHand(cents: number, note: string) {
     const { buyer, orderId, paymentId } = await paidOrder();
     expect(
       (await j.patch(admin, `/api/orders/${orderId}/status`, { status: 'shipped' })).statusCode,
     ).toBe(200);
-    const mails = watchMail();
-    expect((await j.post(buyer, `/api/orders/${orderId}/withdrawal`)).statusCode).toBe(201);
-    const code = statementCodeIn(mailTo(mails, buyer.email, `Withdrawal from order #${orderId}`));
-    const [found] = (await j.get(admin, `/api/returns?q=${code}`)).json().items;
-    const returnId = found.id as number;
-    const [row] = (await j.get(admin, `/api/returns/${returnId}`)).json().items;
-    expect(
-      (
-        await j.post(admin, `/api/returns/${returnId}/receive`, {
-          parcel: { buyerPaid: 0 },
-          results: [
-            { itemId: row.id, quantity: 2, goods: 'not_accepted', notAcceptedReason: 'used' },
-          ],
-        })
-      ).statusCode,
-    ).toBe(200);
-
-    const byHand = await refundAtStripe(paymentId, { amount: 1000 });
+    const byHand = await refundAtStripe(paymentId, { amount: cents });
     expect((await deliver(app, await stripeEvent('refund.created', byHand.id))).statusCode).toBe(
       200,
     );
-    const [refund] = (await alerts.listOf(root, 'hand_refunds_to_explain', { orderId })).items as {
+    const [refund] = (await alerts.listOf(cashier, 'hand_refunds_to_explain', { orderId }))
+      .items as { id: number }[];
+    const [item] = (await j.get(cashier, `/api/orders/${orderId}`)).json().items as {
       id: number;
     }[];
-    const [item] = (await j.get(root, `/api/orders/${orderId}`)).json().items as { id: number }[];
-    expect(
-      (
-        await j.post(root, `/api/payments/money-lines/${refund!.id}/decision`, {
-          items: [{ orderItemId: item!.id, quantity: 1, amount: 10 }],
-          note: 'The refund was for a lamp.',
-        })
-      ).statusCode,
-    ).toBe(200);
-
-    const overpaid = async () =>
-      (await alerts.listOf(cashier, 'returns_money_overpaid', { userId: buyer.id })).items.map(
-        (one) => one.id,
-      );
-    expect(await overpaid()).toEqual([returnId]);
-    expect((await j.get(root, `/api/returns/${returnId}`)).json()).toMatchObject({
-      moneyOverpaid: 10,
+    const decided = await j.post(cashier, `/api/payments/money-lines/${refund!.id}/decision`, {
+      items: [{ orderItemId: item!.id, quantity: 1, amount: cents / 100 }],
+      note,
     });
-    return { buyer, orderId, returnId, rowId: row.id as number, overpaid, mails };
+    expect(decided.statusCode).toBe(200);
+    return { buyer, orderId, paymentId, refundId: refund!.id };
+  }
+
+  // the buyer withdraws from lamps of the order on its page (all of them without a number); the admin
+  // finds the statement by the code of the mail and reads its row: how many lamps money already with
+  // the buyer is still to be marked for
+  async function withdrawn(buyer: TestUser, orderId: number, units?: number) {
+    const mails = watchMail();
+    const [free] = (await j.get(buyer, `/api/orders/${orderId}`)).json().withdrawable;
+    const made = await j.post(
+      buyer,
+      `/api/orders/${orderId}/withdrawal`,
+      units === undefined ? {} : { items: [{ orderItemId: free.orderItemId, quantity: units }] },
+    );
+    expect(made.statusCode).toBe(201);
+    const code = statementCodeIn(mailTo(mails, buyer.email, `Withdrawal from order #${orderId}`));
+    const [found] = (await j.get(admin, `/api/returns?q=${code}`)).json().items;
+    const returnId = found.id as number;
+    const [row] = (await cardOf(returnId)).items;
+    expect(row).toMatchObject({ paidUnits: 0, paidUnitsLeft: 1 });
+    return { returnId, row: row!, mails };
   }
 
   mockOnly(
-    'is the money of lamps the shop keeps: they are still in the shop and written off',
+    'is the price of a lamp the shop bought back: of the two lamps that come back, that one is written off and paid already, the other refused',
     async () => {
-      const { buyer, orderId, returnId, rowId, overpaid, mails } = await overpaidLamps();
+      const { buyer, orderId, paymentId, refundId } = await paidByHand(
+        1000,
+        'The shop bought a lamp back: it came broken.',
+      );
+      const { returnId, row, mails } = await withdrawn(buyer, orderId);
 
-      // the lamps did not go back: root keeps them, written off; the money already with the buyer
-      // pays one of the two, the statement waits for the other, which the admin sends as always
-      const kept = await j.post(cashier, `/api/returns/${returnId}/keep`, {
-        items: [{ itemId: rowId, goods: 'written_off' }],
-        note: 'The bank paid the buyer for a lamp: the shop keeps them.',
+      // the broken lamp is the one bought back: written off, and nothing is owed for it; the other
+      // came used and is not accepted
+      const taken = await j.post(admin, `/api/returns/${returnId}/receive`, {
+        parcel: { buyerPaid: 0 },
+        results: [
+          { itemId: row.id, quantity: 1, goods: 'written_off', paidUnits: 1 },
+          { itemId: row.id, quantity: 1, goods: 'not_accepted', notAcceptedReason: 'used' },
+        ],
       });
-      expect(kept.statusCode).toBe(200);
-      expect(kept.json()).toMatchObject({ moneyOverpaid: 0, refundedTotal: 0, closedAt: null });
-      expect(await overpaid()).toEqual([]);
-      expect((await j.post(admin, `/api/returns/${returnId}/refund`)).statusCode).toBe(200);
+      expect(taken.statusCode).toBe(200);
 
-      // the buyer is told the statement is over again, now with all of its money (the first mail of
-      // the end told the refusal)
-      const closed = mailsTo(mails, buyer.email, `Return of order #${orderId} is closed`);
-      expect(closed).toHaveLength(2);
-      expect(closed[1]!.text).toContain('€20.00');
+      // the statement is over: the lamp bought back is paid by the money the buyer has
+      const card = await cardOf(returnId);
+      expect(card.items.map((one) => [one.quantity, one.money, one.paidUnits]).sort()).toEqual([
+        [1, 'refunded', 1],
+        [1, 'refused', 0],
+      ]);
+      expect(card).toMatchObject({ refundedTotal: 10, closedAt: expect.any(String) });
+      expect(coveredOf(card)).toEqual([[10, refundId]]);
+      expect(await stripeSums(paymentId)).toEqual([1000]);
+      expect(mailsTo(mails, buyer.email, `Return of order #${orderId} is closed`)).toHaveLength(1);
     },
   );
 
-  mockOnly('is given back by the buyer once the lamps went back: root records it', async () => {
-    const { returnId, rowId, overpaid } = await overpaidLamps();
-    const sent = await j.post(admin, `/api/returns/${returnId}/shipments`, {
-      direction: 'to_buyer',
-      items: [{ itemId: rowId, quantity: 2 }],
-      carrier: 'DHL',
-      trackingNumber: 'JD0146000777',
-      cost: 6,
-      shippedAt: await dbNow(),
-    });
-    expect(sent.statusCode).toBe(201);
+  mockOnly(
+    'is a part of the price of the lamp that came scratched: the other lamp, sent back whole, has all its price back',
+    async () => {
+      const { buyer, orderId, paymentId } = await paidByHand(400, 'A lamp came scratched: 4 off.');
+      const { returnId, row, mails } = await withdrawn(buyer, orderId, 1);
 
-    const back = await j.post(cashier, `/api/returns/${returnId}/overpaid/received`, {
-      amount: 10,
-      method: 'bank_transfer',
-      note: 'The buyer paid the lamp back.',
-      at: await dbNow(),
-    });
-    expect(back.statusCode).toBe(200);
-    expect(back.json()).toMatchObject({ moneyOverpaid: 0 });
-    expect(await overpaid()).toEqual([]);
-  });
+      // the lamp that came is the whole one: the money of the scratch is not for it
+      const taken = await j.post(admin, `/api/returns/${returnId}/receive`, {
+        parcel: { buyerPaid: 0 },
+        results: [{ itemId: row.id, quantity: 1, goods: 'to_stock', paidUnits: 0 }],
+      });
+      expect(taken.statusCode).toBe(200);
+      const sent = await j.post(admin, `/api/returns/${returnId}/refund`);
+      expect(sent.statusCode).toBe(200);
+
+      expect(await cardOf(returnId)).toMatchObject({
+        refundedTotal: 10,
+        closedAt: expect.any(String),
+      });
+      expect(mailTo(mails, buyer.email, `Return of order #${orderId} is closed`).text).toContain(
+        'We sent you €10.00.',
+      );
+      expect(await stripeSums(paymentId)).toEqual([400, 1000]);
+    },
+  );
 
   mockOnly(
-    'is a loss of the shop when the buyer will not give it back: root gives it up',
+    'is a part of the price of the lamp that came scratched: that lamp, sent back used, is written off and its money lowered to what the buyer has',
     async () => {
-      const { orderId, returnId, overpaid } = await overpaidLamps();
+      const { buyer, orderId, paymentId, refundId } = await paidByHand(
+        400,
+        'A lamp came scratched: 4 off.',
+      );
+      const { returnId, row, mails } = await withdrawn(buyer, orderId, 1);
 
-      const lost = await j.post(cashier, `/api/returns/${returnId}/overpaid/lost`, {
-        note: 'The buyer does not answer.',
+      const taken = await j.post(admin, `/api/returns/${returnId}/receive`, {
+        parcel: { buyerPaid: 0 },
+        results: [{ itemId: row.id, quantity: 1, goods: 'written_off', paidUnits: 1 }],
       });
-      expect(lost.statusCode).toBe(200);
-      expect(await overpaid()).toEqual([]);
-
-      // the journal of the money says what the share became
-      const lines = (
-        await j.get(root, `/api/admin/money-log?orderId=${orderId}&events=money.share_moved`)
-      ).json().items;
-      expect(lines).toEqual([
-        expect.objectContaining({ purpose: 'hand', amount: 0, moneyUse: 'compensation' }),
+      expect(taken.statusCode).toBe(200);
+      expect((await cardOf(returnId)).items).toEqual([
+        expect.objectContaining({ money: 'not_refunded', paidUnits: 1, paid: 4 }),
       ]);
+
+      // the buyer used the lamp: the admin with the right of the money lowers it down to the 4 the
+      // buyer has already, nothing is asked of Stripe
+      const lowered = await j.post(cashier, `/api/returns/${returnId}/refund`, {
+        reductions: [{ itemId: row.id, amount: 4, note: 'Used for weeks after the scratch.' }],
+      });
+      expect(lowered.statusCode).toBe(200);
+      const card = await cardOf(returnId);
+      expect(card).toMatchObject({ refundedTotal: 4, closedAt: expect.any(String) });
+      expect(coveredOf(card)).toEqual([[4, refundId]]);
+      expect(await stripeSums(paymentId)).toEqual([400]);
+      expect(mailsTo(mails, buyer.email, `Return of order #${orderId} is closed`)).toHaveLength(1);
+    },
+  );
+
+  mockOnly(
+    'is a loss of the shop when the admin sent the price of the lamp bought back ahead of it, on the proof of its parcel',
+    async () => {
+      const { buyer, orderId, paymentId, refundId } = await paidByHand(
+        1000,
+        'The shop bought a lamp back: it came broken.',
+      );
+      const { returnId, row } = await withdrawn(buyer, orderId, 1);
+
+      // the parcel is confirmed, the admin sends the money ahead of the goods
+      expect(
+        (await j.post(admin, `/api/returns/${returnId}/proof/confirm`, { buyerPaid: 0 }))
+          .statusCode,
+      ).toBe(200);
+      expect((await j.post(admin, `/api/returns/${returnId}/refund`)).statusCode).toBe(200);
+      expect(await stripeSums(paymentId)).toEqual([1000, 1000]);
+
+      // the lamp that comes is the one bought back: the buyer had its price twice
+      const taken = await j.post(admin, `/api/returns/${returnId}/receive`, {
+        results: [{ itemId: row.id, quantity: 1, goods: 'written_off', paidUnits: 1 }],
+      });
+      expect(taken.statusCode).toBe(200);
+      expect(await cardOf(returnId)).toMatchObject({
+        refundedTotal: 10,
+        closedAt: expect.any(String),
+      });
+
+      // root reads in the money journal that the money given back by hand for it is a loss of the shop
+      const [hand] = (
+        await j.get(root, `/api/admin/money-log?orderId=${orderId}&purpose=hand`)
+      ).json().items as { id: number; meta: Record<string, unknown>[] }[];
+      expect(hand).toMatchObject({ id: refundId });
+      expect(hand!.meta).toEqual(
+        expect.arrayContaining([expect.objectContaining({ lost: 10, lostReturnItemId: row.id })]),
+      );
     },
   );
 });

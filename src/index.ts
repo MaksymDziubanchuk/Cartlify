@@ -1,12 +1,15 @@
 import { app } from './app.js';
 import env from '@config/env.js';
+import { loadShopCountries } from '@config/shopCountries.js';
 import { loadShopSettings, shopSettings } from '@config/shopSettings.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { startOrderTimeoutWorker, stopOrderTimeoutWorker } from './workers/orderTimeout.worker.js';
 import { startMoneyRefundWorker, stopMoneyRefundWorker } from './workers/moneyRefund.worker.js';
 import { startParcelVoidWorker, stopParcelVoidWorker } from './workers/parcelVoid.worker.js';
+import { startReceiptsWorker, stopReceiptsWorker } from './workers/receipts.worker.js';
 import { aiProvider } from '@providers/ai/index.js';
 import { fileStorage } from '@providers/files/index.js';
+import { receiptProvider } from '@providers/receipts/index.js';
 import { startupWarnings } from '@config/startupWarnings.js';
 import { createShutdown } from '@helpers/shutdown.js';
 
@@ -25,6 +28,9 @@ async function bootstrap() {
   // seller): fills in the defaults of the fields root left empty, then keeps the current version
   // in memory (@config/shopSettings.js); every route that used to read env for these reads it
   await loadShopSettings();
+  // the countries the shop sells to with the rule of their tax, and the tax groups
+  // (@config/shopCountries.js)
+  await loadShopCountries();
 
   // settings that switch a feature off; production does not start without some of them
   for (const warning of startupWarnings({
@@ -63,6 +69,12 @@ async function bootstrap() {
   startParcelVoidWorker(app.log);
   app.log.info('parcel void worker started');
 
+  // the fiscal receipts that wait are sent to the provider of the receipts, when it makes them
+  if (receiptProvider.makesReceipts()) {
+    startReceiptsWorker(app.log);
+    app.log.info('receipts worker started');
+  }
+
   // what the file storage draws the avatars of letters with; the start does not wait for it, a
   // failure goes to the log and the next start tries again
   void fileStorage.prepareLetterAvatars(app.log);
@@ -87,6 +99,7 @@ const shutdown = createShutdown({
     () => stopOrderTimeoutWorker(),
     () => stopMoneyRefundWorker(),
     () => stopParcelVoidWorker(),
+    () => stopReceiptsWorker(),
     // stop accepting requests and wait for active ones to finish
     async () => {
       await app.close();

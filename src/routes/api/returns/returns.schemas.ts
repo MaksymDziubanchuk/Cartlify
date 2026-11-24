@@ -76,7 +76,6 @@ const returnExample = {
     paymentLeft: 20,
     short: false,
   },
-  moneyOverpaid: 0,
   money: [],
   items: [
     {
@@ -94,7 +93,8 @@ const returnExample = {
       amountNote: null,
       goodsSetAt: null,
       goodsSetBy: null,
-      moneyLogId: null,
+      paidUnits: 0,
+      paidUnitsLeft: 0,
       refundFailure: null,
       refusedCode: null,
     },
@@ -268,7 +268,10 @@ const postReceiveItemsSchema = {
         'row that is not a whole number (RETURN_ITEMS_INVALID), units that are not whole units ' +
         'above 0 (RETURN_QUANTITY_INVALID), goods there are not or a reason with goods that take ' +
         'none (RETURN_GOODS_INVALID), a refusal to accept without its reason ' +
-        '(RETURN_NOT_ACCEPTED_REASON_REQUIRED); the parcel confirmed in the step without the sum of the ' +
+        '(RETURN_NOT_ACCEPTED_REASON_REQUIRED); paidUnits above the units of the result, for goods ' +
+        'not accepted or not arrived, above the units money already with the buyer may still pay of ' +
+        'the item (none: no mark), or, when no other unit of it can come, marks that are not all the ' +
+        'units left (or all that came) (RETURN_PAID_UNITS_INVALID); the parcel confirmed in the step without the sum of the ' +
         'buyer when the shop pays the way back and did not pay the carrier (RETURN_PARCEL_SUM_REQUIRED), ' +
         'or with a sum that is not money or both sums (RETURN_PARCEL_SUM_INVALID).',
       $ref: 'errorResponseSchema#',
@@ -285,8 +288,11 @@ const postReceiveItemsSchema = {
         'confirmed and without `parcel` (RETURN_PARCEL_REQUIRED), or a parcel for goods none of which ' +
         'are on their way to the shop (RETURN_NOTHING_WAITING); goods refused for a row whose money ' +
         'is on its way or back, or a row paid in part (the payment held only some of it: the rest ' +
-        'goes outside the app first) refused or given the result of only some of its units ' +
-        '(RETURN_ITEM_MONEY_SETTLED); the order is cancelled, a cancel puts the units back itself ' +
+        'goes outside the app first) refused or given the result of only some of its units, or ' +
+        'the units money already with the buyer pays refused when no other unit of the item can ' +
+        'come (RETURN_ITEM_MONEY_SETTLED); goods of an item money already with the buyer may still ' +
+        'pay units of came back without paidUnits while another unit of it may still come ' +
+        '(RETURN_PAID_UNITS_REQUIRED); the order is cancelled, a cancel puts the units back itself ' +
         '(RETURN_ORDER_NOT_RETURNABLE); the order did not take so many units from batches ' +
         '(RETURN_ALLOCATIONS_MISSING); a statement of the form without the code no admin accepted yet (RETURN_NOT_ACCEPTED).',
       $ref: 'errorResponseSchema#',
@@ -473,168 +479,6 @@ const postMoneyReceivedSchema = {
       description:
         'A row whose money the buyer does not have (MONEY_RECEIVED_NOT_REFUNDED); more than a row ' +
         'cost with what came back for it before (MONEY_RECEIVED_EXCEEDS); RESOURCE_BUSY: try again.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-const moneyAdmin403 = {
-  description:
-    'INSUFFICIENT_ROLE: only an admin or root; MONEY_MANAGER_REQUIRED: only root and an admin root ' +
-    'allowed to handle the money; the database refused the actor the same way.',
-  $ref: 'errorResponseSchema#',
-} as const;
-
-const postOverpaidReceivedSchema = {
-  operationId: 'recordOverpaidReceived',
-  summary: 'Record money the buyer gave back of what is overpaid',
-  description:
-    'A root (or an admin root allowed to handle the money, `canManageMoney`) records money the ' +
-    'buyer gave the shop back outside the app of what money already with the buyer gave the goods ' +
-    'of the order more than its statements took (`moneyOverpaid` of the card: a refund made by ' +
-    'hand or what a bank took, given to items whose units came back refused or lowered). At most ' +
-    'what is overpaid, on the day it really came. The money journal gets a line `money.received` ' +
-    'for each share it pays back (the purpose of the line of the share, naming it; the reports by ' +
-    'product take it off the returns of those goods), what the statements had back stays; the ' +
-    'journal of the admins gets `return.overpaid_received`. No mail. The answer is the card of the ' +
-    'statement.',
-
-  params: { $ref: 'returnsParamsSchema#', examples: [paramsExample] },
-  body: {
-    $ref: 'returnsOverpaidReceivedBodySchema#',
-    examples: [
-      {
-        amount: 10,
-        method: 'bank_transfer',
-        note: 'The buyer paid back the money of the lamp the shop did not accept.',
-        at: '2026-11-12T10:00:00.000Z',
-      },
-    ],
-  },
-
-  response: {
-    200: {
-      description: 'The money was recorded: the card of the statement.',
-      $ref: 'returnsResponseSchema#',
-      examples: [returnExample],
-    },
-    400: {
-      description:
-        'Invalid request: a wrong field (VALIDATION_ERROR); a sum that is not above 0 to the cent ' +
-        '(MONEY_RECEIVED_INVALID); no way or note (MONEY_RECEIVED_NOTE_REQUIRED); a day of the ' +
-        'future or before the money went to the buyer (MONEY_RECEIVED_AT_INVALID).',
-      $ref: 'errorResponseSchema#',
-    },
-    403: {
-      ...moneyAdmin403,
-      description: `${moneyAdmin403.description} MONEY_RECEIVED_FORBIDDEN: the refusal of the database.`,
-    },
-    404: {
-      description: 'The statement is not there (MONEY_RECEIVED_NOT_FOUND).',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'More than is overpaid (MONEY_RECEIVED_EXCEEDS); RESOURCE_BUSY: try again.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-const postOverpaidLostSchema = {
-  operationId: 'loseOverpaid',
-  summary: 'Give what is overpaid up',
-  description:
-    'A root (or an admin root allowed to handle the money, `canManageMoney`) gives up what money ' +
-    'already with the buyer gave the goods of the order more than its statements took ' +
-    '(`moneyOverpaid` of the card): the buyer will not give it back. The money journal gets a line ' +
-    '`money.share_moved` of 0 for each share (it moves no money: what part of the line was for ' +
-    'changes): a compensation of money given back by hand, a loss of what a bank took; the reports ' +
-    'by product take it off the returns of those goods and the summary counts it among the other ' +
-    'refunds, in the period of the step. The journal of the admins gets `return.overpaid_lost` with ' +
-    'the note. No mail. The answer is the card of the statement.',
-
-  params: { $ref: 'returnsParamsSchema#', examples: [paramsExample] },
-  body: {
-    $ref: 'returnsOverpaidLostBodySchema#',
-    examples: [{ note: 'The buyer does not answer: the money is lost.' }],
-  },
-
-  response: {
-    200: {
-      description: 'Given up: the card of the statement.',
-      $ref: 'returnsResponseSchema#',
-      examples: [returnExample],
-    },
-    400: {
-      description: 'Invalid request: a wrong field (VALIDATION_ERROR).',
-      $ref: 'errorResponseSchema#',
-    },
-    403: {
-      ...moneyAdmin403,
-      description: `${moneyAdmin403.description} MONEY_OVERPAID_FORBIDDEN: the refusal of the database.`,
-    },
-    404: {
-      description: 'The statement is not there (MONEY_OVERPAID_NOT_FOUND).',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'Nothing is overpaid (MONEY_OVERPAID_NONE); RESOURCE_BUSY: try again.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-const postKeepSchema = {
-  operationId: 'keepReturnGoods',
-  summary: 'Keep goods not accepted that are still in the shop',
-  description:
-    'A root (or an admin root allowed to handle the money, `canManageMoney`) keeps goods the shop ' +
-    'did not accept that are still with it (not sent back) when money already with the buyer is on ' +
-    'their item (a refund made by hand or what a bank took, given to it): they come back on the ' +
-    'shelf or are written off as at the parcel (the stock log), the row owes its money again and ' +
-    'the statement opens again; the money already with the buyer pays the rows it covers all of at ' +
-    'once (nothing asked of the provider) and their buyer is mailed; the rest goes by the usual ' +
-    'transfer (`POST /api/returns/{returnId}/refund`), as for any row. The journal of the admins ' +
-    'gets `return.goods_kept` with the note. The answer is the card of the statement.',
-
-  params: { $ref: 'returnsParamsSchema#', examples: [paramsExample] },
-  body: {
-    $ref: 'returnsKeepBodySchema#',
-    examples: [
-      {
-        items: [{ itemId: 31, goods: 'written_off' }],
-        note: 'The bank paid the buyer for the lamp: the shop keeps it and writes it off.',
-      },
-    ],
-  },
-
-  response: {
-    200: {
-      description: 'Kept: the card of the statement.',
-      $ref: 'returnsResponseSchema#',
-      examples: [returnExample],
-    },
-    400: {
-      description:
-        'Invalid request: a wrong field (VALIDATION_ERROR); a row named twice or goods other than ' +
-        'to_stock and written_off (RETURN_KEEP_INVALID).',
-      $ref: 'errorResponseSchema#',
-    },
-    403: {
-      ...moneyAdmin403,
-      description: `${moneyAdmin403.description} RETURN_FORBIDDEN: the refusal of the database.`,
-    },
-    404: {
-      description:
-        'The statement is not there (RETURN_NOT_FOUND); a row that is not one of it ' +
-        '(RETURN_ITEM_NOT_FOUND).',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description:
-        'A row whose goods were not refused, that went back to the buyer, whose units another ' +
-        'statement holds, or whose item no money of the buyer is on (RETURN_KEEP_NOT_ALLOWED); ' +
-        'RESOURCE_BUSY: try again.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -990,9 +834,6 @@ const taggedReturnsSchemas = withOpenApiTag(
     postRefundSchema,
     postRefundOutsideSchema,
     postMoneyReceivedSchema,
-    postOverpaidReceivedSchema,
-    postOverpaidLostSchema,
-    postKeepSchema,
     postCloseSchema,
     postShipmentSchema,
     patchShipmentCostSchema,

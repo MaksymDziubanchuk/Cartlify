@@ -173,6 +173,18 @@
     "heading": "Compensation sent",
     "body": "We sent you {{amount}} as a compensation for your order #{{orderId}}."
   },
+  "orderReceipt": {
+    "subjectSale": "{{appName}} — Your receipt for order #{{orderId}}",
+    "subjectReturn": "{{appName}} — Your return receipt for order #{{orderId}}",
+    "previewSale": "The receipt of order #{{orderId}} ({{amount}}) is registered.",
+    "previewReturn": "The receipt of the return of order #{{orderId}} ({{amount}}) is registered.",
+    "headingSale": "Your receipt",
+    "headingReturn": "Your return receipt",
+    "bodySale": "The receipt of your order #{{orderId}} for {{amount}} is registered with the tax authority.",
+    "bodyReturn": "The receipt of the money returned for your order #{{orderId}} ({{amount}}) is registered with the tax authority.",
+    "numberLine": "Receipt number: {{number}}",
+    "checkLine": "You can check it with the tax authority here:"
+  },
   "orderCancelledRefunded": {
     "subject": "{{appName}} — Order #{{orderId}} is cancelled and your money is sent back",
     "preview": "Order #{{orderId}} is cancelled, {{amount}} is on its way back to you.",
@@ -431,5 +443,30 @@
     "adminUnconfirmedFallback": "Only customers with a confirmed email can talk to an admin. Please confirm your email with the link we sent you, then ask again.",
     "adminAllowedFallback": "Please describe your issue for the admin. An admin will be able to reply here later. The bot will stop replying in this thread now.",
     "loopAssistance": "I may be repeating myself. Could you clarify what exactly you want to know, or do you want admin support?"
+  },
+  "taxDocument": {
+    "invoice": "Invoice",
+    "credit_note": "Credit note",
+    "number": "Number",
+    "issuedAt": "Date of issue",
+    "soldAt": "Date of sale",
+    "order": "Order",
+    "seller": "Seller",
+    "buyer": "Buyer",
+    "taxedIn": "Place of taxation",
+    "item": "Description",
+    "delivery": "Delivery",
+    "quantity": "Qty",
+    "unitNet": "Unit price excl. tax",
+    "rate": "Rate",
+    "net": "Excl. tax",
+    "tax": "Tax",
+    "gross": "Total",
+    "totals": "Totals by rate",
+    "noTax": "no tax",
+    "totalNet": "Total excl. tax",
+    "totalTax": "Total tax",
+    "totalGross": "Total incl. tax",
+    "corrects": "Corrects invoice"
   }
 }

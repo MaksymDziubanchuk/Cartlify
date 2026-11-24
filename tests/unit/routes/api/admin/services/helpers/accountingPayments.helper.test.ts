@@ -44,8 +44,6 @@ const columns = (patch: Partial<PaymentsColumns> = {}): PaymentsColumns => ({
   dispute_delivery_used: dec('0'),
   hand_delivery: dec('0'),
   hand_delivery_used: dec('0'),
-  shares_moved_goods: dec('0'),
-  received_share_delivery: dec('0'),
   ...patch,
 });
 
@@ -68,8 +66,6 @@ const NONE: PaymentsColumns = {
   dispute_delivery_used: zero,
   hand_delivery: zero,
   hand_delivery_used: zero,
-  shares_moved_goods: zero,
-  received_share_delivery: zero,
 };
 
 const delivery = (patch: Partial<DeliveryColumns> = {}): DeliveryColumns => ({
@@ -85,6 +81,7 @@ const delivery = (patch: Partial<DeliveryColumns> = {}): DeliveryColumns => ({
   return_sends_without_cost: 0n,
   return_ship_deducted: zero,
   return_ship_reimbursed: zero,
+  ship_corrections: zero,
   ...patch,
 });
 
@@ -245,18 +242,6 @@ describe('summaryOf with the disputes and the refunds by hand', () => {
 
   // root gave up 12 of an overpaid share of the goods: no more their return, a loss; the buyer gave
   // back 3 of an overpaid share of the delivery: less of what went out
-  it('takes what root gave up of an overpaid share of the goods as an expense, and what the buyer gave back of the delivery off it', () => {
-    const out = summaryOf({
-      itemsRevenue: dec('0'),
-      itemsCost: dec('0'),
-      writeOffs: 0,
-      delivery: delivery({ paid_revenue: zero, ship_cost: zero }),
-      payments: { ...NONE, shares_moved_goods: dec('12.00'), received_share_delivery: dec('3.00') },
-    });
-
-    expect(out.expenses).toMatchObject({ otherRefunds: 9, total: 9 });
-  });
-
   it('makes money that came back from the bank a negative expense', () => {
     const out = summaryOf({
       itemsRevenue: dec('0'),

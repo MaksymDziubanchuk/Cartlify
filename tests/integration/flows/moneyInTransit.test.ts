@@ -62,6 +62,12 @@ beforeAll(async () => {
   cashier = await createUser({ role: 'ADMIN' });
   userIds.push(root.id, cashier.id);
   await giveMoneyRight(root.id, cashier.id);
+  // the admin watches the money in transit for three days
+  await alerts.writeNumbers(cashier, [
+    'compensation_refunds_in_transit',
+    'hand_refunds_in_transit',
+    'dispute_refunds_in_transit',
+  ]);
 });
 
 afterAll(async () => {

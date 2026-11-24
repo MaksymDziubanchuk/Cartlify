@@ -152,18 +152,37 @@ export async function placeOrderOf(
   );
   if (stage === 'cart') return orderId;
 
-  const confirmed = await app.inject({
-    method: 'POST',
-    url: '/api/orders/current/confirm',
-    headers,
-    payload: {
-      orderId,
-      delivery,
-      expectedDeliveryPrice: await quotedDeliveryPrice(app, headers, delivery),
-    },
-  });
+  const confirm = async () =>
+    app.inject({
+      method: 'POST',
+      url: '/api/orders/current/confirm',
+      headers,
+      payload: {
+        orderId,
+        delivery,
+        expectedDeliveryPrice: await quotedDeliveryPrice(app, headers, delivery),
+      },
+    });
+  let confirmed = await confirm();
+  // the shop has terms or a contract in force (a file of the whole shop published them): the buyer
+  // accepts the versions the answer names and confirms again, as the page does
+  if (confirmed.statusCode === 409 && confirmed.json()?.errorCode === 'LEGAL_ACCEPTANCE_REQUIRED') {
+    const current = (confirmed.json().details?.current ?? []) as { id: number }[];
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/api/legal/acceptances',
+      headers,
+      payload: { documentIds: current.map((document) => document.id) },
+    });
+    if (accepted.statusCode >= 300) {
+      throw new Error(`accepting the terms answered ${accepted.statusCode}`);
+    }
+    confirmed = await confirm();
+  }
   if (confirmed.statusCode !== 200) {
-    throw new Error(`confirming the order answered ${confirmed.statusCode}`);
+    throw new Error(
+      `confirming the order answered ${confirmed.statusCode} ${confirmed.json()?.errorCode ?? ''}`,
+    );
   }
   if (stage === 'waiting') return orderId;
 
@@ -174,8 +193,9 @@ export async function placeOrderOf(
   return orderId;
 }
 
-// the payment the stripe webhook records for an order that waits for it, a made-up payment id;
-// the confirmation may refresh the prices, the payment has to match the items as they are now
+// the payment the stripe webhook records for an order that waits for it, a made-up payment id in
+// the currency of the shop of the tests (the webhook always names one); the confirmation may
+// refresh the prices, the payment has to match the items as they are now
 export async function payOrder(orderId: number): Promise<void> {
   const paid = await asAdmin(async (tx) => {
     const { total } = await tx.order.findUniqueOrThrow({
@@ -184,7 +204,7 @@ export async function payOrder(orderId: number): Promise<void> {
     });
 
     return tx.$queryRaw<{ result: string }[]>`
-      select cartlify.pay_order(${orderId}::int, 'stripe'::cartlify."PaymentProvider", ${`pi_test_${orderId}`}, ${total}::numeric) as result
+      select cartlify.pay_order(${orderId}::int, 'stripe'::cartlify."PaymentProvider", ${`pi_test_${orderId}`}, ${total}::numeric, 'eur') as result
     `;
   });
   if (paid[0]?.result !== 'PAID') throw new Error(`paying the order answered ${paid[0]?.result}`);

@@ -16,7 +16,9 @@ import { isRealService } from './services.js';
 // it made, the catalog of the carriers. A label never: every parcel is made by the mock in both
 // modes (each real Ship takes a label of the account, which has no sandbox). What the real account cannot be made to do answers from the mock in both modes: a
 // carrier that voids and numbers each box (MockExpress), a carrier list a test sets, every way the
-// service does not answer, a refusal of the carrier, the events of the webhook
+// service does not answer, a refusal of the carrier, the events of the webhook. The requests of a
+// real run go one at a time at the pace the account takes (inTurn, askReal: any plan, the trial
+// one too), and the account needs the carrier Generic as MOCK_CARRIERS has it
 
 export const SHIPPYPRO_ORIGIN = 'https://api.shippypro.com';
 
@@ -38,11 +40,13 @@ export type MockCarrier = {
   multiTracking: boolean;
   labelAs: 'text' | 'list';
   voids: boolean;
+  // takes a commercial invoice electronically with the parcel (the service etd)
+  etd: boolean;
 };
 
 // Generic is the carrier of ShippyPro for tests, as the real account has it (0-5 kg 4 EUR, up to
-// 500 kg 10 EUR, no number, no void in its capabilities); the other one is a made-up carrier with a
-// number a box, a label in a list and a void
+// 500 kg 10 EUR, no number, no void and no etd in its capabilities); the other one is a made-up
+// carrier with a number a box, a label in a list, a void and the commercial invoice electronically
 export const MOCK_CARRIERS: readonly MockCarrier[] = [
   {
     name: 'Generic',
@@ -60,6 +64,7 @@ export const MOCK_CARRIERS: readonly MockCarrier[] = [
     multiTracking: false,
     labelAs: 'text',
     voids: false,
+    etd: false,
   },
   {
     name: 'MockExpress',
@@ -77,6 +82,7 @@ export const MOCK_CARRIERS: readonly MockCarrier[] = [
     multiTracking: true,
     labelAs: 'list',
     voids: true,
+    etd: true,
   },
 ];
 
@@ -93,6 +99,10 @@ type MockOrder = {
   trackingNumber: string;
   labelUrl: string;
   voided: boolean;
+  // the number of the import scheme it was made with (Attributes.sp_ioss)
+  ioss: string | null;
+  // the commercial invoices made of it, each with whether it went to the carrier (UploadETD)
+  invoices: { electronic: boolean; params: Record<string, unknown> }[];
 };
 
 export type ShippyProCall = { method: string; params: Record<string, unknown> };
@@ -118,10 +128,24 @@ let realRequests = 0;
 // the carriers of the real account the tests ask in the real mode; any other carrier the account has
 // is left out of its answers, so a test never sees, nor makes a label of, one the tests do not know
 const REAL_CARRIERS = ['Generic'];
-// ShippyPro takes 20 requests of v1 in 10 seconds for the account: the processes of a run keep to 18
-// in any 10 seconds (a sliding window), as many as it takes with a margin
-const V1_WINDOW_MS = 10_000;
-const V1_PER_WINDOW = 18;
+// the pace of v1 for the processes of a run (inTurn): one request at a time, the next once the one
+// before was answered this long ago. It starts at the limit of the documentation (20 requests in 10
+// seconds) and doubles, for the rest of the run, every time the account is closed by a 429: the
+// limit of an account is of its plan (the trial one took 10 at once and then about one in 2 to 3
+// seconds, 23.11.2026), so any account ends at the pace it takes
+const V1_FIRST_SPACING_MS = 550;
+const V1_MAX_SPACING_MS = 8_000;
+// a request the account answered 429 waits as long as it said (Retry-After, 60 seconds without it)
+// and goes again, this many times at most before the test gets the 429
+const V1_TRIES = 6;
+// the time of a real request once its turn came, the one the app gives it
+// (SHIPPYPRO_TIMEOUTS_MS of src/providers/delivery/shippypro/shippyProClient.ts): the wait for the
+// turn is no time of the app's, which the mock checks (an outage of the kind timeout)
+const realTimeoutOf = (method: string): number => (method === 'GetRates' ? 8_000 : 10_000);
+
+// the limit of a test in the real mode: its requests wait for their turns at the account, one at a
+// time for the whole run and longer while the account is closed (tests/setup/integration.shippypro.ts)
+export const shippyProWait: number | undefined = realShippyPro ? 300_000 : undefined;
 
 // what the real account said of its carriers: their own id, service, words and days
 type RealCarrier = Pick<MockCarrier, 'id' | 'service' | 'label' | 'days'>;
@@ -258,6 +282,8 @@ function ship(params: Record<string, unknown>) {
       trackingNumber: '',
       labelUrl: '',
       voided: false,
+      ioss: null,
+      invoices: [],
     });
     return {
       Result: 'OK',
@@ -293,6 +319,8 @@ function ship(params: Record<string, unknown>) {
     trackingNumber,
     labelUrl,
     voided: false,
+    ioss: iossOf(params),
+    invoices: [],
   });
 
   return {
@@ -314,6 +342,73 @@ function ship(params: Record<string, unknown>) {
     DeliveryCarrier: null,
     Status: '1',
   };
+}
+
+const iossOf = (params: Record<string, unknown>): string | null => {
+  const attributes = params.Attributes as Record<string, unknown> | undefined;
+  return typeof attributes?.sp_ioss === 'string' ? attributes.sp_ioss : null;
+};
+
+// a pdf of one empty page, the way ShippyPro gives a commercial invoice (base64)
+const INVOICE_PDF = Buffer.from(
+  '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
+    '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
+    '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>endobj\n' +
+    'trailer<</Root 1 0 R>>\n%%EOF\n',
+  'latin1',
+).toString('base64');
+
+// the fields CreateCrossBorderInvoice requires (the specification of v1), of the invoice, of a party
+// and of a line of the goods
+const INVOICE_FIELDS = [
+  'Incoterm',
+  'TypeOfExport',
+  'OrderId',
+  'InvoiceNumber',
+  'DateOfExportation',
+  'ShipperExporter',
+  'Consignee',
+  'Goods',
+];
+const PARTY_FIELDS = ['Name', 'Address', 'Zipcode', 'City', 'Country', 'Telephone'];
+const GOODS_FIELDS = ['ParcelCount', 'Description', 'HsCode', 'Quantity', 'Weight', 'UnitValue'];
+
+const missingOf = (value: unknown, fields: readonly string[]): string[] =>
+  fields.filter((field) => {
+    const v = (value as Record<string, unknown> | undefined)?.[field];
+    return v === undefined || v === null;
+  });
+
+// a commercial invoice of a live parcel of the mock: its pdf, and sent to the carrier when UploadETD
+// is there (any value) and the carrier takes it; refused in the words of ShippyPro when it does not
+function crossBorderInvoice(params: Record<string, unknown>) {
+  const goods = Array.isArray(params.Goods) ? (params.Goods as unknown[]) : [];
+  const missing = [
+    ...missingOf(params, INVOICE_FIELDS),
+    ...missingOf(params.ShipperExporter, PARTY_FIELDS).map((f) => `ShipperExporter.${f}`),
+    ...missingOf(params.Consignee, PARTY_FIELDS).map((f) => `Consignee.${f}`),
+    ...goods.flatMap((line, i) => missingOf(line, GOODS_FIELDS).map((f) => `Goods[${i}].${f}`)),
+    ...(goods.length ? [] : ['Goods[0]']),
+  ];
+  if (missing.length) return { Error: `Missing required fields: ${missing.join(', ')}` };
+
+  const order = orders.find(
+    (candidate) =>
+      String(candidate.id) === String(params.OrderId) &&
+      candidate.status === '1' &&
+      !candidate.voided,
+  );
+  if (!order) return { Error: 'Order not found' };
+
+  const electronic = params.UploadETD !== undefined;
+  if (electronic && !order.carrier.etd) {
+    return {
+      Error:
+        'Upload Paperless Failed with error: The selected order is not valid for this operation',
+    };
+  }
+  order.invoices.push({ electronic, params });
+  return { Result: 'OK', CrossBorderInvoice: INVOICE_PDF };
 }
 
 function shippedOrders(params: Record<string, unknown>) {
@@ -421,6 +516,8 @@ function answerV1(method: string, params: Record<string, unknown>): unknown {
       return orderOf(params);
     case 'VoidShipments':
       return voidShipments(params);
+    case 'CreateCrossBorderInvoice':
+      return crossBorderInvoice(params);
     default:
       return { Error: `Method ${method} not found` };
   }
@@ -483,6 +580,7 @@ function answerV2(path: string): Response {
       shipment: service(true),
       tracking: service(carrier.tracking),
       voidShipment: service(carrier.voids),
+      etd: service(carrier.etd),
     },
   });
 }
@@ -514,8 +612,12 @@ export function installShippyPro(): void {
     if (outage) return outageAnswer(outage, init);
 
     if (realShippyPro) {
+      // the signal of the app is left out: a request that waited for its turn would be past the
+      // time the app gives it; once it goes it has that time of its own
       const answer = await realAnswer(method, params, url.pathname, () =>
-        askReal(url.pathname, () => realFetch(input, init)),
+        askReal(url.pathname, () =>
+          realFetch(input, { ...init, signal: AbortSignal.timeout(realTimeoutOf(method)) }),
+        ),
       );
       if (answer) return answer;
     }
@@ -541,31 +643,101 @@ async function limitsClient() {
 // every process of the run
 const realNow = () => Math.floor(performance.timeOrigin + performance.now());
 
-// a request of v1 waits for its turn: the moments of the requests of the last 10 seconds of every
-// process of the run are in one sorted set; a request goes when fewer than the limit are there
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// the requests of v1 of every process of the run, in one sorted set: at the moment one went and,
+// once answered, at the moment of its answer (the service counts it between the two); the pace
+// (the spacing of now) and the moment the account opens again after a 429
 const V1_KEY = 'test:shippypro:v1';
-async function inTurn(): Promise<void> {
+const V1_SPACING_KEY = 'test:shippypro:v1:spacing';
+const V1_CLOSED_KEY = 'test:shippypro:v1:closed';
+
+// a request of v1 waits for its turn: while the account is closed, and until no other request went
+// or was answered within the spacing
+async function inTurn(): Promise<string> {
   const redis = await limitsClient();
   for (;;) {
     const now = realNow();
-    await redis.zRemRangeByScore(V1_KEY, 0, now - V1_WINDOW_MS);
+    const closedUntil = Number((await redis.get(V1_CLOSED_KEY)) ?? 0);
+    if (closedUntil > now) {
+      await sleep(closedUntil - now + 50);
+      continue;
+    }
+    const spacing = Number((await redis.get(V1_SPACING_KEY)) ?? V1_FIRST_SPACING_MS);
+    await redis.zRemRangeByScore(V1_KEY, 0, now - spacing);
     const member = `${now}-${process.pid}-${Math.random()}`;
     await redis.zAdd(V1_KEY, { score: now, value: member });
     await redis.expire(V1_KEY, 60);
-    // its place among the requests of the window, by the moment
-    const place = await redis.zRank(V1_KEY, member);
-    if (place !== null && place < V1_PER_WINDOW) return;
+    // the first of the spacing: no other request in it
+    if ((await redis.zRank(V1_KEY, member)) === 0) return member;
     await redis.zRem(V1_KEY, member);
     const [oldest] = await redis.zRangeWithScores(V1_KEY, 0, 0);
-    const wait = (oldest ? oldest.score + V1_WINDOW_MS - now : 100) + 20;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(Math.max(wait, 20), V1_WINDOW_MS)));
+    const wait = (oldest ? oldest.score + spacing - now : 100) + 20;
+    await sleep(Math.min(Math.max(wait, 20), V1_MAX_SPACING_MS));
   }
 }
 
+// a request of v1 counted from the moment of its answer (or of its failure)
+async function answered(member: string): Promise<void> {
+  const redis = await limitsClient();
+  await redis.zAdd(V1_KEY, { score: realNow(), value: member });
+  await redis.expire(V1_KEY, 60);
+}
+
+// the account answered 429: closed for every process as long as it said, and, the first 429 of a
+// close, the pace halved for the rest of the run
+async function closedFor(retryAfter: string | null): Promise<void> {
+  const redis = await limitsClient();
+  const now = realNow();
+  const seconds = Number(retryAfter);
+  const until = now + (Number.isFinite(seconds) && seconds > 0 ? seconds : 60) * 1000;
+  const before = Number((await redis.get(V1_CLOSED_KEY)) ?? 0);
+  if (until > before) await redis.set(V1_CLOSED_KEY, String(until), { PX: until - now + 1000 });
+  if (before <= now) {
+    const spacing = Number((await redis.get(V1_SPACING_KEY)) ?? V1_FIRST_SPACING_MS);
+    await redis.set(V1_SPACING_KEY, String(Math.min(spacing * 2, V1_MAX_SPACING_MS)), {
+      EX: 3600,
+    });
+  }
+}
+
+// a request the account did not answer in its time goes again after a pause, this many times at
+// most: a slow answer now and then, even twice in a row (23.11.2026), is of the service, not of the
+// app (the mock checks the app past its time: an outage of the kind timeout)
+const timedOut = (err: unknown) => err instanceof Error && err.name === 'TimeoutError';
+const SLOW_TRIES = 3;
+const SLOW_PAUSE_MS = 3_000;
+
 async function askReal(path: string, ask: () => Promise<Response>): Promise<Response> {
-  if (path.startsWith('/v1/')) await inTurn();
-  realRequests += 1;
-  return ask();
+  if (!path.startsWith('/v1/')) {
+    for (let slow = 1; ; slow += 1) {
+      realRequests += 1;
+      try {
+        return await ask();
+      } catch (err) {
+        if (!timedOut(err) || slow === SLOW_TRIES) throw err;
+      }
+      await sleep(SLOW_PAUSE_MS);
+    }
+  }
+  let slow = 0;
+  for (let tries = 1; ; tries += 1) {
+    const member = await inTurn();
+    realRequests += 1;
+    let answer: Response;
+    try {
+      answer = await ask();
+    } catch (err) {
+      slow += 1;
+      if (!timedOut(err) || slow === SLOW_TRIES) throw err;
+      await sleep(SLOW_PAUSE_MS);
+      continue;
+    } finally {
+      await answered(member);
+    }
+    if (answer.status !== 429 || tries === V1_TRIES) return answer;
+    await closedFor(answer.headers.get('retry-after'));
+  }
 }
 
 const isMockOrder = (id: unknown) => orders.some((order) => order.id === Number(id));
@@ -586,7 +758,9 @@ async function realAnswer(
       const only = Array.isArray(params.RateCarriers) ? (params.RateCarriers as string[]) : null;
       const real = carriers
         .filter(realBacked)
-        .filter((c) => !only || only.includes(`${c.name}|${viewOf(c).id}`));
+        // by the name: the id of the account a process knows only once it asked the prices itself,
+        // and a price the cart took from the redis of the run may be of another process
+        .filter((c) => !only || only.some((one) => one.startsWith(`${c.name}|`)));
       if (!real.length) return null;
       const answer = await ask();
       if (!answer.ok) return answer;
@@ -634,6 +808,9 @@ async function realAnswer(
       const ids = Array.isArray(params.OrderIDS) ? (params.OrderIDS as unknown[]) : [];
       return ids.length && ids.every(isMockOrder) ? null : ask();
     }
+    // the parcels are of the mock in both modes (Ship above): so are their invoices
+    case 'CreateCrossBorderInvoice':
+      return isMockOrder(params.OrderId) ? null : ask();
   }
 
   if (path === '/v2/carriers') {
@@ -727,19 +904,20 @@ export function shippyProWebhookBody(
   tracking: { code?: number; extendedCode?: string | null; date?: number } = {},
 ): Record<string, unknown> {
   const OrderID = Number(parcel.parcelId);
+  // as the real account sent it (the log of the webhooks, 22.11.2026): the ids are texts
   if (event === 'shipped') {
     return {
       Event: 'ORDER_SHIPPED',
       LabelURL: [`https://cdn.shippypro.example/labels/label-${parcel.parcelId}.pdf`],
-      OrderID,
+      OrderID: String(OrderID),
       TransactionID: parcel.reference,
-      CarrierID: 7001,
+      CarrierID: '7001',
       TrackingCarrier: 'MockExpress',
       TrackingNumber: parcel.trackingNumber ?? '',
-      MarketplaceID: 0,
-      MarketplacePlatform: '',
+      MarketplaceID: '0',
+      MarketplacePlatform: 'Manual shipment',
       IsReturn: false,
-      ReturnType: '',
+      ReturnType: null,
     };
   }
   if (event === 'error') {

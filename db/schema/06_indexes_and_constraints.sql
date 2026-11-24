@@ -904,6 +904,19 @@ BEGIN
       "labelUrl" IS NULL
       OR ("providerParcelId" IS NOT NULL AND "labelUrl" ~ '^https://[^[:space:]]+$')
     );
+
+  -- customs_invoice_chk: only a parcel of the delivery provider says how its commercial invoice
+  --   reaches the customs (the parcel of the provider is one to the buyer, state_chk).
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'order_shipments_customs_invoice_chk'
+  ) THEN
+    ALTER TABLE cartlify.order_shipments
+      DROP CONSTRAINT order_shipments_customs_invoice_chk;
+  END IF;
+
+  ALTER TABLE cartlify.order_shipments
+    ADD CONSTRAINT order_shipments_customs_invoice_chk
+    CHECK ("customsInvoice" IS NULL OR "providerParcelId" IS NOT NULL);
 END $$;
 
 ----------------------------------------
@@ -1286,10 +1299,10 @@ WHERE
 CREATE INDEX IF NOT EXISTS users_email_trgm_idx ON cartlify.users USING gin (email cartlify.gin_trgm_ops);
 
 ----------------------------------------
--- ADMIN_ALERT_SETTINGS: the threshold of a kind
+-- ADMIN_ALERT_SETTINGS: the numbers of a kind
 ----------------------------------------
--- A threshold an admin set is a whole number from 1 (the bounds of each kind are the server's).
--- No threshold means the one the server gives.
+-- A threshold and a window an admin set are whole numbers from 1 (the bounds of each kind are the
+-- server's). A kind that counts against a number does not work for the person without it.
 DO $$
 BEGIN
   IF EXISTS (
@@ -1302,6 +1315,12 @@ BEGIN
   ALTER TABLE cartlify.admin_alert_settings
     ADD CONSTRAINT admin_alert_settings_threshold_chk
     CHECK (threshold IS NULL OR threshold >= 1);
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'admin_alert_settings_window_chk') THEN
+    ALTER TABLE cartlify.admin_alert_settings
+      ADD CONSTRAINT admin_alert_settings_window_chk
+      CHECK ("window" IS NULL OR "window" >= 1);
+  END IF;
 END $$;
 
 ----------------------------------------
@@ -1358,7 +1377,7 @@ END $$;
 -- policy has the eight terms of keeping personal data, each 1 to 36500 days (six for the logins,
 -- the guests, the chats, the statements of return and the recipients of the orders; two for the
 -- newsletters: the proof of the consent of an ended subscription and the rows of the recipients of
--- a campaign). The terms have none of them, and no kind has the fields of another. Each test
+-- a campaign; one for the copy of the buyer in the tax documents). The terms have none of them, and no kind has the fields of another. Each test
 -- starts with IS NOT NULL: a check that reads NULL passes.
 -- A version published before these columns existed has none of them and breaks the check: clear
 -- those rows (and the consents to them) before the script runs.
@@ -1390,6 +1409,7 @@ BEGIN
           AND "retentionRecipientDays" IS NULL
           AND "retentionNewsletterConsentDays" IS NULL
           AND "retentionNewsletterRecipientsDays" IS NULL
+          AND "retentionTaxDocumentsDays" IS NULL
         WHEN 'privacy' THEN
           "retentionLoginAddressesDays" IS NOT NULL
           AND "retentionLoginAddressesDays" >= 1 AND "retentionLoginAddressesDays" <= 36500
@@ -1407,6 +1427,8 @@ BEGIN
           AND "retentionNewsletterConsentDays" >= 1 AND "retentionNewsletterConsentDays" <= 36500
           AND "retentionNewsletterRecipientsDays" IS NOT NULL
           AND "retentionNewsletterRecipientsDays" >= 1 AND "retentionNewsletterRecipientsDays" <= 36500
+          AND "retentionTaxDocumentsDays" IS NOT NULL
+          AND "retentionTaxDocumentsDays" >= 1 AND "retentionTaxDocumentsDays" <= 36500
           AND "withdrawalDays" IS NULL
           AND "returnAddress" IS NULL
           AND "returnShippingPaidBy" IS NULL
@@ -1422,6 +1444,7 @@ BEGIN
           AND "retentionRecipientDays" IS NULL
           AND "retentionNewsletterConsentDays" IS NULL
           AND "retentionNewsletterRecipientsDays" IS NULL
+          AND "retentionTaxDocumentsDays" IS NULL
       END
     );
 END $$;
@@ -1446,9 +1469,10 @@ END $$;
 --   written_off, lost) never have their money refused; the goods that were not accepted or did not
 --   arrive have none of it refunded or on its way; refunded, pending or failed money is for goods
 --   that wait, came back or were lost; refused money is for goods not accepted or not arrived.
--- return_items_money_chk: a row whose money is on its way, back or failed names the line of the
---   money journal that put it there, a row not refunded or refused names none; the code of a
---   closing stays on a refused row whose goods did not arrive.
+-- return_items_money_chk: the code of a closing stays on a refused row whose goods did not arrive
+--   (a row names no line of the money journal: the lines name their rows).
+-- return_items_paid_units_chk: the units marked as paid by money already with the buyer are units of
+--   the row, of goods that wait, came back or were lost (a unit not accepted or not arrived is none).
 -- return_items_back_chk: only goods not accepted go back to the buyer in a parcel.
 -- returns_accepted_chk: only a statement of the form without the code is accepted, together with
 --   who accepted it.
@@ -1560,8 +1584,18 @@ BEGIN
   ALTER TABLE cartlify.return_items
     ADD CONSTRAINT return_items_money_chk
     CHECK (
-      (money IN ('pending', 'refunded', 'failed')) = ("moneyLogId" IS NOT NULL)
-      AND ("refusedCode" IS NULL OR (money = 'refused' AND goods = 'not_arrived'))
+      "refusedCode" IS NULL OR (money = 'refused' AND goods = 'not_arrived')
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_paid_units_chk') THEN
+    ALTER TABLE cartlify.return_items DROP CONSTRAINT return_items_paid_units_chk;
+  END IF;
+
+  ALTER TABLE cartlify.return_items
+    ADD CONSTRAINT return_items_paid_units_chk
+    CHECK (
+      "paidUnits" BETWEEN 0 AND quantity
+      AND ("paidUnits" = 0 OR goods IN ('expected', 'to_stock', 'written_off', 'lost'))
     );
 
   IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_back_chk') THEN
@@ -1720,8 +1754,8 @@ CREATE INDEX IF NOT EXISTS stock_log_order_idx
 -- MONEY_LOG: the actor, the sum, the shape of each event, the indexes
 ----------------------------------------
 -- money_log_actor_chk: a line has an actor and a role together, or none of them (the system).
--- money_log_amount_chk: a line is a movement of money (not 0); only money.share_moved is of 0: it
---   changes what part of a line was for and moves nothing.
+-- money_log_amount_chk: a line is a movement of money, never 0 (what a line was for is written in
+--   the line itself, never in a line of its own).
 -- money_log_meta_chk: the meta is a list.
 -- money_log_fields_chk: the fields that belong to one kind of line only: the state to a refund
 --   (with its time), the failure to a failed refund, the way and the note together, the decision on
@@ -1731,15 +1765,16 @@ CREATE INDEX IF NOT EXISTS stock_log_order_idx
 -- money_log_shape_chk: what each event is. The purpose, the part and the sign of the sum (above 0
 --   comes to the shop), and what the line has to name: the payment of an order is two parts (goods,
 --   delivery) above 0 of an order; a late payment is one part above 0; a refund is goods, delivery
---   and the way back below 0 and the deduction and what is covered above 0 (a refund of a
---   statement), or the whole below 0 (of a late payment, or one made by hand); a failed refund names
+--   and the way back below 0 and the deduction above 0 (a refund of a statement: what money
+--   already with the buyer pays of its rows is no line, the rows marked take it), or the whole below 0
+--   (of a late payment, or one made by hand); a failed refund names
 --   the line it reverses and why; money outside the app has the way, the note and the day, and the
 --   parts of a refund of a statement or the whole; what a dispute takes (below 0) and
 --   gives back (above 0) names the dispute and the transaction of the provider; what the shop pays a
---   carrier is below 0 and names the parcel; a correction names the line it corrects; money that came
---   back outside the app is above 0 with the way and the day, of rows of a statement, of a send of
---   the order, or of a share of money given back by hand or taken by a bank (naming its line); what
---   root gave up of a share is of 0, names the line and says what it became. An event this
+--   carrier is below 0 and names the parcel, what a carrier gives back for a label voided above 0
+--   names the parcel and the cost; a correction (of a sum a person wrote) names the line it corrects;
+--   money that came back outside the app is above 0 with the way and the day, of rows of a statement
+--   or of a send of the order. An event this
 --   check does not know is not refused here (src/config/journalEvents.ts lists them, a test holds
 --   the two together).
 DO $$
@@ -1756,7 +1791,7 @@ BEGIN
 
   ALTER TABLE cartlify.money_log
     ADD CONSTRAINT money_log_amount_chk
-    CHECK (amount <> 0 OR event = 'money.share_moved');
+    CHECK (amount <> 0);
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'money_log_meta_chk') THEN
     ALTER TABLE cartlify.money_log
@@ -1804,7 +1839,7 @@ BEGIN
                 purpose = 'return'
                 AND (
                   (part IN ('goods', 'delivery', 'way_back') AND amount < 0)
-                  OR (part IN ('deduction', 'covered') AND amount > 0)
+                  OR (part = 'deduction' AND amount > 0)
                 )
               )
               OR (purpose IN ('late_payment', 'hand', 'compensation') AND part = 'whole' AND amount < 0)
@@ -1815,7 +1850,7 @@ BEGIN
           WHEN 'money.outside' THEN
             purpose IN ('return', 'late_payment', 'hand', 'compensation') AND method IS NOT NULL AND "happenedAt" IS NOT NULL
             AND (
-              (part IN ('deduction', 'covered') AND amount > 0)
+              (part = 'deduction' AND amount > 0)
               OR (part IN ('goods', 'delivery', 'way_back', 'whole') AND amount < 0)
             )
           WHEN 'money.return_parcel_cost' THEN
@@ -1823,6 +1858,9 @@ BEGIN
             AND "orderShipmentId" IS NOT NULL AND "returnId" IS NOT NULL
           WHEN 'money.shipping_cost' THEN
             amount < 0 AND purpose = 'shipping' AND part = 'whole' AND "orderShipmentId" IS NOT NULL
+          WHEN 'money.shipping_refund' THEN
+            amount > 0 AND purpose = 'shipping' AND part = 'whole' AND "orderShipmentId" IS NOT NULL
+            AND "coversId" IS NOT NULL
           WHEN 'money.dispute_withdrawn' THEN
             amount < 0 AND purpose = 'dispute' AND part = 'whole'
             AND "disputeId" IS NOT NULL AND "balanceTxId" IS NOT NULL
@@ -1836,24 +1874,15 @@ BEGIN
             AND (
               (purpose = 'return' AND part = 'goods' AND "returnId" IS NOT NULL)
               OR (purpose = 'shipping' AND part = 'whole' AND "orderShipmentId" IS NOT NULL AND "returnId" IS NULL)
-              OR (
-                purpose IN ('hand', 'dispute') AND part = 'whole' AND "coversId" IS NOT NULL
-                AND "returnId" IS NULL AND "orderId" IS NOT NULL AND meta IS NOT NULL
-              )
             )
-          WHEN 'money.share_moved' THEN
-            amount = 0 AND purpose IN ('hand', 'dispute') AND part = 'whole' AND "coversId" IS NOT NULL
-            AND "orderId" IS NOT NULL AND "moneyUse" IS NOT NULL AND meta IS NOT NULL AND "returnId" IS NULL
           ELSE true
         END
       );
 END $$;
 
 -- a transfer is written once: the same key writes each part of each event once (the lines that use
--- or reverse another line are told apart by it; a part covered by the row of the statement and the
--- item it covers: two rows of one item take a share each, a row its share of the item and of the
--- delivery); a payment that could not be taken is written once; a refund fails once for each part
--- it had
+-- or reverse another line are told apart by it, and the row a line of a part names first); a
+-- payment that could not be taken is written once; a refund fails once for each part it had
 CREATE UNIQUE INDEX IF NOT EXISTS money_log_transfer_row_uidx
   ON cartlify.money_log (
     "transferKey", event, part, COALESCE("coversId", 0),
@@ -1899,8 +1928,8 @@ CREATE INDEX IF NOT EXISTS money_log_actor_idx
   ON cartlify.money_log ("actorId", "createdAt")
   WHERE "actorId" IS NOT NULL;
 
--- the lines that name a line (a failure, money sent another way, a part covered, what came back of a
--- share or was given up of it): the shares, the alerts and the cards look them up too
+-- the lines that name a line (a failure, money sent another way, what came back of a share or was
+-- given up of it): the shares, the alerts and the cards look them up too
 CREATE INDEX IF NOT EXISTS money_log_covers_idx
   ON cartlify.money_log ("coversId")
   WHERE "coversId" IS NOT NULL;
@@ -2359,3 +2388,188 @@ BEGIN
       CHECK (reason IS NULL OR (reason = btrim(reason) AND reason <> ''));
   END IF;
 END $$;
+
+----------------------------------------
+-- SHOP_COUNTRIES: the shape of the fields of a country
+----------------------------------------
+-- shop_countries_country_chk: the country is two capital letters.
+-- shop_countries_texts_chk: the tax number, its label, the group of the threshold and the text of a
+--   sale without tax are trimmed and not empty when given.
+-- shop_countries_amounts_chk: the limit of a parcel and the threshold are above 0, at most what an
+--   amount of the shop holds; a threshold ends after its period starts.
+-- The rules between the fields (what each rule needs) and the rates are checked by
+-- shop_countries_before_write (db/05), the countries of one group by shop_countries_group_check.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_countries_country_chk') THEN
+    ALTER TABLE cartlify.shop_countries
+      ADD CONSTRAINT shop_countries_country_chk
+      CHECK (country ~ '^[A-Z]{2}$');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_countries_texts_chk') THEN
+    ALTER TABLE cartlify.shop_countries
+      ADD CONSTRAINT shop_countries_texts_chk
+      CHECK (
+        ("taxNumber" IS NULL OR ("taxNumber" = btrim("taxNumber") AND "taxNumber" <> ''))
+        AND ("taxNumberLabel" IS NULL OR ("taxNumberLabel" = btrim("taxNumberLabel") AND "taxNumberLabel" <> ''))
+        AND ("thresholdGroup" IS NULL OR ("thresholdGroup" = btrim("thresholdGroup") AND "thresholdGroup" <> ''))
+        AND ("exemptionText" IS NULL OR ("exemptionText" = btrim("exemptionText") AND "exemptionText" <> ''))
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_countries_amounts_chk') THEN
+    ALTER TABLE cartlify.shop_countries
+      ADD CONSTRAINT shop_countries_amounts_chk
+      CHECK (
+        ("parcelLimit" IS NULL OR ("parcelLimit" > 0 AND "parcelLimit" <= 99999999.99))
+        AND ("thresholdAmount" IS NULL OR ("thresholdAmount" > 0 AND "thresholdAmount" <= 99999999.99))
+      );
+  END IF;
+END $$;
+
+----------------------------------------
+-- TAX_GROUPS: the name of a group
+----------------------------------------
+-- tax_groups_name_chk: the name is trimmed, 1-100 characters (unique: tax_groups_name_key).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tax_groups_name_chk') THEN
+    ALTER TABLE cartlify.tax_groups
+      ADD CONSTRAINT tax_groups_name_chk
+      CHECK (name = btrim(name) AND char_length(name) BETWEEN 1 AND 100);
+  END IF;
+END $$;
+
+----------------------------------------
+-- ORDER_ITEMS and ORDER_DELIVERIES: the tax the confirmation fixed
+----------------------------------------
+-- order_items_tax_chk: the fields of the tax come together (a rule, a country, the tax; a rate for
+--   the rules that take one, no tax without it), the rate from 0 to 100, the tax from 0 to the price
+--   of the line; the price of the catalog is given only above a lower unit price.
+-- order_deliveries_tax_chk: the rule, the parts and the tax of the delivery come together, the tax
+--   from 0 to its price.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'order_items_tax_chk') THEN
+    ALTER TABLE cartlify.order_items
+      ADD CONSTRAINT order_items_tax_chk
+      CHECK (
+        (
+          "taxRule" IS NULL AND "taxCountry" IS NULL AND "taxGroupId" IS NULL
+          AND "taxRate" IS NULL AND "taxAmount" IS NULL AND "listUnitPrice" IS NULL
+        )
+        OR (
+          "taxRule" IS NOT NULL AND "taxCountry" ~ '^[A-Z]{2}$' AND "taxAmount" IS NOT NULL
+          AND "taxAmount" >= 0 AND "taxAmount" <= "totalPrice"
+          AND ("taxRate" IS NULL OR ("taxRate" >= 0 AND "taxRate" <= 100))
+          AND (("taxRule" IN ('seller', 'recipient')) = ("taxRate" IS NOT NULL))
+          AND ("taxRate" IS NOT NULL OR "taxAmount" = 0)
+          AND ("listUnitPrice" IS NULL OR "listUnitPrice" > "unitPrice")
+        )
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'order_deliveries_tax_chk') THEN
+    ALTER TABLE cartlify.order_deliveries
+      ADD CONSTRAINT order_deliveries_tax_chk
+      CHECK (
+        ("taxRule" IS NULL AND "taxLines" IS NULL AND "taxAmount" IS NULL)
+        OR (
+          "taxRule" IS NOT NULL AND jsonb_typeof("taxLines") = 'array' AND "taxAmount" IS NOT NULL
+          AND "taxAmount" >= 0 AND "taxAmount" <= price
+        )
+      );
+  END IF;
+END $$;
+
+----------------------------------------
+-- TAX_DOCUMENTS: what each kind of document holds
+----------------------------------------
+-- tax_documents_number_chk: an invoice and a credit note have a series and a number from 1, a
+--   receipt has neither.
+-- tax_documents_corrects_chk: a credit note and a return receipt name what they correct.
+-- tax_documents_receipt_chk: a receipt has its state and its tries, and its provider from its first
+--   try (the worker of the receipts writes it), a document of ours has none of what a receipt keeps.
+-- tax_documents_sums_chk: the net and the tax make the gross; an invoice and a receipt of a sale
+--   are 0 or more, a credit note and a return receipt 0 or less; the tax has the sign of the gross.
+-- tax_documents_shape_chk: the copies are objects and the lines and sums lists; the language and the
+--   currency have their shapes.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tax_documents_number_chk') THEN
+    ALTER TABLE cartlify.tax_documents
+      ADD CONSTRAINT tax_documents_number_chk
+      CHECK (
+        CASE
+          WHEN kind IN ('invoice', 'credit_note') THEN series IS NOT NULL AND number IS NOT NULL AND number >= 1
+          ELSE series IS NULL AND number IS NULL
+        END
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tax_documents_corrects_chk') THEN
+    ALTER TABLE cartlify.tax_documents
+      ADD CONSTRAINT tax_documents_corrects_chk
+      CHECK (kind NOT IN ('credit_note', 'return_receipt') OR "correctsId" IS NOT NULL);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tax_documents_receipt_chk') THEN
+    ALTER TABLE cartlify.tax_documents
+      ADD CONSTRAINT tax_documents_receipt_chk
+      CHECK (
+        CASE
+          WHEN kind IN ('receipt', 'return_receipt') THEN
+            (provider IS NOT NULL OR ("receiptState" = 'pending' AND "receiptAttempts" = 0))
+            AND "receiptState" IS NOT NULL AND "receiptStateAt" IS NOT NULL
+            AND "receiptAttempts" >= 0
+            AND (("receiptState" = 'manual') = ("receiptConfirmedById" IS NOT NULL))
+          ELSE
+            provider IS NULL AND "receiptState" IS NULL AND "receiptStateAt" IS NULL
+            AND "receiptNumber" IS NULL AND "receiptUrl" IS NULL AND "receiptCode" IS NULL
+            AND "receiptText" IS NULL AND "receiptAttempts" = 0 AND "receiptError" IS NULL
+            AND "receiptNextAt" IS NULL AND "receiptConfirmedById" IS NULL AND "documentId" IS NULL
+        END
+      );
+  END IF;
+
+  -- the link to check a receipt is shown to the buyer: https without spaces
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tax_documents_receipt_url_chk') THEN
+    ALTER TABLE cartlify.tax_documents DROP CONSTRAINT tax_documents_receipt_url_chk;
+  END IF;
+  ALTER TABLE cartlify.tax_documents
+    ADD CONSTRAINT tax_documents_receipt_url_chk
+    CHECK ("receiptUrl" IS NULL OR "receiptUrl" ~ '^https://[^[:space:]]+$');
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tax_documents_sums_chk') THEN
+    ALTER TABLE cartlify.tax_documents
+      ADD CONSTRAINT tax_documents_sums_chk
+      CHECK (
+        net + tax = gross
+        AND CASE
+          WHEN kind IN ('invoice', 'receipt') THEN gross >= 0 AND tax >= 0
+          ELSE gross <= 0 AND tax <= 0
+        END
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tax_documents_shape_chk') THEN
+    ALTER TABLE cartlify.tax_documents
+      ADD CONSTRAINT tax_documents_shape_chk
+      CHECK (
+        jsonb_typeof(seller) = 'object' AND jsonb_typeof(buyer) = 'object'
+        AND jsonb_typeof(lines) = 'array' AND jsonb_typeof(totals) = 'array'
+        AND jsonb_typeof(details) = 'object'
+        AND locale ~ '^[a-z]{2}$' AND currency ~ '^[A-Z]{3}$'
+        AND ("taxCountry" IS NULL OR "taxCountry" ~ '^[A-Z]{2}$')
+      );
+  END IF;
+END $$;
+
+-- the receipts the worker sends: the ones that wait, by the time of their next try
+CREATE INDEX IF NOT EXISTS tax_documents_pending_receipts_idx
+  ON cartlify.tax_documents ("receiptNextAt", id)
+  WHERE "receiptState" = 'pending';
+
+-- the report of the tax reads the documents of a period by the time they were made
+CREATE INDEX IF NOT EXISTS tax_documents_created_idx ON cartlify.tax_documents ("createdAt", id);

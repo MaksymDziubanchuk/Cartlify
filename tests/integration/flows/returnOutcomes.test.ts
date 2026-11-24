@@ -306,7 +306,9 @@ describe('a transfer Stripe does not answer', () => {
       expect(asked.json().items).toEqual([expect.objectContaining({ money: 'pending' })]);
       expect(mailsTo(mails, buyer.email, 'is closed')).toEqual([]);
 
-      // three days on, the admins see it among the transfers in transit too long
+      // the admin watches the transfers in transit for three days; three days on, the admin sees it
+      // among the transfers in transit too long
+      await alerts.writeNumbers(admin, ['return_refunds_in_transit']);
       const inTransit = async () => {
         const clock = moveClock(3 * DAY + HOUR);
         try {
@@ -348,9 +350,12 @@ describe('the money that does not go back the usual way', () => {
       const went = await j.post(admin, `/api/returns/${returnId}/refund`);
       expect(went.json().items[0]).toMatchObject({ money: 'refunded' });
       // the card shows the transfer as the money journal keeps it, with the id Stripe gave
-      const goods = went
-        .json()
-        .money.find((move: { id: number }) => move.id === went.json().items[0].moneyLogId);
+      const goods = [...went.json().money]
+        .reverse()
+        .find(
+          (move: { part: string; itemIds: number[] }) =>
+            move.part === 'goods' && move.itemIds.includes(went.json().items[0].id),
+        );
       const refundId = goods.refundId as string;
       await refundBecomes(refundId, { status: 'failed', reason: 'expired_or_canceled_card' });
       expect((await deliver(app, await stripeEvent('refund.failed', refundId))).statusCode).toBe(

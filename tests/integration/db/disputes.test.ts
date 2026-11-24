@@ -18,6 +18,7 @@ import {
   itemIdsOf,
   linesWhere,
   newDisputeId,
+  paidByOf,
   reasonsOf,
   reinstatement,
   rowsOf,
@@ -629,14 +630,11 @@ describe('a lost dispute of an order not sent', () => {
       const lost = await synced(db, { ...snapshot, status: 'lost' });
       const earlier = await shopCancelOf(db, admin.id, order.orderId, [order.itemIds[0]!]);
       const later = await shopCancelOf(db, admin.id, order.orderId, [order.itemIds[1]!]);
-      const first = await begun(db, admin.id, earlier);
-      const second = await begun(db, admin.id, later);
       return {
         opened,
         lost,
         lines: await linesWhere(db, admin.id, '"disputeId" = $1', opened.id),
-        first,
-        second,
+        rows: [...(await rowsOf(db, admin.id, earlier)), ...(await rowsOf(db, admin.id, later))],
         totals: [await statementOf(db, admin.id, earlier), await statementOf(db, admin.id, later)],
       };
     });
@@ -646,9 +644,12 @@ describe('a lost dispute of an order not sent', () => {
     // no statement waited: nothing was paid at once
     expect(result.lost.covered).toEqual([]);
     expect(result.lines.map((l) => [l.returnId, l.moneyUse])).toEqual([[null, 'goods']]);
-    // 10 a unit and the delivery of 5 with the second: the bank gave all of it
-    expect(result.first).toMatchObject({ amount: '0.00', covered: '10.00', settled: true });
-    expect(result.second).toMatchObject({ amount: '0.00', covered: '15.00', settled: true });
+    // 10 a unit and the delivery of 5 with the second: the bank gave all of it, so the goods that
+    // never left are paid with it as they come back, nothing to send
+    expect(result.rows.map((row) => [row.money, row.moneyLogId])).toEqual([
+      ['refunded', null],
+      ['refunded', null],
+    ]);
     expect(result.totals.map((one) => one.refundedTotal)).toEqual(['10.00', '15.00']);
   });
 
@@ -694,7 +695,7 @@ describe('a lost dispute of an order not sent', () => {
         returnId,
         itemIds: (await rowsOf(db, admin.id, returnId)).map((row) => row.id),
         lines: await linesWhere(db, admin.id, '"disputeId" = $1', lost.id),
-        covered: await linesWhere(db, admin.id, `"returnId" = $1 and part = 'covered'`, returnId),
+        records: await paidByOf(db, admin.id, returnId),
         total: await statementOf(db, admin.id, returnId),
       };
     });
@@ -703,10 +704,10 @@ describe('a lost dispute of an order not sent', () => {
     // the rows the money of the bank paid at once, for the mail of the app
     expect(result.lost.covered).toEqual([{ returnId: result.returnId, itemIds: result.itemIds }]);
     expect(result.lines.map((l) => l.moneyUse)).toEqual(['goods']);
-    // the units and the delivery, each naming what the bank took
-    expect(result.covered.map((line) => [line.amount, line.coversId, line.transferKey])).toEqual([
-      ['20.00', result.lines[0]!.id, null],
-      ['5.00', result.lines[0]!.id, null],
+    // the units and the delivery, recorded in the rows, each naming what the bank took (no line)
+    expect(result.records).toEqual([
+      [result.itemIds[0], result.lines[0]!.id, 'goods', '20.00'],
+      [result.itemIds.at(-1), result.lines[0]!.id, 'delivery', '5.00'],
     ]);
     expect(result.total).toEqual({ refundedTotal: '25.00', closed: true });
     // a sync again pays nothing twice
@@ -747,16 +748,17 @@ describe('a lost dispute of an order not sent', () => {
       return {
         transfer,
         source: (await linesWhere(db, admin.id, '"balanceTxId" = $1', taken.id))[0]!,
-        covered: await linesWhere(db, admin.id, `"returnId" = $1 and part = 'covered'`, returnId),
+        records: await paidByOf(db, admin.id, returnId),
       };
     });
 
     expect(result.transfer).toMatchObject({ amount: '10.00', covered: '15.00', settled: false });
     expect(result.transfer.key).toEqual(expect.any(String));
-    // the share of the units and the share of the delivery, each naming what the bank took
-    expect(result.covered.map((line) => [line.amount, line.coversId, line.transferKey])).toEqual([
-      ['12.00', result.source.id, result.transfer.key],
-      ['3.00', result.source.id, result.transfer.key],
+    // the share of the units and the share of the delivery, recorded in the row, each naming what
+    // the bank took; the lines of the transfer are the 10 it sends
+    expect(result.records.map(([, line, part, amount]) => [line, part, amount])).toEqual([
+      [result.source.id, 'goods', '12.00'],
+      [result.source.id, 'delivery', '3.00'],
     ]);
   });
 });

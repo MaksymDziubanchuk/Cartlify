@@ -251,8 +251,10 @@ describe('a late payment whose refund Stripe did not answer', () => {
       }),
     ]);
 
-    // three days on, the admins see it among the late refunds in transit too long
+    // the admin watches the late refunds in transit for three days; three days on, the admin sees
+    // it among the late refunds in transit too long
     const alerts = alertsOf({ app: () => app, csrf: () => csrf });
+    await alerts.writeNumbers(admin, ['late_refunds_in_transit']);
     const inTransit = async () => {
       const clock = moveClock(3 * 86_400_000 + 3_600_000);
       try {

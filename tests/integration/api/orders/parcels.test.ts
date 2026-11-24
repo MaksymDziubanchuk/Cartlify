@@ -27,6 +27,7 @@ import {
 import { takeLogs } from '../../../helpers/logs.js';
 import { holdForReview, placeOrder, shippingCostOf } from '../../../helpers/orders.js';
 import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
+import { resetShopCountries, withCustoms } from '../../../helpers/shopCountries.js';
 import {
   MOCK_CARRIERS,
   breakShippyPro,
@@ -58,6 +59,7 @@ beforeAll(async () => {
 afterEach(() => {
   jest.restoreAllMocks();
   resetShopSettings();
+  resetShopCountries();
 });
 
 afterAll(async () => {
@@ -377,6 +379,7 @@ describe('POST /api/orders/:orderId/parcels', () => {
         contents: 'Goods',
         declaredValue: 50,
         customs: null,
+        taxNumber: null,
       },
       { warn: () => undefined },
     );
@@ -420,6 +423,7 @@ describe('POST /api/orders/:orderId/parcels', () => {
         contents: 'Goods',
         declaredValue: 50,
         customs: null,
+        taxNumber: null,
       },
       { warn: () => undefined },
     );
@@ -561,8 +565,9 @@ describe('POST /api/orders/:orderId/parcels', () => {
       { carrier: 'MockExpress' },
     );
     userIds.push(buyer.id);
-    // the countries without customs changed after the order was paid: Spain has customs now
-    setShopSettings({ ...CARRIER_SHOP, customsFreeCountries: ['UA'] });
+    // the records of the countries changed after the order was paid: Spain has customs now
+    setShopSettings(CARRIER_SHOP);
+    withCustoms('ES', 'PL', 'DE', 'GB');
     const calls = watchShippyPro();
 
     const res = await asStaff('POST', `/api/orders/${orderId}/parcels`);
@@ -584,8 +589,9 @@ describe('POST /api/orders/:orderId/parcels', () => {
 
   it('refuses a parcel to a country with customs while a product has no customs data, naming it', async () => {
     const { orderId } = await paidOrder('MockExpress');
-    // the countries without customs changed after the order was paid
-    setShopSettings({ ...CARRIER_SHOP, customsFreeCountries: ['UA'] });
+    // the records of the countries changed after the order was paid
+    setShopSettings(CARRIER_SHOP);
+    withCustoms('ES', 'PL', 'DE', 'GB');
 
     const res = await asStaff('POST', `/api/orders/${orderId}/parcels`);
 
@@ -911,7 +917,8 @@ describe('an order of a carrier sent by hand', () => {
   it('refuses an address in a country with customs while a product has no customs data', async () => {
     const { orderId } = await paidOrder();
     // the countries without customs: Spain only
-    setShopSettings({ ...CARRIER_SHOP, customsFreeCountries: ['ES'] });
+    setShopSettings(CARRIER_SHOP);
+    withCustoms('UA', 'PL', 'DE', 'GB');
 
     const res = await asStaff('PATCH', `/api/orders/${orderId}/delivery`, {
       address: {

@@ -8,6 +8,8 @@ import { legalController } from '../legal/legal.controllers.js';
 import { rootLegalSchemas } from '../legal/legal.schemas.js';
 import { shopSettingsController } from '../shopSettings/shopSettings.controllers.js';
 import { rootShopSettingsSchemas } from '../shopSettings/shopSettings.schemas.js';
+import { taxesController } from '../taxes/taxes.controllers.js';
+import { rootTaxesSchemas } from '../taxes/taxes.schemas.js';
 
 export default async function rootRouter(app: FastifyInstance) {
   app.get(
@@ -114,5 +116,60 @@ export default async function rootRouter(app: FastifyInstance) {
       schema: rootShopSettingsSchemas.deleteShopLogoSchema,
     },
     shopSettingsController.deleteLogo,
+  );
+
+  // the countries the shop sells to with the rule of their tax, and the tax groups of the products
+  // (docs/taxes.md)
+  const root = { preHandler: [authGuard, requireRole(['ROOT'])] };
+  app.get(
+    '/countries',
+    { ...root, schema: rootTaxesSchemas.getShopCountriesSchema },
+    taxesController.getCountries,
+  );
+  app.get(
+    '/countries/:country',
+    { ...root, schema: rootTaxesSchemas.getShopCountrySchema },
+    taxesController.getCountry,
+  );
+  app.put(
+    '/countries/:country',
+    { ...root, schema: rootTaxesSchemas.putShopCountrySchema },
+    taxesController.putCountry,
+  );
+  app.delete(
+    '/countries/:country',
+    { ...root, schema: rootTaxesSchemas.deleteShopCountrySchema },
+    taxesController.deleteCountry,
+  );
+  app.post(
+    '/countries/:country/copy-exceptions',
+    { ...root, schema: rootTaxesSchemas.postCopyExceptionsSchema },
+    taxesController.postCopyExceptions,
+  );
+  app.get(
+    '/tax-groups',
+    { ...root, schema: rootTaxesSchemas.getTaxGroupsSchema },
+    taxesController.getGroups,
+  );
+  app.post(
+    '/tax-groups',
+    { ...root, schema: rootTaxesSchemas.postTaxGroupSchema },
+    taxesController.postGroup,
+  );
+  app.patch(
+    '/tax-groups/:groupId',
+    {
+      preHandler: [authGuard, requireRole(['ROOT']), validateId('groupId')],
+      schema: rootTaxesSchemas.patchTaxGroupSchema,
+    },
+    taxesController.patchGroup,
+  );
+  app.delete(
+    '/tax-groups/:groupId',
+    {
+      preHandler: [authGuard, requireRole(['ROOT']), validateId('groupId')],
+      schema: rootTaxesSchemas.deleteTaxGroupSchema,
+    },
+    taxesController.deleteGroup,
   );
 }

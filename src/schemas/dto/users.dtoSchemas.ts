@@ -761,6 +761,37 @@ const exportMoneyLineSchema = {
   ],
 } as const;
 
+// one tax document of an order of the person in the export (docs/taxes.md): the fields agreed by
+// name, no more (the schema drops any other field from the answer)
+const exportTaxDocumentSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: { type: 'integer', description: 'The order the document is of.' },
+    kind: {
+      type: 'string',
+      enum: ['invoice', 'credit_note', 'receipt', 'return_receipt'],
+      description:
+        'An invoice, a credit note (money that went back), or the fiscal receipt of one of them.',
+    },
+    number: {
+      type: ['string', 'null'],
+      description: 'The series and the number of an invoice or a credit note; null for a receipt.',
+    },
+    createdAt: { type: 'string', description: 'When it was made, in UTC.' },
+    gross: { type: 'string', description: 'The sum with the tax, below 0 for a credit note.' },
+    currency: { type: 'string' },
+    buyer: {
+      type: 'object',
+      additionalProperties: true,
+      description:
+        'The copy of the buyer the document keeps (the name and the address of the delivery); an ' +
+        'empty object once its term in the privacy policy ended.',
+    },
+  },
+  required: ['orderId', 'kind', 'number', 'createdAt', 'gross', 'currency', 'buyer'],
+} as const;
+
 const usersExportResponseSchema = {
   $id: 'usersExportResponseSchema',
   type: 'object',
@@ -815,6 +846,15 @@ const usersExportResponseSchema = {
         'and who did it are not given.',
       items: exportMoneyLineSchema,
     },
+    taxDocuments: {
+      type: 'array',
+      description:
+        'The tax documents of the orders of the person, the oldest first: the invoices, the ' +
+        'credit notes and their fiscal receipts, each with its number, when it was made, its sum ' +
+        'and the copy of the buyer it keeps. The seller, the lines and what the fiscal service ' +
+        'answered are of the shop and are not given.',
+      items: exportTaxDocumentSchema,
+    },
   },
   required: [
     'exportedAt',
@@ -829,6 +869,7 @@ const usersExportResponseSchema = {
     'legalAcceptances',
     'newsletterSubscriptions',
     'money',
+    'taxDocuments',
   ],
 } as const;
 

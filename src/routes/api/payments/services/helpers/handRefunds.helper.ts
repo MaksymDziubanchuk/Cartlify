@@ -168,23 +168,23 @@ async function settleKnown(refund: HandRefund, log: PaymentRefundMailLogger): Pr
 
 // the buyer was told the money of a refund made by hand is theirs: the refund of a late payment (the
 // money of a payment the order never took), or money a statement took as what the buyer has back
-// (its parts covered name the refund: the cancel of the system or of root, a decision of root that
-// gave it to the goods), whose mail told the buyer the money is back
+// (the marks of rows of a statement take it, return_row_shares: the cancel of the system or
+// of root, a decision of root that gave it to the goods), whose mail told the buyer the money is back
 async function toldSent(paymentId: string, lineIds: number[]): Promise<boolean> {
   return tx(async (db) => {
     await setAdminContext(db);
     if (await readLatePayment(db, paymentId)) return true;
     if (lineIds.length === 0) return false;
 
-    const used = await db.moneyLog.count({
-      where: {
-        part: 'covered',
-        event: { not: 'money.refund_failed' },
-        coversId: { in: lineIds },
-        returnId: { not: null },
-      },
-    });
-    return used > 0;
+    const [row] = await db.$queryRaw<{ used: boolean }[]>(Prisma.sql`
+      select exists (
+        select 1
+        from cartlify.money_log as l
+        cross join lateral cartlify.return_row_shares_of(l."orderId", true) as sh
+        where l.id = any (${lineIds}::int[]) and sh.source_id = l.id
+      ) as used
+    `);
+    return row?.used === true;
   }, TX_OPTIONS);
 }
 

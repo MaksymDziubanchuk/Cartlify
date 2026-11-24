@@ -48,9 +48,12 @@ export interface ReturnItemDto {
   amountNote: string | null;
   goodsSetAt: string | null;
   goodsSetBy: ReturnPersonDto | null;
-  // the line of the money journal that put the money of the row where it is (one of the money of
-  // the card)
-  moneyLogId: number | null;
+  // the units of the row money already with the buyer pays (a refund made by hand, what a bank took,
+  // by the decision of what it was for: a unit bought back, or a part of its price off), marked as
+  // the goods came in; and the units of its item that money may still pay (a hint while the money
+  // goes ahead of the goods: the reception marks them)
+  paidUnits: number;
+  paidUnitsLeft: number;
   // why the last transfer failed (money failed), in our code and in the words of the provider
   refundFailure: { code: RefundFailure; text: string | null } | null;
   // why root closed the row without a refund
@@ -109,8 +112,6 @@ export interface ReturnDto {
     paymentLeft: number;
     short: boolean;
   };
-  // what money already with the buyer gave the goods of the order more than its statements took
-  moneyOverpaid: number;
   // the movements of the money of the statement, the lines of the money journal, oldest first
   money: ReturnMoneyMoveDto[];
   createdAt: string;
@@ -163,7 +164,8 @@ export interface ReturnMoneyMoveDto {
   id: number;
   event: string;
   purpose: MoneyPurpose;
-  part: MoneyPart;
+  // covered: what money already with the buyer paid of the rows (no line of the journal)
+  part: MoneyPart | 'covered';
   // signed: above 0 to the shop
   amount: number;
   currency: string | null;
@@ -181,6 +183,8 @@ export interface ReturnMoneyMoveDto {
   coversId: number | null;
   // the parcel of a cost (of a statement)
   shipmentId: number | null;
+  // the rows of the statement it pays (the rows its line names, and the rows split off them)
+  itemIds: number[];
   // who wrote it, none for the work of the system
   by: ReturnPersonDto | null;
 }
@@ -369,6 +373,8 @@ export interface ReceiveReturnItemsBodyDto {
     quantity: number;
     goods: Exclude<ReturnGoods, 'expected'>;
     notAcceptedReason?: ReturnNotAcceptedReason;
+    // of the units that came back, the ones money already with the buyer pays
+    paidUnits?: number;
   }>;
   // the parcel the goods came in, confirmed in the same step when it is not confirmed yet
   parcel?: ReturnParcelConfirmDto & {
@@ -450,45 +456,6 @@ export interface RecordMoneyReceivedBodyDto {
 }
 
 export interface RecordMoneyReceivedDto extends RecordMoneyReceivedBodyDto {
-  actorId: UserId;
-  actorRole: Role;
-  returnId: number;
-}
-
-// POST /api/returns/:returnId/overpaid/received: money the buyer gave back outside the app of what
-// money already with the buyer gave the goods of the order more than its statements took
-export interface RecordOverpaidReceivedBodyDto {
-  amount: number;
-  method: OutsideMethod;
-  note: string;
-  // the day the money really came, never before the money went or of the future
-  at: string;
-}
-
-export interface RecordOverpaidReceivedDto extends RecordOverpaidReceivedBodyDto {
-  actorId: UserId;
-  actorRole: Role;
-  returnId: number;
-}
-
-// POST /api/returns/:returnId/overpaid/lost: the shop gives what is overpaid up
-export interface LoseOverpaidBodyDto {
-  note: string;
-}
-
-export interface LoseOverpaidDto extends LoseOverpaidBodyDto {
-  actorId: UserId;
-  actorRole: Role;
-  returnId: number;
-}
-
-// POST /api/returns/:returnId/keep: the shop keeps goods it did not accept that are still with it
-export interface KeepReturnGoodsBodyDto {
-  items: { itemId: number; goods: 'to_stock' | 'written_off' }[];
-  note: string;
-}
-
-export interface KeepReturnGoodsDto extends KeepReturnGoodsBodyDto {
   actorId: UserId;
   actorRole: Role;
   returnId: number;
@@ -594,7 +561,6 @@ export interface GetReturnsQueryDto {
   extended?: boolean;
   moneyHeld?: boolean;
   moneyShort?: boolean;
-  moneyOverpaid?: boolean;
   sortBy?: ReturnsSortBy;
   sortDir?: ReturnsSortDir;
   limit?: number;

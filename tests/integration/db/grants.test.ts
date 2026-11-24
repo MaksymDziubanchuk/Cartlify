@@ -77,7 +77,7 @@ const APP_FUNCTIONS = [
   'cartlify.newsletter_start_campaign(integer, jsonb, text)',
   'cartlify.newsletter_claim_recipients(integer, integer[], integer, integer)',
   'cartlify.newsletter_release_recipients(integer[])',
-  'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
+  'cartlify.confirm_order(integer, interval, numeric, numeric, numeric, jsonb, boolean)',
   'cartlify.unconfirm_order(integer)',
   'cartlify.cancel_order_payment(integer)',
   'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric, text)',
@@ -96,11 +96,15 @@ const APP_FUNCTIONS = [
   'cartlify.record_carrier_money(integer, numeric, cartlify."OutsideMethod", text, timestamp without time zone)',
   // what a statement still owes, what money already with the buyer gave too much
   'cartlify.return_money_left(integer)',
-  'cartlify.order_money_overpaid(integer)',
-  'cartlify.record_overpaid_received(integer, numeric, cartlify."OutsideMethod", text, timestamp without time zone)',
-  'cartlify.lose_overpaid(integer)',
-  'cartlify.keep_return_goods(integer, jsonb)',
+  'cartlify.return_row_shares(integer)',
+  'cartlify.return_row_shares_of(integer, boolean)',
+  'cartlify.money_item_units_left(integer, integer)',
+  'cartlify.money_source_lost(integer)',
+  'cartlify.return_row_line(integer)',
+  'cartlify.money_line_return_rows(integer)',
   // the disputes, the holds of an order and what root decides on them, the cost of a send
+  'cartlify.tax_threshold_sales(text[], timestamp without time zone, timestamp without time zone, boolean)',
+  'cartlify.hold_tax_threshold(text)',
   'cartlify.sync_payment_dispute(cartlify."PaymentProvider", text, text, cartlify."DisputeStatus", text, timestamp without time zone, boolean, integer, boolean, timestamp without time zone, timestamp without time zone, jsonb)',
   'cartlify.mark_dispute_drafted(integer)',
   'cartlify.hold_payment_review(text, text)',
@@ -111,6 +115,11 @@ const APP_FUNCTIONS = [
   'cartlify.share_money_line(integer)',
   'cartlify.record_order_shipment_cost(integer, numeric)',
   'cartlify.void_order_parcel(integer)',
+  // the fiscal receipts: the answer of the provider the worker writes, one an admin made by hand
+  'cartlify.record_receipt_result(integer, text, text, text, text, text, text, text, timestamp without time zone)',
+  'cartlify.confirm_receipt_manual(integer, text, text, text)',
+  // whether a root follows a kind of alerts with its numbers
+  'cartlify.alert_kind_followed(text)',
   'cartlify.expire_order_reservation(integer)',
   'cartlify.anonymize_login_logs(integer)',
   // maintenance the periodic tasks run as the system
@@ -121,6 +130,7 @@ const APP_FUNCTIONS = [
   'cartlify.cleanup_return_addresses()',
   'cartlify.cleanup_return_personal()',
   'cartlify.cleanup_deleted_accounts_recipients()',
+  'cartlify.cleanup_tax_document_buyers()',
   'cartlify.cleanup_newsletter_pending()',
   'cartlify.cleanup_newsletter_consent()',
   'cartlify.cleanup_newsletter_recipients()',

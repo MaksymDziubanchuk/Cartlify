@@ -873,11 +873,11 @@ describe('GET /api/admin/log-events', () => {
       'money.outside',
       'money.return_parcel_cost',
       'money.shipping_cost',
+      'money.shipping_refund',
       'money.dispute_withdrawn',
       'money.dispute_reinstated',
       'money.correction',
       'money.received',
-      'money.share_moved',
     ]);
     for (const [journal, events] of Object.entries(body)) {
       if (journal !== 'stockLog' && journal !== 'moneyLog') {

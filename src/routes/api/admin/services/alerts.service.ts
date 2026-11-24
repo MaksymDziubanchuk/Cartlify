@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 import { isAvailableLocale } from '@config/locales.js';
+import { shopCountries, thresholdCycleOf } from '@config/shopCountries.js';
 import { missingShopSettingsFields, shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
@@ -8,7 +9,9 @@ import { askMoneyManager, isMoneyManager } from '@db/moneyManager.helper.js';
 import { askNewsletterManager, isNewsletterManager } from '@db/newsletterManager.helper.js';
 import { shopToday } from '@helpers/shopDay.js';
 import { readDeliveryProviderDown } from '@providers/delivery/index.js';
-import { NotFoundError } from '@utils/errors.js';
+import { receiptProvider } from '@providers/receipts/index.js';
+import { BadRequestError, NotFoundError } from '@utils/errors.js';
+import { taxProvider } from '@providers/tax/index.js';
 import { orderTimeoutWorkerState } from '../../../../workers/orderTimeout.worker.js';
 import {
   FREE_STOCK_SQL,
@@ -42,7 +45,16 @@ import {
   type Dismissal,
 } from './helpers/alertDismissals.helper.js';
 import {
+  readParcelRefusals,
+  readSalesStopped,
+  readSeen,
+  setParcelRefusalsCounted,
+  writeSeen,
+} from './helpers/taxAlerts.helper.js';
+import {
   alertKindsOf,
+  INFORMATIONAL_ALERT_KINDS,
+  numbersReady,
   type AlertRights,
   alertListOf,
   alertWindowOf,
@@ -62,6 +74,7 @@ import type {
   AdminAlertDismissalItemDto,
   AdminAlertDto,
   AdminAlertKind,
+  AdminAlertSeenDto,
   AdminAlertSubscriptionDto,
   GetAdminAlertsResponseDto,
 } from 'types/dto/admin.dto.js';
@@ -207,6 +220,97 @@ const heldOrders = (kind: keyof typeof HELD_ORDER_ALERTS) => (): Cases => ({
   where: Prisma.sql`t.status = 'paid'::cartlify."OrderStatus" and ${holdOf(HELD_ORDER_ALERTS[kind])}`,
 });
 
+// the receipts of the documents (docs/taxes.md): a case is a receipt
+const RECEIPTS = Prisma.sql`from cartlify.tax_documents as t`;
+const RECEIPT_KINDS = Prisma.sql`t.kind in ('receipt'::cartlify."TaxDocumentKind", 'return_receipt'::cartlify."TaxDocumentKind")`;
+
+const NOW_UTC = Prisma.sql`(now() at time zone 'UTC')`;
+
+// the starts of the cycles of the thresholds now, in the time zone of the shop (thresholdCycleOf):
+// of a year by the month it starts (the 12 of them, in the order of the months), and of the last 12
+// months; the database reads the one of each threshold
+function cyclesNow(at: Date) {
+  const years = Array.from(
+    { length: 12 },
+    (_, i) => thresholdCycleOf({ period: 'year', startMonth: i + 1 }, at).from,
+  );
+  return {
+    years: years.map((one) => one.toISOString().slice(0, 23)),
+    rolling: thresholdCycleOf({ period: 'rolling_12', startMonth: null }, at)
+      .from.toISOString()
+      .slice(0, 23),
+  };
+}
+
+// the thresholds of the tax of the countries, each with the sales of its cycle (tax_threshold_sales,
+// the count the confirmation takes): a case is a threshold, of a group of countries or of one (t.id
+// the first of its countries), with its amount, whether the shop is registered in a country of it,
+// its period, the start of its cycle and whether the last 12 months hold the tax of the recipient
+// (thresholdHeldAt after thresholdInitialFrom)
+const thresholdsSales = (at: Date) => {
+  const cycles = cyclesNow(at);
+  return Prisma.sql`from (
+    select k.id, k.amount, k.registered, k.period, k.held, k.cycle_from, s.sales
+    from (
+      select min(c.country) as id,
+             min(c."thresholdAmount") as amount,
+             bool_or(c.registered) as registered,
+             bool_and(coalesce(c."thresholdWithVat", false)) as with_vat,
+             array_agg(c.country order by c.country) as countries,
+             min(c."thresholdPeriod"::text) as period,
+             bool_or(c."thresholdHeldAt" is not null
+                     and (c."thresholdInitialFrom" is null or c."thresholdHeldAt" > c."thresholdInitialFrom")) as held,
+             min(case when c."thresholdPeriod" = 'rolling_12'::cartlify."ThresholdPeriod"
+                      then ${cycles.rolling}::timestamp
+                      else (${cycles.years}::timestamp[])[coalesce(c."thresholdStartMonth", 1)] end) as cycle_from
+      from cartlify.shop_countries as c
+      where c."thresholdAmount" is not null
+      group by coalesce('group:' || c."thresholdGroup", 'country:' || c.country)
+    ) as k
+    cross join lateral (
+      select cartlify.tax_threshold_sales(k.countries, k.cycle_from, null, k.with_vat) as sales
+    ) as s
+  ) as t`;
+};
+
+// the rates of the countries that start later: a case is an entry (t.id the country, the group and
+// the minute of the start), t.at its start
+const RATES_AHEAD = Prisma.sql`from (
+    select c.country || '-' || coalesce(e ->> 'group', 'main') || '-'
+             || to_char((e ->> 'from')::timestamp, 'YYYYMMDDHH24MI') as id,
+           (e ->> 'from')::timestamp as at
+    from cartlify.shop_countries as c
+    cross join lateral jsonb_array_elements(c.rates) as e
+    where e ->> 'from' is not null
+  ) as t`;
+
+// the cycles of a year of the thresholds that started: a case is a threshold and the start of its
+// cycle (t.id the first of its countries and the second of the start, t.at the start); the last 12
+// months have no cycle that ends
+const periodsEnded = (at: Date) => {
+  const cycles = cyclesNow(at);
+  return Prisma.sql`from (
+    select min(c.country) || '-' || to_char(p.at, 'YYYYMMDDHH24MISS') as id,
+           p.at
+    from cartlify.shop_countries as c
+    cross join lateral (
+      select (${cycles.years}::timestamp[])[coalesce(c."thresholdStartMonth", 1)] as at
+    ) as p
+    where c."thresholdAmount" is not null and c."thresholdPeriod" = 'year'::cartlify."ThresholdPeriod"
+    group by coalesce('group:' || c."thresholdGroup", 'country:' || c.country), p.at
+  ) as t`;
+};
+
+// the cases kept in redis (taxAlerts.helper.ts), read before the snapshot: their ids and times
+const casesOfRedis = (window: AlertWindow): Cases => ({
+  from: Prisma.sql`from unnest(${window.ids ?? []}::text[], ${window.times ?? []}::timestamp[]) as t(id, at)`,
+  where: window.since ? Prisma.sql`t.at > ${utcTime(window.since)}` : Prisma.sql`true`,
+});
+
+// a kind that only informs counts what came after the person closed it
+const after = (window: AlertWindow) =>
+  window.since ? Prisma.sql`t.at > ${utcTime(window.since)}` : Prisma.sql`true`;
+
 const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
   // paid, to be shipped: nothing holds it (a dispute, a refund made by hand, a check of the payment
   // waits for the bank or for root; the filter holds=none of the list of orders)
@@ -290,7 +394,6 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
   // root: the statements whose money does not fit in what is left of the payment, and the ones of an
   // order whose money already with the buyer gave more than its statements took
   returns_money_short: () => returnCases({ state: 'open', moneyShort: true }),
-  returns_money_overpaid: () => returnCases({ state: 'closed', moneyOverpaid: true }),
   // statements of return: the same conditions as the filters of the list of the statements
   returns_manual_check: () =>
     returnCases({ state: 'open', source: 'form_manual', accepted: false }),
@@ -394,6 +497,52 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
     where: Prisma.sql`t."actorRole" = 'ADMIN'::cartlify."Role"
       and t."createdAt" >= ${utcTime(window.since ?? new Date(0))}`,
   }),
+  // the receipts the provider has not registered since before the time, and the ones it refused
+  receipts_not_issued: (window) => ({
+    from: RECEIPTS,
+    where: Prisma.sql`${RECEIPT_KINDS} and t."receiptState" = 'pending'::cartlify."ReceiptState"
+      and t."createdAt" < ${utcTime(window.before ?? new Date(0))}`,
+  }),
+  receipts_refused: () => ({
+    from: RECEIPTS,
+    where: Prisma.sql`${RECEIPT_KINDS} and t."receiptState" = 'refused'::cartlify."ReceiptState"`,
+  }),
+  // root: the sales of a threshold reached the per cent of it and have not passed it
+  tax_threshold_near: (window) => ({
+    from: thresholdsSales(new Date()),
+    where: Prisma.sql`t.sales * 100 >= t.amount * ${window.percent ?? 100}
+      and t.sales <= t.amount`,
+  }),
+  // root: a threshold passed where the shop is registered: the tax of the country is taken now
+  tax_threshold_passed: () => ({
+    from: thresholdsSales(new Date()),
+    where: Prisma.sql`t.registered and t.sales > t.amount`,
+  }),
+  // root: the sales of the last 12 months of a threshold that holds the tax of the recipient fell
+  // below it: root may go back to the first rule
+  tax_threshold_dropped: () => ({
+    from: thresholdsSales(new Date()),
+    where: Prisma.sql`t.period = 'rolling_12' and t.held and t.sales <= t.amount`,
+  }),
+  // root: an order refused for the threshold where the shop is not registered, in the period
+  tax_sales_stopped: casesOfRedis,
+  // root, informs: so many refusals within the limit of a parcel in the last days
+  tax_parcel_limit_refusals: casesOfRedis,
+  // root, informs: a rate that starts before the time (it became one when it was so many days ahead)
+  tax_rate_soon: (window) => ({
+    from: RATES_AHEAD,
+    where: Prisma.sql`t.at > ${NOW_UTC} and t.at <= ${utcTime(window.until ?? new Date(0))}
+      and ${
+        window.since
+          ? Prisma.sql`t.at - (${utcTime(window.until ?? new Date(0))} - ${NOW_UTC}) > ${utcTime(window.since)}`
+          : Prisma.sql`true`
+      }`,
+  }),
+  // root, informs: the period of a threshold that ended, its sales count from 0
+  tax_threshold_period_ended: (window) => ({
+    from: periodsEnded(new Date()),
+    where: after(window),
+  }),
 };
 
 type Counted = { count: number; dismissed: number; found: string[] };
@@ -457,26 +606,100 @@ async function countedCases(
   return (await countedCasesOf(db, [{ kind, window, aside }])).get(kind)!;
 }
 
-type Setting = { subscribed: boolean; threshold: number | null };
+type Setting = { subscribed: boolean; threshold: number | null; window: number | null };
 
-// a kind without a row is followed with the threshold the server gives
-const DEFAULT_SETTING: Setting = { subscribed: true, threshold: null };
+// a kind without a row is not followed and has no numbers: a person follows the kinds they need
+const DEFAULT_SETTING: Setting = { subscribed: false, threshold: null, window: null };
 
 async function settingsOf(db: Db, userId: number): Promise<Map<string, Setting>> {
   const rows = await db.adminAlertSetting.findMany({
     where: { userId },
-    select: { kind: true, subscribed: true, threshold: true },
+    select: { kind: true, subscribed: true, threshold: true, window: true },
   });
   return new Map(
-    rows.map((row) => [row.kind, { subscribed: row.subscribed, threshold: row.threshold }]),
+    rows.map((row) => [
+      row.kind,
+      { subscribed: row.subscribed, threshold: row.threshold, window: row.window },
+    ]),
   );
 }
 
-// the threshold a kind is counted with, and its window now
-const scopeOf = (kind: AdminAlertKind, setting: Setting, now: number) => {
-  const threshold = thresholdOf(kind, setting.threshold)?.value ?? null;
-  return { threshold, window: alertWindowOf(kind, threshold, now, shopToday(now)) };
+// the numbers a kind is counted with, its window now, and whether it works for the person: a kind
+// with numbers only once they wrote them. A kind that only informs counts what came after the
+// person closed it (seen)
+const scopeOf = (kind: AdminAlertKind, setting: Setting, now: number, seen: Date | null = null) => {
+  const ready = numbersReady(kind, setting.threshold, setting.window);
+  const threshold = ready ? setting.threshold : null;
+  const window = alertWindowOf(kind, threshold, now, shopToday(now), setting.window);
+  return {
+    ready,
+    threshold,
+    window: INFORMATIONAL_ALERT_KINDS.has(kind) && seen ? { ...window, since: seen } : window,
+  };
 };
+
+// the cases of the tax kept in redis as the kinds count them: the thresholds that stopped sales in
+// the period in force now, and the countries with so many refusals within the limit of a parcel in
+// the last days of the window (the time of the last day with one)
+async function redisCasesOf(
+  kinds: readonly AdminAlertKind[],
+  settings: Map<string, Setting>,
+  now: number,
+): Promise<{ stopped: AlertWindow; refusals: AlertWindow }> {
+  const stopped: AlertWindow = { ids: [], times: [] };
+  const refusals: AlertWindow = { ids: [], times: [] };
+
+  if (kinds.includes('tax_sales_stopped')) {
+    const marks = await readSalesStopped();
+    const at = new Date(now);
+    for (const country of shopCountries().values()) {
+      const threshold = taxProvider.thresholdOf(country.country);
+      const mark = threshold ? marks.get(threshold.key) : undefined;
+      // a case is a threshold, named by the first of its countries (as the cases of the database)
+      const id = threshold ? [...threshold.countries].sort()[0]! : '';
+      if (!threshold || !mark || !country.threshold || stopped.ids!.includes(id)) continue;
+      const from = thresholdCycleOf(country.threshold, at).from;
+      if (mark.period !== from.toISOString()) continue;
+      stopped.ids!.push(id);
+      stopped.times!.push(mark.at.toISOString());
+    }
+  }
+
+  const setting = settings.get('tax_parcel_limit_refusals') ?? DEFAULT_SETTING;
+  if (
+    kinds.includes('tax_parcel_limit_refusals') &&
+    numbersReady('tax_parcel_limit_refusals', setting.threshold, setting.window)
+  ) {
+    const days = Array.from({ length: setting.window! }, (_, i) => shopToday(now - i * 86_400_000));
+    const countries = [...shopCountries().values()]
+      .filter((c) => c.parcelLimit)
+      .map((c) => c.country);
+    for (const [country, counted] of await readParcelRefusals(countries, days)) {
+      const total = counted.reduce((sum, entry) => sum + entry.count, 0);
+      if (total < setting.threshold!) continue;
+      refusals.ids!.push(country);
+      refusals.times!.push(
+        `${counted
+          .map((entry) => entry.day)
+          .sort()
+          .at(-1)}T00:00:00.000Z`,
+      );
+    }
+  }
+  return { stopped, refusals };
+}
+
+// the window of a kind with its cases kept in redis
+const withRedisCases = (
+  kind: AdminAlertKind,
+  window: AlertWindow,
+  fromRedis: { stopped: AlertWindow; refusals: AlertWindow },
+): AlertWindow =>
+  kind === 'tax_sales_stopped'
+    ? { ...window, ...fromRedis.stopped }
+    : kind === 'tax_parcel_limit_refusals'
+      ? { ...window, ...fromRedis.refusals }
+      : window;
 
 const asideOf = (dismissals: Dismissal[] | null, kind: string) =>
   (dismissals ?? [])
@@ -529,6 +752,8 @@ export async function getAdminAlerts(
   // before the snapshot of the database (they are in redis)
   const halt = await readSendingHalt();
   const providerDown = await readDeliveryProviderDown();
+  // what the actor closed of the kinds that only inform (redis)
+  const seen = await readSeen(userId);
 
   const { alerts, kept, countedKinds, kinds } = await prisma.$transaction(
     async (db) => {
@@ -536,16 +761,34 @@ export async function getAdminAlerts(
       const settings = await settingsOf(db, userId);
       const kinds = alertKindsOf(actor.actorRole, await rightsOf(db, actor));
 
-      // the kinds told, each with its setting, threshold and window, and the cases of all of them
+      // the kinds told, each with its setting, threshold and window, and the cases of all of them;
+      // a kind whose numbers the actor has not written counts nothing
       const told = kinds
         .map((kind) => ({ kind, setting: settings.get(kind) ?? DEFAULT_SETTING }))
         .filter(({ setting }) => !opts.subscribed || setting.subscribed)
         .filter(({ kind }) => !opts.kinds || opts.kinds.includes(kind))
-        .map(({ kind, setting }) => ({ kind, setting, ...scopeOf(kind, setting, now) }));
+        .map(({ kind, setting }) => ({
+          kind,
+          setting,
+          ...scopeOf(kind, setting, now, seen?.get(kind) ?? null),
+        }));
+      const fromRedis = await redisCasesOf(
+        told.map(({ kind }) => kind),
+        settings,
+        now,
+      );
       const counted = await countedCasesOf(
         db,
-        told.flatMap(({ kind, window }) =>
-          isCaseKind(kind) ? [{ kind, window, aside: asideOf(dismissals, kind) }] : [],
+        told.flatMap(({ kind, window, ready }) =>
+          isCaseKind(kind) && ready
+            ? [
+                {
+                  kind,
+                  window: withRedisCases(kind, window, fromRedis),
+                  aside: asideOf(dismissals, kind),
+                },
+              ]
+            : [],
         ),
       );
 
@@ -553,9 +796,11 @@ export async function getAdminAlerts(
       // the marks still aside, and the kinds counted: a mark of a kind not counted stays
       const kept = new Set<string>();
       const countedKinds = new Set<string>();
-      for (const { kind, setting, threshold, window } of told) {
+      for (const { kind, setting, threshold, window, ready } of told) {
         let tally: { count: number; dismissed: number };
-        if (isCaseKind(kind)) {
+        if (!ready) {
+          tally = { count: 0, dismissed: 0 };
+        } else if (isCaseKind(kind)) {
           const cases = counted.get(kind)!;
           for (const id of cases.found) kept.add(dismissalFieldOf(kind, id));
           countedKinds.add(kind);
@@ -575,7 +820,10 @@ export async function getAdminAlerts(
         } else if (kind === 'shop_locale_missing') {
           tally = { count: isAvailableLocale(shopSettings().shopLocale) ? 0 : 1, dismissed: 0 };
         } else {
-          tally = { count: missingShopSettingsFields().length, dismissed: 0 };
+          tally = {
+            count: missingShopSettingsFields({ receipts: receiptProvider.makesReceipts() }).length,
+            dismissed: 0,
+          };
         }
 
         alerts.push({
@@ -590,6 +838,9 @@ export async function getAdminAlerts(
               : kind === 'delivery_provider_down' && tally.count > 0 && providerDown
                 ? providerDown.toISOString()
                 : null,
+          window: ready ? setting.window : null,
+          informational: INFORMATIONAL_ALERT_KINDS.has(kind),
+          seenUntil: seen?.get(kind)?.toISOString() ?? null,
         });
       }
       return { alerts, kept, countedKinds, kinds };
@@ -631,7 +882,7 @@ const assertCaseKind = async (kind: string, actor: Actor): Promise<CaseKind> => 
 const subscriptionOf = (kind: AdminAlertKind, setting: Setting): AdminAlertSubscriptionDto => ({
   kind,
   subscribed: setting.subscribed,
-  threshold: thresholdOf(kind, setting.threshold),
+  threshold: thresholdOf(kind, setting.threshold, setting.window),
 });
 
 export async function getAlertSubscriptions(
@@ -652,32 +903,49 @@ export async function getAlertSubscriptions(
 
 // one part of the setting of a kind of the actor, the other one as it is: the row is added or
 // changed in one step, so two changes at once do not lose one another
+// a person follows a kind with numbers only with them written, and keeps them while they follow it
+// (ALERT_THRESHOLD_REQUIRED): the row is read and changed in one step under its lock, so two changes
+// at once do not lose one another
 async function writeSetting(
   actor: Actor,
   kind: AdminAlertKind,
-  change: { subscribed: boolean } | { threshold: number | null },
+  change: { subscribed: boolean } | { threshold: number | null; window: number | null },
 ): Promise<Setting> {
   const userId = Number(actor.actorId);
-  const setsSubscribed = 'subscribed' in change;
-  const subscribed = 'subscribed' in change ? change.subscribed : DEFAULT_SETTING.subscribed;
-  const threshold = 'threshold' in change ? change.threshold : DEFAULT_SETTING.threshold;
 
-  const [row] = await prisma.$transaction(async (db) => {
+  const setting = await prisma.$transaction(async (db) => {
     await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
-    return db.$queryRaw<Setting[]>`
-      insert into cartlify.admin_alert_settings as s ("userId", kind, subscribed, threshold)
-      values (${userId}, ${kind}, ${subscribed}, ${threshold}::int)
-      on conflict ("userId", kind) do update set
-        subscribed = case when ${setsSubscribed} then excluded.subscribed else s.subscribed end,
-        threshold = case when ${setsSubscribed} then s.threshold else excluded.threshold end
-      returning subscribed, threshold
-    `;
+    await db.$executeRaw`
+      insert into cartlify.admin_alert_settings ("userId", kind) values (${userId}, ${kind})
+      on conflict ("userId", kind) do nothing`;
+    const [row] = await db.$queryRaw<Setting[]>`
+      select subscribed, threshold, "window" from cartlify.admin_alert_settings
+      where "userId" = ${userId} and kind = ${kind} for update`;
+    const next: Setting = { ...(row ?? DEFAULT_SETTING), ...change };
+    if (next.subscribed && !numbersReady(kind, next.threshold, next.window)) {
+      throw new BadRequestError('ALERT_THRESHOLD_REQUIRED', { kind });
+    }
+    await db.$executeRaw`
+      update cartlify.admin_alert_settings
+      set subscribed = ${next.subscribed}, threshold = ${next.threshold}::int,
+          "window" = ${next.window}::int
+      where "userId" = ${userId} and kind = ${kind}`;
+    // the refusals within the limit of a parcel are counted while a root follows the kind
+    const counted =
+      kind === 'tax_parcel_limit_refusals'
+        ? (
+            await db.$queryRaw<{ followed: boolean }[]>`
+              select cartlify.alert_kind_followed(${kind}) as followed`
+          )[0]?.followed === true
+        : null;
+    return { next, counted };
   });
 
-  return row ?? DEFAULT_SETTING;
+  if (setting.counted !== null) await setParcelRefusalsCounted(setting.counted);
+  return setting.next;
 }
 
-// follows a kind (subscribed) or not; its threshold stays; done already is no matter
+// follows a kind (subscribed) or not; its numbers stay; done already is no matter
 export async function setAlertSubscription(args: {
   actorId: UserId;
   actorRole: Role;
@@ -689,23 +957,43 @@ export async function setAlertSubscription(args: {
   return subscriptionOf(kind, setting);
 }
 
-// sets the threshold of a kind, or gives it back to the server (null); whether it is followed
-// stays
+// writes the numbers of a kind (its threshold, and the window of a kind that takes one), or takes
+// them away (null) from a kind the person does not follow; whether it is followed stays
 export async function setAlertThreshold(args: {
   actorId: UserId;
   actorRole: Role;
   kind: string;
   value: number | null;
+  window?: number | null;
 }): Promise<AdminAlertSubscriptionDto> {
   const kind = await assertKind(args.kind, args);
   if (args.value === null) {
     if (!thresholdOf(kind, null)) throw new NotFoundError('ALERT_THRESHOLD_NOT_FOUND', { kind });
   } else {
-    assertThreshold(kind, args.value);
+    assertThreshold(kind, args.value, args.window ?? null);
   }
 
-  const setting = await writeSetting(args, kind, { threshold: args.value });
+  const setting = await writeSetting(args, kind, {
+    threshold: args.value,
+    window: args.value === null ? null : (args.window ?? null),
+  });
   return subscriptionOf(kind, setting);
+}
+
+// Close of a kind that only informs: what the actor saw of it until now is put away; a later event
+// of the kind alerts again
+export async function closeInformationalAlert(args: {
+  actorId: UserId;
+  actorRole: Role;
+  kind: string;
+}): Promise<AdminAlertSeenDto> {
+  const kind = await assertKind(args.kind, args);
+  if (!INFORMATIONAL_ALERT_KINDS.has(kind)) {
+    throw new NotFoundError('ALERT_KIND_NOT_FOUND', { kind });
+  }
+  const at = new Date();
+  await writeSeen(Number(args.actorId), kind, at);
+  return { kind, seenUntil: at.toISOString() };
 }
 
 // the cases the actor put aside that still wait, the latest first; the rest go
@@ -722,11 +1010,13 @@ export async function getAlertDismissals(
       const settings = await settingsOf(db, userId);
       const kinds = alertKindsOf(actor.actorRole, await rightsOf(db, actor));
 
+      const fromRedis = await redisCasesOf(kinds, settings, now);
       const scopes = kinds.flatMap((kind) => {
         const aside = asideOf(dismissals, kind);
         if (!isCaseKind(kind) || !aside.length) return [];
-        const { window } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
-        return [{ kind, window, aside }];
+        const { window, ready } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
+        if (!ready) return [];
+        return [{ kind, window: withRedisCases(kind, window, fromRedis), aside }];
       });
 
       const kept = new Set<string>();
@@ -773,8 +1063,12 @@ export async function setAlertDismissal(args: {
   const waits = await prisma.$transaction(async (db) => {
     await setUserContext(db, { userId: args.actorId, role: args.actorRole });
     const settings = await settingsOf(db, userId);
-    const { window } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
-    const { found } = await countedCases(db, kind, window, [args.id]);
+    const { window, ready } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
+    if (!ready) return false;
+    const fromRedis = await redisCasesOf([kind], settings, now);
+    const { found } = await countedCases(db, kind, withRedisCases(kind, window, fromRedis), [
+      args.id,
+    ]);
     return found.length > 0;
   });
   if (!waits) throw new NotFoundError('ALERT_ITEM_NOT_FOUND', { kind, id: args.id });

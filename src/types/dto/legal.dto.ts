@@ -35,6 +35,8 @@ export interface PrivacyRetentionDto {
   newsletterConsentDays: number;
   // the rows of the recipients of a newsletter campaign, counted from the end of the campaign
   newsletterRecipientsDays: number;
+  // the copy of the buyer in the tax documents, counted from the document
+  taxDocumentsDays: number;
 }
 
 // a version with its text; contract is the terms of a contract and retention the terms of a privacy

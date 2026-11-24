@@ -215,6 +215,32 @@ const refundsListOf = async (query: string) => {
 
 const CANCELLED_SUBJECT = 'is cancelled and your money is sent back';
 
+// what money already with the buyer pays of the rows of a statement by their marks (db/05:
+// return_row_shares, no line of the journal): [the line of the money, the sum] for each line
+async function paidByOf(returnId: number): Promise<[number, string][]> {
+  const rows = await asAdmin(
+    (tx) =>
+      tx.$queryRaw<{ moneyLogId: number; amount: string }[]>`
+      select sh.source_id as "moneyLogId", sh.amount::text as amount
+      from cartlify.return_row_shares(
+        (select r."orderId" from cartlify.returns as r where r.id = ${returnId}::int)
+      ) as sh
+      where sh.return_id = ${returnId}::int
+    `,
+  );
+  const sums = new Map<number, number>();
+  for (const entry of rows.map((row) => ({
+    moneyLogId: row.moneyLogId,
+    amount: Number(row.amount),
+  }))) {
+    sums.set(
+      entry.moneyLogId,
+      Math.round(((sums.get(entry.moneyLogId) ?? 0) + entry.amount) * 100) / 100,
+    );
+  }
+  return [...sums].map(([line, sum]) => [line, sum.toFixed(2)]);
+}
+
 describe('a refund made by hand of a payment the order could not take (A)', () => {
   // the app asked for the refund and got no answer, then an admin gave the money back in the
   // dashboard: the refund made by hand is the one of the line in transit, nothing is sent twice
@@ -338,22 +364,9 @@ describe('a refund made by hand of all of an order that was not sent (B)', () =>
         },
       }),
     );
-    expect(lines.map((line) => ({ ...line, amount: line.amount.toFixed(2) }))).toEqual([
-      expect.objectContaining({
-        purpose: 'return',
-        part: 'goods',
-        amount: '-20.00',
-        transferKey: null,
-        state: 'sent',
-      }),
-      expect.objectContaining({
-        purpose: 'return',
-        part: 'covered',
-        amount: '20.00',
-        coversId: hand.id,
-        state: 'sent',
-      }),
-    ]);
+    // no money moved for the statement: no line of it, its rows record the refund made by hand
+    expect(lines).toEqual([]);
+    expect(await paidByOf(statement!.id)).toEqual([[hand.id, '20.00']]);
     // Stripe was asked for nothing: the money went back by hand
     expect((await refundsOf(order.paymentId)).map((one) => one.id)).toEqual([byHand.id]);
 
@@ -528,15 +541,8 @@ describe('a refund made by hand while a statement of the order waits for its mon
     const [statement] = await statementsOf(order.orderId);
     expect(statement!.refundedTotal.toFixed(2)).toBe('20.00');
     expect(statement!.closedAt).toEqual(expect.any(Date));
-    const covered = await asAdmin((tx) =>
-      tx.moneyLog.findMany({
-        where: { returnId: order.returnId, part: 'covered' },
-        select: { amount: true, coversId: true },
-      }),
-    );
-    expect(covered.map((line) => [line.amount.toFixed(2), line.coversId])).toEqual([
-      ['10.00', order.line.id],
-    ]);
+    // the transfer took the 10 of the refund made by hand first, recorded in the row
+    expect(await paidByOf(order.returnId)).toEqual([[order.line.id, '10.00']]);
   });
 
   // all of the payment with no other money before it: the system shares it among the items and the
@@ -732,6 +738,160 @@ describe('a refund made by hand of an order that was sent, with nothing waiting 
     expect(res.statusCode).toBe(200);
     expect(await refundsListOf(`state=unassigned&orderId=${order.orderId}`)).toEqual([]);
     expect(mails).toEqual([]);
+  });
+});
+
+describe('the reception of units of an item money given back by hand was given to', () => {
+  // the order of two lamps went; root says the 10 given back by hand were for one lamp (the shop
+  // bought it back); an admin makes a statement of one lamp: the other may still come back
+  async function boughtBack() {
+    const order = await paidOrder({ stage: 'shipped' });
+    const byHand = await refundByHand(order.paymentId, 1000);
+    const line = await handLineOf(order.paymentId, byHand.id);
+    const itemId = await itemOf(order.orderId);
+    const decided = await decide(line.id, {
+      items: [{ orderItemId: itemId, quantity: 1, amount: 10 }],
+      note: 'The shop bought a lamp back',
+    });
+    expect(decided.statusCode).toBe(200);
+    const card = await flows.adminStatement(order.orderId, itemId, 1);
+    return { ...order, line, returnId: card.id, rowId: card.items[0]!.id };
+  }
+
+  const receive = (returnId: number, result: Record<string, unknown>) =>
+    post(
+      `/api/returns/${returnId}/receive`,
+      { parcel: { buyerPaid: 0 }, results: [result] },
+      admin,
+    );
+
+  it('asks which of the units that came the money paid while another may still come (RETURN_PAID_UNITS_REQUIRED)', async () => {
+    const order = await boughtBack();
+
+    const res = await receive(order.returnId, {
+      itemId: order.rowId,
+      quantity: 1,
+      goods: 'to_stock',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ errorCode: 'RETURN_PAID_UNITS_REQUIRED' });
+  });
+
+  it('refuses a mark over the units of the result or on goods not accepted (RETURN_PAID_UNITS_INVALID)', async () => {
+    const order = await boughtBack();
+
+    for (const result of [
+      { itemId: order.rowId, quantity: 1, goods: 'to_stock', paidUnits: 2 },
+      {
+        itemId: order.rowId,
+        quantity: 1,
+        goods: 'not_accepted',
+        notAcceptedReason: 'used',
+        paidUnits: 1,
+      },
+    ]) {
+      const res = await receive(order.returnId, result);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'RETURN_PAID_UNITS_INVALID' });
+    }
+  });
+
+  // 4 given back by hand for a lamp that came scratched; the buyer sends that lamp back, root says
+  // what each sum was for: a row that came and was paid gives the next money given back by hand to
+  // the other lamp, the one still with the buyer
+  async function scratched() {
+    const order = await paidOrder({ stage: 'shipped' });
+    const itemId = await itemOf(order.orderId);
+    const first = await handLineOf(order.paymentId, (await refundByHand(order.paymentId, 400)).id);
+    expect(
+      (
+        await decide(first.id, {
+          items: [{ orderItemId: itemId, quantity: 1, amount: 4 }],
+          note: 'A lamp came scratched',
+        })
+      ).statusCode,
+    ).toBe(200);
+    const card = await flows.adminStatement(order.orderId, itemId, 1);
+    return { ...order, itemId, returnId: card.id, rowId: card.items[0]!.id };
+  }
+
+  // later 6 more go back by hand, which root says were for the other lamp
+  async function sixMoreForTheOther(order: Awaited<ReturnType<typeof scratched>>) {
+    const later = await handLineOf(order.paymentId, (await refundByHand(order.paymentId, 600)).id);
+    const res = await decide(later.id, {
+      items: [{ orderItemId: order.itemId, quantity: 1, amount: 6 }],
+      note: 'The other lamp kept',
+    });
+    expect(res.statusCode).toBe(200);
+  }
+
+  it('keeps a row lowered to what the buyer had at that sum when more money given back by hand comes later', async () => {
+    const order = await scratched();
+    const taken = await receive(order.returnId, {
+      itemId: order.rowId,
+      quantity: 1,
+      goods: 'written_off',
+      paidUnits: 1,
+    });
+    expect(taken.statusCode).toBe(200);
+    const lowered = await post(
+      `/api/returns/${order.returnId}/refund`,
+      { reductions: [{ itemId: order.rowId, amount: 4, note: 'Used after the scratch' }] },
+      root,
+    );
+    expect(lowered.statusCode).toBe(200);
+
+    await sixMoreForTheOther(order);
+
+    const [statement] = await statementsOf(order.orderId);
+    expect(statement!.refundedTotal.toFixed(2)).toBe('4.00');
+    expect(await paidByOf(order.returnId)).toEqual([[expect.any(Number), '4.00']]);
+  });
+
+  it('keeps a row its own transfer paid the rest of at its sum when more money given back by hand comes later', async () => {
+    const order = await scratched();
+    const taken = await receive(order.returnId, {
+      itemId: order.rowId,
+      quantity: 1,
+      goods: 'to_stock',
+      paidUnits: 1,
+    });
+    expect(taken.statusCode).toBe(200);
+    const sent = await post(`/api/returns/${order.returnId}/refund`, {}, admin);
+    expect(sent.statusCode).toBe(200);
+    expect(
+      (await refundsOf(order.paymentId)).map((one) => one.amount).sort((a, b) => a - b),
+    ).toEqual([400, 600]);
+
+    await sixMoreForTheOther(order);
+
+    const [statement] = await statementsOf(order.orderId);
+    expect(statement!.refundedTotal.toFixed(2)).toBe('10.00');
+  });
+
+  it('pays the unit marked with the money given back by hand at once: the card tells the mark, nothing is asked of Stripe', async () => {
+    const order = await boughtBack();
+
+    const res = await receive(order.returnId, {
+      itemId: order.rowId,
+      quantity: 1,
+      goods: 'to_stock',
+      paidUnits: 1,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ refundedTotal: 10, closedAt: expect.any(String) });
+    expect(res.json().items).toEqual([
+      expect.objectContaining({
+        id: order.rowId,
+        money: 'refunded',
+        paidUnits: 1,
+        paidUnitsLeft: 0,
+      }),
+    ]);
+    expect(await paidByOf(order.returnId)).toEqual([[order.line.id, '10.00']]);
+    expect((await refundsOf(order.paymentId)).map((one) => one.amount)).toEqual([1000]);
   });
 });
 

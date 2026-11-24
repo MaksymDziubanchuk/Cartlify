@@ -458,6 +458,8 @@ describe('GET /api/orders: what holds the orders (admin and root)', () => {
   it.each([
     ['holds', 'holds=any'],
     ['fraudWarnedFrom', 'fraudWarnedFrom=2026-01-01T00:00:00.000Z'],
+    ['receipts', 'receipts=refused'],
+    ['receiptsMadeTo', 'receiptsMadeTo=2026-01-01T00:00:00.000Z'],
   ])('refuses the filter %s to a buyer', async (filter, query) => {
     const res = await list(await newUser(), `?${query}`);
 

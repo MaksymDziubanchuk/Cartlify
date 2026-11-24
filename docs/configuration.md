@@ -154,6 +154,14 @@ FILE_STORAGE_PROVIDER=cloudinary
 AI_PROVIDER=openai
 CAPTCHA_PROVIDER=turnstile
 DELIVERY_PROVIDER=shippypro
+TAX_PROVIDER=own
+RECEIPT_PROVIDER=none
+
+# fiskaly, the receipts provider (see taxes.md): the key of the managed organization of the shop and
+# the environment of the key, test or live (test unless set)
+FISKALY_API_KEY=
+FISKALY_API_SECRET=
+FISKALY_ENVIRONMENT=test
 
 # ShippyPro, the delivery provider (see delivery.md): the key of the account (API, API Key in its
 # dashboard, Full Access). Without it the method carrier cannot be switched on. With it the secret of

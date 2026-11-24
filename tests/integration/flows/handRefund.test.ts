@@ -136,6 +136,11 @@ async function orderCardOf(orderId: number) {
 }
 
 // the statement as an admin reads it
+// what money already with the buyer paid of the rows of a statement, as its card shows it: the part
+// covered of a movement (no line of the journal: the rows record it), [sum, the line of the money]
+const coveredOf = (card: { money: { part: string; amount: number; coversId: number | null }[] }) =>
+  card.money.filter((one) => one.part === 'covered').map((one) => [one.amount, one.coversId]);
+
 async function statementCardOf(returnId: number) {
   const res = await j.get(admin, `/api/returns/${returnId}`);
   expect(res.statusCode).toBe(200);
@@ -207,10 +212,10 @@ describe('all of the payment of an order not sent, given back in the dashboard (
       expect(glanceOf(card.money)).toEqual([
         ['money.payment', 'order', 'goods', 20],
         ['money.refund', 'hand', 'whole', -20],
-        ['money.refund', 'return', 'goods', -20],
-        ['money.refund', 'return', 'covered', 20],
       ]);
       const statementId = card.returns[0].id as number;
+      // the refund made by hand paid the statement: no line of its own, its card shows it
+      expect(coveredOf(await statementCardOf(statementId))).toEqual([[20, expect.any(Number)]]);
       // nothing is left for root: the system decided it
       expect(await refundsListed(orderId, 'state=unassigned')).toEqual([]);
 
@@ -522,7 +527,8 @@ describe('money given back in the dashboard while a statement of the order waits
       closedAt: expect.any(String),
     });
 
-    // the money journal of the admins: the refund is of the order, the part it covered names it
+    // the money journal of the admins: the refund is of the order; the statement has no line of it,
+    // its card shows the refund that paid the lamp
     const lines = (
       await j.get(admin, `/api/admin/money-log?orderId=${orderId}&sortOrder=asc&limit=100`)
     ).json().items as (MoneyLine & {
@@ -534,9 +540,7 @@ describe('money given back in the dashboard while a statement of the order waits
       returnId: null,
       moneyUse: 'goods',
     });
-    expect(lines.filter((line) => line.part === 'covered')).toEqual([
-      expect.objectContaining({ amount: 10, coversId: refund.id, returnId }),
-    ]);
+    expect(coveredOf(await statementCardOf(returnId))).toEqual([[10, refund.id]]);
 
     // Stripe sent the other 10 only
     const refunds = await refundsOf(paymentId);
@@ -735,9 +739,10 @@ describe('money given back in the dashboard of an order already sent (D)', () =>
     const lines = (
       await j.get(admin, `/api/admin/money-log?orderId=${orderId}&sortOrder=asc&limit=100`)
     ).json().items as (MoneyLine & { returnId: number | null; coversId: number | null })[];
-    expect(lines.filter((line) => line.part === 'covered')).toEqual([
-      expect.objectContaining({ amount: 10, coversId: refund!.id, returnId }),
-    ]);
+    expect(
+      lines.filter((line) => line.returnId === returnId && line.part === 'goods'),
+    ).toHaveLength(1);
+    expect(coveredOf(await statementCardOf(returnId))).toEqual([[10, refund!.id]]);
   });
 
   // root took the refund for a gesture first; the buyer sends the lamps back and root sees the 10

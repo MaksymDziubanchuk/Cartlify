@@ -1,4 +1,14 @@
 import { shopSettings } from '@config/shopSettings.js';
+import {
+  noteTaxRefusal,
+  quoteOrder,
+  refusalOf,
+  taxArgOf,
+  taxCountryOf,
+  taxLinesOf,
+  type CarrierPrice,
+} from './helpers/orderTax.helper.js';
+import { shopCountry } from '@config/shopCountries.js';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
@@ -131,17 +141,24 @@ const WRITTEN_DELIVERY_SELECT = {
 } as const;
 
 // what the checks of a delivery depend on, as one text: the lines of the cart with what a carrier
-// and the customs read of them (not the name: the confirmation writes the one of the variant), and
-// the delivery the order has when none is sent
-const checkedOf = (cart: { lines: readonly { name: string }[] }, written: unknown): string =>
-  JSON.stringify({ lines: cart.lines.map(({ name: _name, ...line }) => line), written });
+// and the customs read of them (not the name: the confirmation writes the one of the variant; nor
+// the unit price: the confirmation writes the one the tax rule leaves, and confirm_order compares
+// the prices with the catalog itself), and the delivery the order has when none is sent
+const checkedOf = (
+  cart: { lines: readonly { name: string; unitPrice: number }[] },
+  written: unknown,
+): string =>
+  JSON.stringify({
+    lines: cart.lines.map(({ name: _name, unitPrice: _price, ...line }) => line),
+    written,
+  });
 
 async function checkDeliveryOfCart(
   actorId: UserId,
   orderId: number,
   sent: DeliveryWriteData | null,
   log: FastifyBaseLogger,
-): Promise<{ carrierPrice: number | null; checked: string | null }> {
+): Promise<{ carrier: CarrierPrice | null; checked: string | null }> {
   const read = await tx(async (db) => {
     await setUserContext(db, { userId: actorId, role: 'USER' });
     const order = await db.order.findFirst({
@@ -158,12 +175,12 @@ async function checkDeliveryOfCart(
         });
     return { cart: await cartForDelivery(db, order.id), written };
   });
-  if (!read) return { carrierPrice: null, checked: null };
+  if (!read) return { carrier: null, checked: null };
 
   const checked = checkedOf(read.cart, read.written);
   const delivery = sent ?? read.written;
   if (!delivery || !sendsToAddress(delivery.method) || !delivery.country) {
-    return { carrierPrice: null, checked };
+    return { carrier: null, checked };
   }
 
   if (customsNeededFor(delivery.country)) {
@@ -171,11 +188,11 @@ async function checkDeliveryOfCart(
     if (products.length) throw new BadRequestError('DELIVERY_CUSTOMS_DATA_MISSING', { products });
   }
 
-  if (delivery.method !== 'carrier') return { carrierPrice: null, checked };
+  if (delivery.method !== 'carrier') return { carrier: null, checked };
 
   const items = linesWithoutShippingData(read.cart);
   if (items.length) throw new ConflictError('ORDER_ITEMS_NOT_DELIVERABLE', { items });
-  if (!read.cart.box) return { carrierPrice: null, checked };
+  if (!read.cart.box) return { carrier: null, checked };
 
   const options = await carrierOptionsFor(
     {
@@ -200,14 +217,10 @@ async function checkDeliveryOfCart(
   });
   if (!option) throw new ConflictError('DELIVERY_SERVICE_UNAVAILABLE');
 
-  // what the buyer pays for it: free from the free-from sum only when it is the cheapest
+  // what the buyer pays for it: free from the free-from sum only when it is the cheapest, the sum of
+  // the items at the prices the tax rule leaves (quoteOrder)
   return {
-    carrierPrice: carrierPriceFor(
-      read.cart.itemsTotal,
-      delivery.country,
-      option.price,
-      Math.min(...options.map((one) => one.price)),
-    ),
+    carrier: { price: option.price, cheapest: Math.min(...options.map((one) => one.price)) },
     checked,
   };
 }
@@ -220,7 +233,7 @@ async function deliveryPriceNowOf(
   orderId: number,
   method: DeliveryMethodName | undefined,
   country: string | null | undefined,
-  carrierPrice: number | null,
+  carrier: CarrierPrice | null,
 ): Promise<number> {
   return prisma.$transaction(async (db) => {
     await setUserContext(db, { userId: actorId, role: 'USER' });
@@ -234,6 +247,23 @@ async function deliveryPriceNowOf(
 
     const chosen = method ?? order?.delivery?.method;
     if (!order || !chosen) return 0;
+
+    // the price the next confirmation takes: by the tax rule of the country (docs/taxes.md)
+    const quote = await quoteOrder(db, {
+      lines: await taxLinesOf(db, orderId),
+      method: chosen,
+      country: country ?? order.delivery?.country ?? null,
+      carrier,
+    });
+    if (quote) return quote.delivery?.price ?? 0;
+    const carrierPrice = carrier
+      ? carrierPriceFor(
+          order.items.reduce((sum, item) => sum + Number(item.totalPrice), 0),
+          country ?? order.delivery?.country ?? null,
+          carrier.price,
+          carrier.cheapest,
+        )
+      : null;
 
     const itemsCents = order.items.reduce(
       (sum, item) => sum + Math.round(Number(item.totalPrice) * 100),
@@ -254,6 +284,7 @@ export async function confirmOrder({
   orderId,
   delivery,
   expectedDeliveryPrice,
+  invoice,
   log,
 }: ConfirmCurrentOrderDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
@@ -265,7 +296,7 @@ export async function confirmOrder({
   // refuse early so nothing is confirmed in db while redis is down
   assertRedisReady();
 
-  const { carrierPrice, checked } = await checkDeliveryOfCart(
+  const { carrier, checked } = await checkDeliveryOfCart(
     actorId,
     Number(orderId),
     deliveryData,
@@ -358,29 +389,71 @@ export async function confirmOrder({
             });
         const method = deliveryData?.method ?? written?.method;
         const country = deliveryData ? deliveryData.country : (written?.country ?? null);
+
+        // the tax of the order by the rule of the country it is taxed in (docs/taxes.md), counted
+        // under the lock of its threshold: the items at the prices the rule leaves, the delivery
+        // priced with them
+        const quote = method
+          ? await quoteOrder(db, {
+              lines: await taxLinesOf(db, Number(orderId)),
+              method,
+              country,
+              carrier,
+              lock: true,
+            })
+          : null;
+
+        const carrierPrice = carrier
+          ? carrierPriceFor(itemsCents / 100, country, carrier.price, carrier.cheapest)
+          : null;
         const deliveryCents = method
           ? Math.round(deliveryPriceOf(method, itemsCents / 100, country, carrierPrice) * 100)
           : 0;
-        if (items.length > 0 && itemsCents + deliveryCents < Math.round(minimum * 100)) {
+        const totalCents = quote ? Math.round(quote.total * 100) : itemsCents + deliveryCents;
+        if (items.length > 0 && totalCents < Math.round(minimum * 100)) {
           throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
             minimum,
             currency: shopCurrency(),
           });
         }
 
+        // the tax of a country where the shop is not registered, and the largest total of the shop
+        const refusal = refusalOf(quote, totalCents / 100);
+        if (refusal) {
+          // root is told of the sales a threshold stopped and of the parcels refused
+          if (method) await noteTaxRefusal(quote, method, country);
+          throw refusal;
+        }
+
         // confirm in db; the order holds its units reservationMinutes (15 unless root set one)
         // and its delivery is priced by the rule of the zone of its country
         const settings = shopSettings();
-        const rule = method
-          ? deliveryRuleOf(method, country, carrierPrice)
-          : { price: null, freeFrom: null };
+        const rule = quote?.delivery
+          ? { price: quote.delivery.flat, freeFrom: quote.delivery.freeFrom }
+          : method
+            ? deliveryRuleOf(method, country, carrierPrice)
+            : { price: null, freeFrom: null };
+        const tax = taxArgOf(quote);
         await db.$executeRaw`select cartlify.confirm_order(
           ${Number(orderId)}::int,
           ${`${settings.reservationMinutes} minutes`}::interval,
           ${rule.price}::numeric,
           ${rule.freeFrom}::numeric,
-          ${expectedDeliveryPrice}::numeric
+          ${expectedDeliveryPrice}::numeric,
+          ${tax === null ? null : JSON.stringify(tax)}::jsonb,
+          ${invoice === true}::boolean
         )`;
+        // the sales of the last 12 months passed the threshold with this order: the tax of the
+        // recipient holds from now on, until root goes back to the first rule (the database counts
+        // the sales itself)
+        const taxCountry = method ? taxCountryOf(method, country) : null;
+        if (
+          quote?.threshold &&
+          taxCountry &&
+          shopCountry(taxCountry)?.threshold?.period === 'rolling_12'
+        ) {
+          await db.$queryRaw`select cartlify.hold_tax_threshold(${taxCountry}::text) as held`;
+        }
 
         // the price of the carrier and the checks of the delivery were made before this
         // transaction, outside it (the provider is asked there): a cart or a delivery that changed
@@ -461,7 +534,7 @@ export async function confirmOrder({
             Number(orderId),
             delivery?.method,
             delivery?.address?.country,
-            carrierPrice,
+            carrier,
           ),
         });
       }

@@ -356,10 +356,8 @@ describeMock('a dispute of an order not sent', () => {
         select: { part: true, amount: true, transferKey: true },
       }),
     );
-    expect(parts.map((part) => [part.part, part.amount.toFixed(2)])).toEqual([
-      ['goods', '-20.00'],
-      ['covered', '15.00'],
-    ]);
+    // the 15 of the bank pays the rows first (recorded in them, no line); the transfer sends the 5 left
+    expect(parts.map((part) => [part.part, part.amount.toFixed(2)])).toEqual([['goods', '-5.00']]);
     expect(parts.every((part) => part.transferKey !== null)).toBe(true);
   });
 
@@ -400,10 +398,7 @@ describeMock('a dispute of an order not sent', () => {
         select: { part: true, amount: true },
       }),
     );
-    expect(parts.map((part) => [part.part, part.amount.toFixed(2)])).toEqual([
-      ['goods', '-10.00'],
-      ['covered', '5.00'],
-    ]);
+    expect(parts.map((part) => [part.part, part.amount.toFixed(2)])).toEqual([['goods', '-5.00']]);
   });
 
   it('holds and drafts for an inquiry of the bank, writes no money, and lets the order go when it closes', async () => {

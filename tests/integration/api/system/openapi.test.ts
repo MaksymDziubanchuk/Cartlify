@@ -235,6 +235,8 @@ describe('the product routes', () => {
       'name',
       'originCountry',
       'stock',
+      'taxExceptions',
+      'taxGroupId',
       'variants',
       'warnings',
       'withdrawal',

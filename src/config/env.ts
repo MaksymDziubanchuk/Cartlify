@@ -105,6 +105,11 @@ declare global {
       AI_PROVIDER?: string;
       CAPTCHA_PROVIDER?: string;
       DELIVERY_PROVIDER?: string;
+      TAX_PROVIDER?: string;
+      RECEIPT_PROVIDER?: string;
+      FISKALY_API_KEY?: string;
+      FISKALY_API_SECRET?: string;
+      FISKALY_ENVIRONMENT?: string;
 
       SHIPPYPRO_API_KEY: string;
       SHIPPYPRO_WEBHOOK_SECRET: string;
@@ -689,6 +694,15 @@ export default {
   AI_PROVIDER: providerName('AI_PROVIDER', 'openai'),
   CAPTCHA_PROVIDER: providerName('CAPTCHA_PROVIDER', 'turnstile'),
   DELIVERY_PROVIDER: providerName('DELIVERY_PROVIDER', 'shippypro'),
+  // the tax of a cart: our own logic by the records of the countries root writes (docs/taxes.md)
+  TAX_PROVIDER: providerName('TAX_PROVIDER', 'own'),
+  // fiscal receipts: none for a shop whose online sales need none; fiskaly (SIGN ES, Spain) with the
+  // key of the managed organization of the shop and the environment of the key (test or live)
+  RECEIPT_PROVIDER: providerName('RECEIPT_PROVIDER', 'none'),
+  FISKALY_API_KEY: process.env.FISKALY_API_KEY?.trim() || '',
+  FISKALY_API_SECRET: process.env.FISKALY_API_SECRET?.trim() || '',
+  FISKALY_ENVIRONMENT:
+    process.env.FISKALY_ENVIRONMENT?.trim().toLowerCase() === 'live' ? 'live' : 'test',
 
   // shippypro, the delivery provider: without the key the method carrier cannot be switched on;
   // with it, the secret of its webhook is required outside the tests (every event would be refused)

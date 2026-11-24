@@ -154,6 +154,11 @@ async function disputesListed(orderId: number, query = '') {
   return res.json().items as { id: number; providerDisputeId: string; status: string }[];
 }
 
+// what money already with the buyer paid of the rows of a statement, as its card shows it: the part
+// covered of a movement (no line of the journal: the rows record it), [sum, the line of the money]
+const coveredOf = (card: { money: { part: string; amount: number; coversId: number | null }[] }) =>
+  card.money.filter((one) => one.part === 'covered').map((one) => [one.amount, one.coversId]);
+
 async function statementCardOf(returnId: number) {
   const res = await j.get(admin, `/api/returns/${returnId}`);
   expect(res.statusCode).toBe(200);
@@ -254,9 +259,10 @@ describeMock('a dispute of an order not sent', () => {
     expect(glanceOf((await orderCardOf(orderId)).money)).toEqual([
       ['money.payment', 'order', 'goods', 20],
       ['money.dispute_withdrawn', 'dispute', 'whole', -20],
-      ['money.refund', 'return', 'goods', -20],
-      ['money.refund', 'return', 'covered', 20],
     ]);
+    // the money of the bank paid the statement of the system: no line of its own, its card shows it
+    const [statement] = (await orderCardOf(orderId)).returns as { id: number }[];
+    expect(coveredOf(await statementCardOf(statement!.id))).toEqual([[20, expect.any(Number)]]);
 
     // the goods are back on the shelf; Stripe was asked for no refund, the bank gave the money
     expect((await stockOf(product)).stock).toBe(before + 2);
@@ -455,9 +461,9 @@ describeMock('a dispute while a statement of the order waits for its money', () 
     })[];
     const withdrawn = lines.find((line) => line.event === 'money.dispute_withdrawn')!;
     expect(withdrawn).toMatchObject({ amount: -20, returnId: null, moneyUse: 'goods' });
-    expect(lines.filter((line) => line.part === 'covered')).toEqual([
-      expect.objectContaining({ amount: 20, coversId: withdrawn.id, returnId }),
-    ]);
+    // no line of the statement: its card shows the money of the bank that paid it
+    expect(lines.filter((line) => line.returnId === returnId)).toEqual([]);
+    expect(coveredOf(await statementCardOf(returnId))).toEqual([[20, withdrawn.id]]);
     expect(await refundsOf(paymentId)).toEqual([]);
   });
 });
@@ -576,11 +582,12 @@ describeMock('a dispute of an order already sent', () => {
       ).statusCode,
     ).toBe(200);
 
-    // the admin sends the money: Stripe refuses a refund of the payment the bank charged back
+    // the admin sends the money: the money of the bank pays the lamp at once, Stripe refuses the
+    // refund of the book (the payment the bank charged back)
     expect((await j.post(admin, `/api/returns/${returnId}/refund`)).statusCode).toBe(200);
-    expect(await statementCardOf(returnId)).toMatchObject({ refundedTotal: 0, closedAt: null });
+    expect(await statementCardOf(returnId)).toMatchObject({ refundedTotal: 10, closedAt: null });
 
-    // root sends it another way: the money of the bank pays the lamp first, the book goes outside
+    // root sends the book another way
     const card = await statementCardOf(returnId);
     const outside = await j.post(root, `/api/returns/${returnId}/refund/outside`, {
       method: 'bank_transfer',

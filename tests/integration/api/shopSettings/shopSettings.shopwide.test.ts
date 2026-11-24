@@ -226,11 +226,9 @@ describe('PUT /api/root/shop-settings', () => {
       { countries: ['ES'] },
     ],
     [
-      'two zones of the rest',
-      {
-        deliveryZones: [zone({ countries: 'rest' }), zone({ name: 'Other', countries: 'rest' })],
-      },
-      'DELIVERY_ZONE_REST_REPEATED',
+      'a zone of the rest, which there is no more',
+      { deliveryZones: [zone({ countries: 'rest' })] },
+      'VALIDATION_ERROR',
       null,
     ],
     [
@@ -290,12 +288,6 @@ describe('PUT /api/root/shop-settings', () => {
     [
       'a country the app does not know how to take a postal code of',
       { deliveryZones: [zone({ countries: ['UA', 'ZZ'] })] },
-      'DELIVERY_COUNTRY_NOT_SUPPORTED',
-      { countries: ['ZZ'] },
-    ],
-    [
-      'a country free of customs the app does not know',
-      { customsFreeCountries: ['ES', 'ZZ'] },
       'DELIVERY_COUNTRY_NOT_SUPPORTED',
       { countries: ['ZZ'] },
     ],

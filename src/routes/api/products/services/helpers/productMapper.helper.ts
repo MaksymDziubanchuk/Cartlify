@@ -36,6 +36,9 @@ export const productResponseSelect = {
   // what customs need of it
   hsCode: true,
   originCountry: true,
+  // the tax group and the classes of the countries
+  taxGroupId: true,
+  taxExceptions: true,
   // the rule of its own; the rule it has is read apart (readProductWithdrawals)
   withdrawal: true,
   views: true,
@@ -59,6 +62,8 @@ export type ProductResponseRow = {
   warnings: string | null;
   hsCode: string | null;
   originCountry: string | null;
+  taxGroupId: number | null;
+  taxExceptions: unknown;
   withdrawal: WithdrawalRuleName | null;
   views: number;
   popularity: number;
@@ -186,6 +191,14 @@ export function mapProductCard(args: {
             categoryId: withdrawal.categoryId,
           }
         : withdrawalOf(withdrawal.rule),
-    ...(view === 'admin' ? { ...adminFieldsOf(product), gallery: gallery ?? [] } : {}),
+    ...(view === 'admin'
+      ? {
+          ...adminFieldsOf(product),
+          gallery: gallery ?? [],
+          // the tax group of the product and the countries that class it in another one
+          taxGroupId: product.taxGroupId,
+          taxExceptions: (product.taxExceptions ?? {}) as Record<string, number | null>,
+        }
+      : {}),
   };
 }

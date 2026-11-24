@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
-import { alertsOf } from '../../../helpers/alerts.js';
+import { alertsOf, writeAlertNumbers } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -32,9 +32,8 @@ import {
 // The alerts of the money of root and of an admin root allowed to handle it
 // (GET /api/admin/alerts): a compensation of the app that failed (compensation_refunds_failed),
 // what a bank took for a dispute lost on an order sent that waits for the decision of what it was for
-// (bank_money_to_decide), a statement whose money does not fit in what is left of the payment
-// (returns_money_short), and the statements of an order whose money already with the buyer gave more
-// than they took (returns_money_overpaid). An admin without the right has none of them. Each test
+// (bank_money_to_decide), and a statement whose money does not fit in what is left of the payment
+// (returns_money_short). An admin without the right has none of them. Each test
 // looks at its own cases (the alerts of the shop are shared by every file that runs at the same time)
 
 let app: FastifyInstance;
@@ -50,9 +49,11 @@ const flows = returnFlows({ app: () => app, csrf: () => csrf, admin: () => admin
 const alerts = alertsOf({ app: () => app, csrf: () => csrf });
 const { alertOf, expectCases, expectListed } = alerts;
 
+// an admin and root wrote the numbers the alerts are counted with (ALERT_NUMBERS)
 const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
   const user = await createUser(opts);
   userIds.push(user.id);
+  await writeAlertNumbers(user);
   return user;
 };
 
@@ -123,7 +124,6 @@ describe('the kinds of the money', () => {
       'compensation_refunds_failed',
       'bank_money_to_decide',
       'returns_money_short',
-      'returns_money_overpaid',
     ]) {
       expect(kinds).not.toContain(kind);
       expect(managerKinds).toContain(kind);
@@ -230,35 +230,5 @@ describe('returns_money_short', () => {
     expect(sent.statusCode).toBe(200);
 
     await expectListed(root, 'returns_money_short', narrow, [], [card.id]);
-  });
-});
-
-describe('returns_money_overpaid', () => {
-  // the shop did not accept the goods, and then half of the payment went back by hand and root gave
-  // it to a unit of them: the buyer has the money of goods no statement owes
-  it('counts the statement of an order whose money already with the buyer gave more than it took, until root records what came back', async () => {
-    const order = await sentOrder();
-    const card = await flows.adminStatement(order.orderId, order.itemId, 2);
-    await flows.setGoods(card, 2, 'not_accepted', { notAcceptedReason: 'used' });
-    const hand = await refundByHand(order.paymentId, 1000);
-    expect(
-      (await decide(hand.id, [{ orderItemId: order.itemId, quantity: 1, amount: 10 }])).statusCode,
-    ).toBe(200);
-    const narrow = { userId: order.buyer.id };
-
-    await expectCases(root, 'returns_money_overpaid', narrow, [card.id]);
-
-    const [{ now }] = await asAdmin(
-      (tx) => tx.$queryRaw<{ now: Date }[]>`select (now() at time zone 'UTC') as now`,
-    );
-    const back = await post(`/api/returns/${card.id}/overpaid/received`, {
-      amount: 10,
-      method: 'bank_transfer',
-      note: 'The buyer paid it back.',
-      at: now!.toISOString(),
-    });
-    expect(back.statusCode).toBe(200);
-
-    await expectListed(root, 'returns_money_overpaid', narrow, [], [card.id]);
   });
 });

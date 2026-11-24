@@ -38,6 +38,7 @@ import {
   setAlertDismissal,
   setAlertSubscription,
   setAlertThreshold,
+  closeInformationalAlert,
 } from './services/alerts.service.js';
 import type {
   AdminStatsDto,
@@ -389,6 +390,7 @@ export const adminServices = {
   getAlertSubscriptions,
   setAlertSubscription,
   setAlertThreshold,
+  closeInformationalAlert,
   getAlertDismissals,
   setAlertDismissal,
 };
