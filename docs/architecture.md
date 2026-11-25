@@ -25,7 +25,7 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | Web framework                 | Fastify                                                                                                                                        | Implemented |
 | Database access               | PostgreSQL, Prisma                                                                                                                             | Implemented |
 | DB hardening layer            | raw SQL scripts for roles, schema, RLS, views, functions, triggers, indexes                                                                    | Implemented |
-| Authentication                | JWT, HttpOnly cookies, refresh flow                                                                                                            | Implemented |
+| Authentication                | JWT, HttpOnly cookies, refresh flow, a second step for the admins and root ([two-factor](two-factor.md))                                       | Implemented |
 | Authorization                 | RBAC + PostgreSQL RLS context                                                                                                                  | Implemented |
 | API documentation             | Swagger / OpenAPI                                                                                                                              | Implemented |
 | Realtime chat                 | WebSocket chat endpoint and event-based messaging                                                                                              | Implemented |

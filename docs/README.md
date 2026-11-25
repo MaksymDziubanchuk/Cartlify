@@ -13,6 +13,7 @@
 | [Shop settings](shop-settings.md)       | the data of the shop root changes without a deploy, a row a setting                                       |
 | [Languages](languages.md)               | how the server picks a language, mails, the chat bot and payment pages                                    |
 | [Newsletters](newsletters.md)           | subscription, the pages behind the mail links, campaigns, sending, setup                                  |
+| [Two-factor login](two-factor.md)       | the second step of the login of the admins and root: the app, recovery codes, trusted browsers            |
 | [API](api.md)                           | the REST modules, Swagger / OpenAPI, the realtime chat                                                    |
 | [Architecture](architecture.md)         | goals, stack, structure of the repository, the database, production notes                                 |
 | [Providers](providers.md)               | the outside services behind an interface of their kind, and how to add a provider                         |

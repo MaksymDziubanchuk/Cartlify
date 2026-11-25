@@ -42,7 +42,7 @@ Examples of implemented business endpoints:
 - returns: the statements of withdrawal and of return of the buyer and of the shop (`POST /api/returns`), their parcels back, their refunds and their money (see [Returns](returns.md))
 - reviews: vote on review
 - admin: stats (the top of products and the top of variants), the accounting reports (by product, by variant, by category, by time), product popularity, admin chat queues, alerts (every alert carries `occurredAt`: the time of the last event for a kind that is an event, such as the stop of the sending worker of the newsletters, `null` for the others)
-- root: manage admins (and give or take away the rights of an admin, to run the newsletters and to handle the money the way root does, `PATCH /api/root/admins/:adminId`), publish the terms, the contract and the privacy policy, write the data of the shop (`api/root/shop-settings*`; `GET /api/root/shop-settings/locale-counts` counts the people of each language before one is turned off)
+- root: manage admins (reset the second step of the login of an admin, `DELETE /api/root/admins/:adminId/two-factor`, and give or take away the rights of an admin, to run the newsletters and to handle the money the way root does, `PATCH /api/root/admins/:adminId`), publish the terms, the contract and the privacy policy, write the data of the shop (`api/root/shop-settings*`; `GET /api/root/shop-settings/locale-counts` counts the people of each language before one is turned off)
 - legal: the versions in force, a version by id, the consents of the user
 
 ## Products and variants

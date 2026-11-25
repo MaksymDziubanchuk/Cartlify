@@ -34,7 +34,7 @@ Cartlify is a portfolio project: a REST API with the parts a real shop needs, fr
 | 💶 **Money**               | a journal of every movement of money (the payments, the refunds, the costs of the parcels), refunds followed to the end, disputes at the bank followed by the app itself         |
 | 🧾 **Taxes and receipts**  | the tax of a sale by the country of the buyer (thresholds, OSS, imports, exports), invoices and credit notes in PDF, fiscal receipts registered through a provider, a VAT report |
 | ↩️ **Returns**             | the withdrawal within the EU term by the account or a public form, the goods taken back, the money back through the provider                                                     |
-| 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), roles, sessions, a captcha on the public forms, data export                                              |
+| 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), a second step at the login of the staff, roles, sessions, a captcha on the public forms, data export     |
 | 📣 **Newsletters**         | a consent of its own with a double opt-in for guests, one unsubscribe, campaigns in several languages, a mail stream of its own                                                  |
 | 💬 **Support**             | real-time chat over WebSocket with an OpenAI assistant that knows the catalog and hands a talk over to an admin                                                                  |
 | 🌍 **Languages**           | every mail in the language of its reader (English, Ukrainian, Spanish), the data of the shop root changes without a deploy                                                       |
