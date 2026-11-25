@@ -209,6 +209,7 @@ npm run test:integration
 # a server whose TURNSTILE_SECRET_KEY is the dummy secret of Cloudflare (local, dev until the
 # frontend has its widget) takes, and a server with the secret of a real widget refuses
 DEMO_API_URL='<api url>' DEMO_ADMIN_EMAIL='<admin email>' DEMO_ADMIN_PASSWORD='<password>' \
+  DEMO_ADMIN_CODE='<the code the authenticator app of the admin shows now>' \
   DEMO_USERS_PASSWORD='<password of the buyers>' node db/tools/demo_data.mjs
 
 # a copy of prod for dev with made-up people, not a backup: prod is read into a throwaway

@@ -14,7 +14,9 @@
 // usage:
 //   DEMO_API_URL=<url of the api> DEMO_ADMIN_EMAIL=<email> DEMO_ADMIN_PASSWORD=<password> \
 //   DEMO_USERS_PASSWORD=<password of the demo buyers> node db/tools/demo_data.mjs
-// DEMO_ADMIN_* - an account of ADMIN or ROOT with a password; DEMO_EMAIL_DOMAIN (optional,
+// DEMO_ADMIN_* - an account of ADMIN or ROOT with a password; DEMO_ADMIN_CODE - the six digits its
+// authenticator app shows when the run starts (an admin and root log in in two steps, and a code
+// works once: each run takes the code of its own moment); DEMO_EMAIL_DOMAIN (optional,
 // example.com) - the domain of the addresses demo.buyer<n>@ of the buyers: mail to example.com
 // reaches nobody, the buyers then stay unconfirmed.
 // Orders stay unpaid: a payment comes from the payment provider to the webhook of the server.
@@ -25,6 +27,7 @@ import { crc32, deflateSync } from 'node:zlib';
 const API_URL = process.env.DEMO_API_URL ?? '';
 const ADMIN_EMAIL = process.env.DEMO_ADMIN_EMAIL ?? '';
 const ADMIN_PASSWORD = process.env.DEMO_ADMIN_PASSWORD ?? '';
+const ADMIN_CODE = process.env.DEMO_ADMIN_CODE ?? '';
 const USERS_PASSWORD = process.env.DEMO_USERS_PASSWORD ?? '';
 const EMAIL_DOMAIN = process.env.DEMO_EMAIL_DOMAIN || 'example.com';
 
@@ -459,10 +462,25 @@ function expectStatus(res, statuses, what) {
   return res;
 }
 
-async function login(session, email, password, what) {
-  const res = await session.send('POST', '/api/auth/login', { json: { email, password } });
-  expectStatus(res, [200], what);
-  return res.body;
+// the admin logs in in two steps: the password, then the code of the authenticator app; the
+// ticket between them is a cookie of the session
+async function loginAdmin(session) {
+  const res = await session.send('POST', '/api/auth/login', {
+    json: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+  });
+  expectStatus(res, [200, 202], 'the login of the admin');
+  if (res.status === 200) return res.body;
+
+  if (res.body?.twoFactor === 'setup') {
+    stop('the admin has no authenticator app yet: log in on the site once and set it up');
+  }
+  if (!ADMIN_CODE) stop('the admin asks for the code of the app: set DEMO_ADMIN_CODE');
+
+  const verified = await session.send('POST', '/api/auth/two-factor/verify', {
+    json: { code: ADMIN_CODE },
+  });
+  expectStatus(verified, [200], 'the code of the admin');
+  return verified.body;
 }
 
 // a png of a diagonal gradient between two colors: a picture of its own for every product
@@ -1001,15 +1019,16 @@ async function main() {
     base.hostname,
     ADMIN_EMAIL,
     ADMIN_PASSWORD,
+    ADMIN_CODE,
     USERS_PASSWORD,
     EMAIL_DOMAIN,
   ]) {
-    secrets.add(value);
+    if (value) secrets.add(value);
   }
 
   step('logging in as the admin');
   const admin = new Session(base);
-  const account = await login(admin, ADMIN_EMAIL, ADMIN_PASSWORD, 'the login of the admin');
+  const account = await loginAdmin(admin);
   if (account.role !== 'ADMIN' && account.role !== 'ROOT')
     stop('the account of DEMO_ADMIN_EMAIL is no admin');
 
