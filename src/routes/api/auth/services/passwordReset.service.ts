@@ -12,7 +12,7 @@ import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
 import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendResetPasswordEmail.helper.js';
-import { revokeAllActiveRefreshTokens } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
+import { closeAllSessions } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import type { FastifyBaseLogger } from 'fastify';
@@ -199,7 +199,7 @@ export async function passwordReset({
 
       // revoke active refresh tokens: the old cookie of a phone is then a plain refusal, the
       // session opened after the reset goes on
-      await revokeAllActiveRefreshTokens(tx, { userId, at: now });
+      await closeAllSessions(tx, { userId, at: now });
 
       // the other links of the account end with this one
       await tx.userToken.updateMany({

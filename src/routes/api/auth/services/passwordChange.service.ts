@@ -15,7 +15,7 @@ import {
 } from '@utils/errors.js';
 
 import { sendPasswordChangedEmail } from './helpers/sendPasswordChangedEmail.helper.js';
-import { revokeAllActiveRefreshTokens } from './helpers/tokenRotation.helper.js';
+import { closeAllSessions } from './helpers/tokenRotation.helper.js';
 import { currentSessionIdOf } from './sessions.service.js';
 
 type ChangePasswordDto = {
@@ -82,7 +82,7 @@ export async function changePassword({
         select: { id: true },
       });
 
-      await revokeAllActiveRefreshTokens(tx, {
+      await closeAllSessions(tx, {
         userId,
         at: now,
         keepSessionId: await currentSessionIdOf(tx, userId, refreshToken),

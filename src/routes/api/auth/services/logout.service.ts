@@ -12,7 +12,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 
 import {
   getRefreshTokenRow,
-  revokeAllActiveRefreshTokens,
+  closeAllSessions,
   revokeRefreshToken,
 } from './helpers/tokenRotation.helper.js';
 
@@ -21,7 +21,7 @@ async function logoutEverywhere(userId: number, role: Role): Promise<MessageResp
   try {
     return await prisma.$transaction(async (tx) => {
       await setUserContext(tx, { userId, role });
-      await revokeAllActiveRefreshTokens(tx, { userId, at: new Date() });
+      await closeAllSessions(tx, { userId, at: new Date() });
 
       return { message: 'ok' };
     });

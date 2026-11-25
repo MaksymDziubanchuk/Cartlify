@@ -48,8 +48,10 @@ export async function getRefreshTokenRow(tx: Tx, jwtId: number): Promise<Refresh
 
 // ends every open session of the user on purpose (a logout of all devices, a reset or a change of
 // the password, a role change, a stolen token); a session kept is left open. A token closed so is
-// a plain refusal when it comes back, no sign of theft
-export async function revokeAllActiveRefreshTokens(
+// a plain refusal when it comes back, no sign of theft. The browsers an admin trusted end with them,
+// the one of the session kept too: the next login on each asks for the code of the app (the row of
+// another account than the one of the context is not touched, db/03)
+export async function closeAllSessions(
   tx: Tx,
   args: { userId: number; at: Date; keepSessionId?: string | null },
 ): Promise<void> {
@@ -64,6 +66,13 @@ export async function revokeAllActiveRefreshTokens(
     },
     data: { usedAt: at, revokedAt: at },
   });
+
+  await tx.$executeRaw`
+    update cartlify.user_two_factor
+    set "trustedDevices" = '[]'::jsonb
+    where "userId" = ${userId}::int
+      and "trustedDevices" <> '[]'::jsonb
+  `;
 }
 
 // ends one session on purpose: the logout of this browser, a session past its deadline
@@ -171,13 +180,13 @@ export async function assertNotReusedAndHashOkOrThrow(
   if (row.revokedAt) throw new UnauthorizedError('REFRESH_TOKEN_REVOKED');
 
   if (row.usedAt) {
-    await revokeAllActiveRefreshTokens(tx, { userId, at: now });
+    await closeAllSessions(tx, { userId, at: now });
     throw new ForbiddenError(reuseMessage);
   }
 
   const ok = verifyTokenHash(refreshToken, row.token);
   if (!ok) {
-    await revokeAllActiveRefreshTokens(tx, { userId, at: now });
+    await closeAllSessions(tx, { userId, at: now });
     throw new ForbiddenError(hashMismatchMessage);
   }
 }

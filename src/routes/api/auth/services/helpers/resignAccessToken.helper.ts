@@ -11,6 +11,7 @@ import {
   assertNotReusedAndHashOkOrThrow,
   assertNotExpiredInDbOrThrow,
   rotateFixedDeadlineTokens,
+  revokeRefreshToken,
 } from './tokenRotation.helper.js';
 
 export type RefreshAccessDto = {
@@ -92,6 +93,20 @@ export async function refreshAccessTokenByRefreshToken({
 
         if (!dbUser) throw new UnauthorizedError('REFRESH_USER_NOT_FOUND');
         if (dbUser.role === 'GUEST') throw new UnauthorizedError('REFRESH_GUEST_USER_FORBIDDEN');
+
+        // an admin or root without the second step of the login (a session from before it was
+        // needed, or after root reset it) is not renewed: the session closes, and the next login
+        // sets the second step up
+        if (dbUser.role === 'ADMIN' || dbUser.role === 'ROOT') {
+          const twoFactor = await tx.userTwoFactor.findUnique({
+            where: { userId: dbUser.id },
+            select: { userId: true },
+          });
+          if (!twoFactor) {
+            await revokeRefreshToken(tx, { jwtId: tokenRow.id, at: now });
+            return new UnauthorizedError('REFRESH_TWO_FACTOR_REQUIRED');
+          }
+        }
 
         // rotate tokens with fixed deadline
         const rotated = await rotateFixedDeadlineTokens(tx, {
