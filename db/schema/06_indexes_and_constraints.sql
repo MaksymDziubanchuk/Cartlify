@@ -1324,6 +1324,45 @@ BEGIN
 END $$;
 
 ----------------------------------------
+-- USER_TWO_FACTOR: the codes, the browsers and the counts
+----------------------------------------
+-- A set has ten recovery codes, the used ones among them; an admin trusts ten browsers at most;
+-- the step and the count of wrong codes are not below 0.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_two_factor_recovery_codes_chk'
+  ) THEN
+    ALTER TABLE cartlify.user_two_factor
+      ADD CONSTRAINT user_two_factor_recovery_codes_chk
+      CHECK (
+        "recoveryCodes" IS NOT NULL
+        AND "usedRecoveryCodes" IS NOT NULL
+        AND cardinality("recoveryCodes") + cardinality("usedRecoveryCodes") <= 10
+      );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_two_factor_trusted_devices_chk'
+  ) THEN
+    ALTER TABLE cartlify.user_two_factor
+      ADD CONSTRAINT user_two_factor_trusted_devices_chk
+      CHECK (
+        CASE
+          WHEN jsonb_typeof("trustedDevices") = 'array' THEN jsonb_array_length("trustedDevices") <= 10
+          ELSE false
+        END
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_two_factor_counts_chk') THEN
+    ALTER TABLE cartlify.user_two_factor
+      ADD CONSTRAINT user_two_factor_counts_chk
+      CHECK ("lastUsedStep" >= 0 AND "failedCodes" >= 0);
+  END IF;
+END $$;
+
+----------------------------------------
 -- LEGAL_DOCUMENTS: the title, the text, the number and the sha256 of a version
 ----------------------------------------
 -- The title is trimmed, 1-200 characters. The text is 1-200 000 characters. The number starts

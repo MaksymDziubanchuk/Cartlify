@@ -206,6 +206,68 @@ WITH
 CREATE POLICY user_tokens_delete ON cartlify.user_tokens FOR DELETE USING (cartlify.is_owner_or_admin ("userId"));
 
 ----------------------------------------
+-- USER TWO FACTOR
+----------------------------------------
+-- The second step of the login of an ADMIN or ROOT. An admin or root reads, writes and changes only
+-- their own row (the login runs as the account once the password or the provider let it in); what
+-- an update may change: trg_user_two_factor_update_columns. Root reads every row (the export of the
+-- data of a person, the reset) and removes the row of an account that is not a root: the reset of
+-- an admin, the account that stopped being an admin (trg_users_drop_two_factor), a deleted account.
+-- A guest and a customer see nothing.
+ALTER TABLE cartlify.user_two_factor ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.user_two_factor FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS user_two_factor_select ON cartlify.user_two_factor;
+
+DROP POLICY IF EXISTS user_two_factor_insert ON cartlify.user_two_factor;
+
+DROP POLICY IF EXISTS user_two_factor_update ON cartlify.user_two_factor;
+
+DROP POLICY IF EXISTS user_two_factor_delete ON cartlify.user_two_factor;
+
+CREATE POLICY user_two_factor_select ON cartlify.user_two_factor FOR
+SELECT
+  USING (
+    (
+      cartlify.is_admin ()
+      AND "userId" = cartlify.current_actor_id ()
+    )
+    OR (
+      cartlify.is_root ()
+      AND cartlify.current_actor_id () IS NOT NULL
+    )
+  );
+
+CREATE POLICY user_two_factor_insert ON cartlify.user_two_factor FOR INSERT
+WITH
+  CHECK (
+    cartlify.is_admin ()
+    AND "userId" = cartlify.current_actor_id ()
+  );
+
+CREATE POLICY user_two_factor_update ON cartlify.user_two_factor
+FOR UPDATE
+  USING (
+    cartlify.is_admin ()
+    AND "userId" = cartlify.current_actor_id ()
+  )
+WITH
+  -- the columns an update may change: trg_user_two_factor_update_columns (db/05)
+  CHECK (true);
+
+CREATE POLICY user_two_factor_delete ON cartlify.user_two_factor FOR DELETE USING (
+  cartlify.is_root ()
+  AND cartlify.current_actor_id () IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM cartlify.users AS u
+    WHERE u.id = "userId"
+      AND u.role = 'ROOT'
+  )
+);
+
+----------------------------------------
 -- LOGIN LOGS
 ----------------------------------------
 -- The history of sign-ins. Read: the account itself, admin/root. Write: an account adds the line

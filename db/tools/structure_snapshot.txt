@@ -55,6 +55,7 @@ table | stock_log | cartlify_owner | rls=true | force=true | cartlify_app=arwd/c
 table | tax_documents | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | tax_groups | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | user_tokens | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | user_two_factor | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | users | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | variant_attribute_values | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | variant_images | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -634,6 +635,16 @@ column | user_tokens | 7 | createdAt | timestamp(3) without time zone | notnull=
 column | user_tokens | 8 | revokedAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
 column | user_tokens | 9 | sessionId | uuid | notnull=false | default=- | identity=- | generated=- | -
 column | user_tokens | 10 | userAgent | text | notnull=false | default=- | identity=- | generated=- | -
+column | user_two_factor | 1 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | user_two_factor | 2 | secretEnc | text | notnull=true | default=- | identity=- | generated=- | -
+column | user_two_factor | 3 | enabledAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | user_two_factor | 4 | lastUsedStep | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | user_two_factor | 5 | recoveryCodes | text[] | notnull=false | default=ARRAY[]::text[] | identity=- | generated=- | -
+column | user_two_factor | 6 | usedRecoveryCodes | text[] | notnull=false | default=ARRAY[]::text[] | identity=- | generated=- | -
+column | user_two_factor | 7 | trustedDevices | jsonb | notnull=true | default='[]'::jsonb | identity=- | generated=- | -
+column | user_two_factor | 8 | failedCodes | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | user_two_factor | 9 | pausedUntil | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | user_two_factor | 10 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | users | 1 | id | integer | notnull=true | default=nextval('users_id_seq'::regclass) | identity=- | generated=- | -
 column | users | 2 | email | text | notnull=true | default=- | identity=- | generated=- | -
 column | users | 3 | role | "Role" | notnull=true | default='USER'::"Role" | identity=- | generated=- | -
@@ -943,6 +954,11 @@ constraint | user_tokens | user_tokens_pkey | p | validated=true | PRIMARY KEY (
 constraint | user_tokens | user_tokens_revoked_closed_chk | c | validated=true | CHECK ((("revokedAt" IS NULL) OR (("usedAt" IS NOT NULL) AND ("revokedAt" = "usedAt"))))
 constraint | user_tokens | user_tokens_session_chk | c | validated=false | CHECK (((type = 'REFRESH_TOKEN'::"UserTokenType") = ("sessionId" IS NOT NULL))) NOT VALID
 constraint | user_tokens | user_tokens_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | user_two_factor | user_two_factor_counts_chk | c | validated=true | CHECK ((("lastUsedStep" >= 0) AND ("failedCodes" >= 0)))
+constraint | user_two_factor | user_two_factor_pkey | p | validated=true | PRIMARY KEY ("userId")
+constraint | user_two_factor | user_two_factor_recovery_codes_chk | c | validated=true | CHECK ((("recoveryCodes" IS NOT NULL) AND ("usedRecoveryCodes" IS NOT NULL) AND ((cardinality("recoveryCodes") + cardinality("usedRecoveryCodes")) <= 10)))
+constraint | user_two_factor | user_two_factor_trusted_devices_chk | c | validated=true | CHECK ( CASE WHEN (jsonb_typeof("trustedDevices") = 'array'::text) THEN (jsonb_array_length("trustedDevices") <= 10) ELSE false END)
+constraint | user_two_factor | user_two_factor_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | users | users_locale_chk | c | validated=true | CHECK (((locale IS NULL) OR (locale ~ '^[a-z]{2}$'::text)))
 constraint | users | users_money_manager_chk | c | validated=true | CHECK (((NOT "canManageMoney") OR (role = 'ADMIN'::"Role")))
 constraint | users | users_newsletter_manager_chk | c | validated=true | CHECK (((NOT "canManageNewsletters") OR (role = 'ADMIN'::"Role")))
@@ -1181,6 +1197,7 @@ index | user_tokens | user_tokens_pkey | valid=true | ready=true | CREATE UNIQUE
 index | user_tokens | user_tokens_sessionId_idx | valid=true | ready=true | CREATE INDEX "user_tokens_sessionId_idx" ON cartlify.user_tokens USING btree ("sessionId")
 index | user_tokens | user_tokens_token_key | valid=true | ready=true | CREATE UNIQUE INDEX user_tokens_token_key ON cartlify.user_tokens USING btree (token)
 index | user_tokens | user_tokens_userId_type_createdAt_idx | valid=true | ready=true | CREATE INDEX "user_tokens_userId_type_createdAt_idx" ON cartlify.user_tokens USING btree ("userId", type, "createdAt")
+index | user_two_factor | user_two_factor_pkey | valid=true | ready=true | CREATE UNIQUE INDEX user_two_factor_pkey ON cartlify.user_two_factor USING btree ("userId")
 index | users | users_authProvider_providerSub_key | valid=true | ready=true | CREATE UNIQUE INDEX "users_authProvider_providerSub_key" ON cartlify.users USING btree ("authProvider", "providerSub")
 index | users | users_createdAt_idx | valid=true | ready=true | CREATE INDEX "users_createdAt_idx" ON cartlify.users USING btree ("createdAt")
 index | users | users_email_key | valid=true | ready=true | CREATE UNIQUE INDEX users_email_key ON cartlify.users USING btree (email)
@@ -1592,8 +1609,10 @@ function | unaccent_lexize(internal, internal, internal, internal) | postgres | 
 function | unconfirm_order(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=9df0c97f67941514b15d54050a4b1e49 | extension=-
 function | units_sold_in_period(p_from timestamp without time zone, p_to timestamp without time zone) | cartlify_owner | sql | definer=true | volatile=s | strict=false | leakproof=false | parallel=u | returns=TABLE(product_id integer, units bigint) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=febc5631072389caa4ab2c183d46a81a | extension=-
 function | user_tokens_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=d6208ca3c54d5c4a0fed98f9a6c1e16e | extension=-
+function | user_two_factor_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=d8e876aa7d1569cea474eda05aa0b86f | extension=-
 function | users_before_write_email() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=c56aec970d059293e8d5ee8f361d50f3 | extension=-
 function | users_clear_admin_rights() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=c2008eafb3952f07fef0e6d784ed9ae0 | extension=-
+function | users_drop_two_factor() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=30da77bc0f55549ea44902f1b305e1ed | extension=-
 function | users_get_public_profile(p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(id integer, created_at timestamp with time zone, updated_at timestamp with time zone, name text, avatar_url text, email text, role "Role", auth_provider "AuthProvider", is_verified boolean, locale text, phone text, deleted_at timestamp with time zone) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=2334037c4d0dad30a95c116750d8b2e6 | extension=-
 function | users_insert_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=f33d14ccec19e4820e08cdd2dab60f06 | extension=-
 function | users_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=23dfa7b9e0995e86e5ab991d3e1c7643 | extension=-
@@ -1691,8 +1710,10 @@ trigger | tax_documents | trg_tax_documents_before_insert | enabled=O | CREATE T
 trigger | tax_groups | trg_tax_groups_before_delete | enabled=O | CREATE TRIGGER trg_tax_groups_before_delete BEFORE DELETE ON cartlify.tax_groups FOR EACH ROW EXECUTE FUNCTION tax_groups_before_delete()
 trigger | tax_groups | trg_tax_groups_rates_check | enabled=O | CREATE CONSTRAINT TRIGGER trg_tax_groups_rates_check AFTER INSERT ON cartlify.tax_groups DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION tax_groups_rates_check()
 trigger | user_tokens | trg_user_tokens_update_columns | enabled=O | CREATE TRIGGER trg_user_tokens_update_columns BEFORE UPDATE ON cartlify.user_tokens FOR EACH ROW EXECUTE FUNCTION user_tokens_update_columns()
+trigger | user_two_factor | trg_user_two_factor_update_columns | enabled=O | CREATE TRIGGER trg_user_two_factor_update_columns BEFORE UPDATE ON cartlify.user_two_factor FOR EACH ROW EXECUTE FUNCTION user_two_factor_update_columns()
 trigger | users | trg_users_before_write_email | enabled=O | CREATE TRIGGER trg_users_before_write_email BEFORE INSERT OR UPDATE OF email ON cartlify.users FOR EACH ROW EXECUTE FUNCTION users_before_write_email()
 trigger | users | trg_users_clear_admin_rights | enabled=O | CREATE TRIGGER trg_users_clear_admin_rights BEFORE UPDATE OF role ON cartlify.users FOR EACH ROW WHEN (((old.role = 'ADMIN'::"Role") AND (new.role <> 'ADMIN'::"Role") AND (new."canManageNewsletters" OR new."canManageMoney"))) EXECUTE FUNCTION users_clear_admin_rights()
+trigger | users | trg_users_drop_two_factor | enabled=O | CREATE TRIGGER trg_users_drop_two_factor AFTER UPDATE OF role ON cartlify.users FOR EACH ROW WHEN (((old.role = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (new.role <> ALL (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])))) EXECUTE FUNCTION users_drop_two_factor()
 trigger | users | trg_users_insert_columns | enabled=O | CREATE TRIGGER trg_users_insert_columns BEFORE INSERT ON cartlify.users FOR EACH ROW EXECUTE FUNCTION users_insert_columns()
 trigger | users | trg_users_update_columns | enabled=O | CREATE TRIGGER trg_users_update_columns BEFORE UPDATE ON cartlify.users FOR EACH ROW EXECUTE FUNCTION users_update_columns()
 trigger | variant_attribute_values | trg_variant_attribute_values_before_write | enabled=O | CREATE TRIGGER trg_variant_attribute_values_before_write BEFORE INSERT OR UPDATE ON cartlify.variant_attribute_values FOR EACH ROW EXECUTE FUNCTION variant_attribute_values_before_write()
@@ -1919,6 +1940,10 @@ policy | user_tokens | user_tokens_select | PERMISSIVE | public | SELECT | using
 policy | user_tokens | user_tokens_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=(type = 'VERIFY_EMAIL'::"UserTokenType") | check=-
 policy | user_tokens | user_tokens_update | PERMISSIVE | public | UPDATE | using=is_owner_or_admin("userId") | check=true
 policy | user_tokens | user_tokens_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=((type = 'VERIFY_EMAIL'::"UserTokenType") AND ("usedAt" IS NULL) AND ("expiresAt" > now())) | check=true
+policy | user_two_factor | user_two_factor_delete | PERMISSIVE | public | DELETE | using=(is_root() AND (current_actor_id() IS NOT NULL) AND (NOT (EXISTS ( SELECT 1 FROM users u WHERE ((u.id = user_two_factor."userId") AND (u.role = 'ROOT'::"Role")))))) | check=-
+policy | user_two_factor | user_two_factor_insert | PERMISSIVE | public | INSERT | using=- | check=(is_admin() AND ("userId" = current_actor_id()))
+policy | user_two_factor | user_two_factor_select | PERMISSIVE | public | SELECT | using=((is_admin() AND ("userId" = current_actor_id())) OR (is_root() AND (current_actor_id() IS NOT NULL))) | check=-
+policy | user_two_factor | user_two_factor_update | PERMISSIVE | public | UPDATE | using=(is_admin() AND ("userId" = current_actor_id())) | check=true
 policy | users | users_delete | PERMISSIVE | public | DELETE | using=is_root() | check=-
 policy | users | users_insert | PERMISSIVE | public | INSERT | using=- | check=(((role = 'USER'::"Role") AND (("isVerified" = false) OR is_admin())) OR (is_root() AND (role = ANY (ARRAY['USER'::"Role", 'ADMIN'::"Role"]))))
 policy | users | users_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin(id) | check=-
