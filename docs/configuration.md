@@ -275,6 +275,12 @@ STRIPE_WEBHOOK_SECRET=
 # value on dev than on prod, so the codes of prod do not work there. Changing it stops all the
 # links sent before
 WITHDRAWAL_CODE_SECRET=
+# encrypts the secrets of the authenticator apps of the admins and root and signs the ticket
+# between the two steps of their login: random bytes in base64 or base64url, 32 or more
+# (openssl rand -base64 32); required, the start stops without it in development and production.
+# Use another value on dev than on prod. Changing it makes every secret unreadable: each admin and
+# root then needs a reset of the second step (docs/two-factor.md)
+TWO_FACTOR_SECRET_KEY=
 # the currency of the shop, of the prices of the catalog and the one every payment provider charges in:
 # a three letter code of a currency with cents (eur unless given); jpy, kwd and the like stop the start
 SHOP_CURRENCY=eur

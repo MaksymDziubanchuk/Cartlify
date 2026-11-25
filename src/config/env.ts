@@ -150,6 +150,7 @@ declare global {
       STRIPE_SECRET_KEY: string;
       STRIPE_WEBHOOK_SECRET: string;
       WITHDRAWAL_CODE_SECRET: string;
+      TWO_FACTOR_SECRET_KEY: string;
       SHOP_CURRENCY: string;
     }
   }
@@ -181,6 +182,27 @@ function withdrawalCodeSecret(nodeEnv: string): string {
   if (value && value.length < WITHDRAWAL_CODE_SECRET_MIN) {
     throw new Error(
       `Invalid env variable: WITHDRAWAL_CODE_SECRET must be at least ${WITHDRAWAL_CODE_SECRET_MIN} characters`,
+    );
+  }
+  return value;
+}
+
+// the key of the second step of the login of an admin or root: it encrypts the secrets of the
+// authenticator apps in the database and signs the short ticket between the two steps of a login.
+// Random bytes in base64 or base64url, 32 or more. Required in every mode but the tests (the dev
+// server is a copy of production); changing it makes every secret unreadable, and each admin and
+// root sets the app up again after a reset
+const TWO_FACTOR_SECRET_KEY_MIN_BYTES = 32;
+function twoFactorSecretKey(nodeEnv: string): string {
+  const name = 'TWO_FACTOR_SECRET_KEY';
+  const value = nodeEnv === 'test' ? process.env[name]?.trim() || '' : required(name).trim();
+  // only a test goes without it (src/helpers/twoFactor/twoFactorKeys.ts refuses to work then)
+  if (!value) return value;
+
+  const bytes = /^[A-Za-z0-9+/_-]+={0,2}$/.test(value) ? Buffer.from(value, 'base64').length : 0;
+  if (bytes < TWO_FACTOR_SECRET_KEY_MIN_BYTES) {
+    throw new Error(
+      `Invalid env variable: ${name} must be base64 or base64url of at least ${TWO_FACTOR_SECRET_KEY_MIN_BYTES} bytes`,
     );
   }
   return value;
@@ -749,6 +771,8 @@ export default {
   // signs the number of an order into the code of the links of withdrawal in the mails; the start
   // stops without it in development as in production (withdrawalCodeSecret)
   WITHDRAWAL_CODE_SECRET: withdrawalCodeSecret(NODE_ENV),
+  // the secrets of the authenticator apps and the ticket of a login (twoFactorSecretKey)
+  TWO_FACTOR_SECRET_KEY: twoFactorSecretKey(NODE_ENV),
 
   // the newsletters (a SendGrid stream of their own, the blocklist, the links of the mails) and the
   // captcha of the forms; required outside the tests, in development as in production
