@@ -45,6 +45,15 @@ export default async function rootRouter(app: FastifyInstance) {
     },
     rootAdminsController.deleteAdmin,
   );
+  // root resets the second step of the login of an admin who lost the phone and the codes
+  app.delete(
+    '/admins/:adminId/two-factor',
+    {
+      preHandler: [authGuard, requireRole(['ROOT']), validateId('adminId')],
+      schema: rootAdminsSchemas.deleteRootAdminTwoFactorSchema,
+    },
+    rootAdminsController.deleteAdminTwoFactor,
+  );
 
   // the versions of the terms and of the contract
   app.post(

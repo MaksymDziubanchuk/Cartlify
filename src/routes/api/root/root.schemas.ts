@@ -132,8 +132,7 @@ const postRootAdminSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description:
-        'The user is an admin already (USER_ALREADY_ADMIN) or is root (USER_IS_ROOT).',
+      description: 'The user is an admin already (USER_ALREADY_ADMIN) or is root (USER_IS_ROOT).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -261,12 +260,45 @@ const deleteRootAdminSchema = {
 } satisfies FastifySchema;
 
 // Group root routes under the root Swagger tag
+const deleteRootAdminTwoFactorSchema = {
+  operationId: 'resetAdminTwoFactor',
+  summary: 'Reset the second step of the login of an admin',
+  description:
+    'For an admin who lost the phone and the recovery codes: the authenticator app, the recovery ' +
+    'codes and the trusted browsers of the admin go, every session of the admin ends, and the next ' +
+    'login sets the app up again. The admin gets a mail; the admin journal gets two_factor.reset. ' +
+    'Root cannot reset another root, a root is reset in the database by hand (docs/two-factor.md).',
+
+  params: {
+    $ref: 'rootAdminsDeleteParamsSchema#',
+    examples: [rootAdminsDeleteParamsExample],
+  },
+
+  response: {
+    204: {
+      description: 'The second step of the admin was reset.',
+      type: 'null',
+    },
+    404: {
+      description:
+        '`USER_NOT_FOUND`: there is no account with this id, or it was deleted. ' +
+        '`TWO_FACTOR_NOT_FOUND`: the admin has not set the second step up.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: '`USER_NOT_ADMIN`: the account is not an admin (root is not reset here).',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 const taggedRootAdminsSchema = withOpenApiTag(
   {
     getRootAdminsSchema,
     postRootAdminSchema,
     patchRootAdminSchema,
     deleteRootAdminSchema,
+    deleteRootAdminTwoFactorSchema,
   },
   'root',
 );

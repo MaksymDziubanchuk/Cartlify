@@ -93,9 +93,27 @@ const deleteAdmin: ControllerRouter<DeleteAdminParamsDto, {}, {}, DeleteAdminRes
   return reply.code(200).send(result);
 };
 
+// root resets the second step of the login of an admin
+const deleteAdminTwoFactor: ControllerRouter<DeleteAdminParamsDto, {}, {}, void> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  await rootServices.resetAdminTwoFactor({
+    actorId: Number(actorId),
+    actorRole,
+    adminId: Number(req.params.adminId),
+    log: req.log,
+  });
+
+  return reply.code(204).send();
+};
+
 export const rootAdminsController = {
   getAdmins,
   postAdmin,
   patchAdmin,
   deleteAdmin,
+  deleteAdminTwoFactor,
 };
