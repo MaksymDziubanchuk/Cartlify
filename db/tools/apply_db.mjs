@@ -6,12 +6,14 @@
 // it applies the migrations that wait, then the sql scripts, always all six and in their order (02
 // as a superuser; 05, 03, 04, 06 as cartlify_owner; 01 as a superuser, last: a migration may drop
 // what a script makes, and every script runs again without a change), then checks the structure
-// again. It stops at the first step that fails.
+// again. It stops at the first step that fails. Next to the name of each script it counts the
+// statements done of the statements of the file, and after them those of all six scripts.
 // The two addresses are asked at the start (the superuser and cartlify_owner of that database) and
 // typed or pasted into the terminal, never into a file; a star shows for every sign. It needs a
 // terminal: PowerShell, cmd, or winpty in Git Bash (whose window gives it none, the script says so). The output never shows a user, a password, a
 // host or a port of them. Needs psql on the PATH.
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -36,6 +38,52 @@ const SCRIPTS = [
   ['06_indexes_and_constraints.sql', 'owner'],
   ['01_roles_and_schemas.sql', 'superuser'],
 ];
+
+// the statements of a script: the semicolons outside the quotes, the comments and the bodies in
+// dollar quotes ($$ ... $$, $tag$ ... $tag$)
+function statementsOf(sql) {
+  let count = 0;
+  let i = 0;
+  while (i < sql.length) {
+    const c = sql[i];
+    const next = sql[i + 1];
+    if (c === '-' && next === '-') {
+      const end = sql.indexOf('\n', i);
+      i = end < 0 ? sql.length : end + 1;
+    } else if (c === '/' && next === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      i = end < 0 ? sql.length : end + 2;
+    } else if (c === "'" || c === '"') {
+      let j = i + 1;
+      while (j < sql.length && !(sql[j] === c && sql[j + 1] !== c)) j += sql[j] === c ? 2 : 1;
+      i = j + 1;
+    } else if (c === '$') {
+      const tag = /^\$[A-Za-z_]*\$/.exec(sql.slice(i))?.[0];
+      if (tag) {
+        const end = sql.indexOf(tag, i + tag.length);
+        i = end < 0 ? sql.length : end + tag.length;
+      } else i += 1;
+    } else {
+      if (c === ';') count += 1;
+      i += 1;
+    }
+  }
+  return count;
+}
+
+// what psql prints for a statement it ran without -q: its tag, such as CREATE FUNCTION, DROP
+// POLICY, DO, ALTER TABLE, GRANT, SELECT 1; the count of these is the count of statements done
+const COMMAND_TAG = /^[A-Z]+( [A-Z]+)*( \d+)*$/;
+
+// how often the count of a script is drawn again, at most
+const DRAW_EVERY_MS = 500;
+
+// the line of a script with its count, written over itself in a terminal and once at the end
+// otherwise
+function progressLine(title, done, total, all) {
+  const counts = `${done}/${total}  (all ${all.done + done}/${all.total})`;
+  return `== ${title} ${counts}`;
+}
 
 const PRISMA_CLI = path.join(ROOT, 'node_modules', 'prisma', 'build', 'index.js');
 const SNAPSHOT_TOOL = path.join(ROOT, 'db', 'tools', 'structure_snapshot.mjs');
@@ -145,23 +193,58 @@ function masker(urls) {
 // the tools answer in English: the messages the mask knows, whatever the language of the system
 const ENGLISH = { LC_ALL: 'C', LC_MESSAGES: 'C', LANG: 'C', LANGUAGE: 'en' };
 
-function run(title, command, args, env, mask) {
+// a step with its output shown; a script (progress: its statements and the count of all) shows
+// its count next to its name instead of the tags of its statements
+function run(title, command, args, env, mask, progress) {
   return new Promise((resolve) => {
-    process.stdout.write(`\n== ${title}\n`);
+    const tty = Boolean(process.stdout.isTTY);
+    let done = 0;
+    // the count is drawn again at most twice a second; the last one of a script always shows
+    let drawnAt = 0;
+    const line = () =>
+      progressLine(title, Math.min(done, progress.total), progress.total, progress.all);
+    // a line printed while the count shows goes below it, and the count comes back under it
+    const above = (text, out) => {
+      if (progress && tty) process.stdout.write('\r\x1b[2K');
+      out.write(text + '\n');
+      if (progress && tty) process.stdout.write(line());
+    };
+
+    process.stdout.write('\n');
+    if (!progress) process.stdout.write(`== ${title}\n`);
+    else if (tty) process.stdout.write(line());
+
     const child = spawn(command, args, { cwd: ROOT, env: { ...process.env, ...ENGLISH, ...env } });
-    const pipe = (stream, out) => {
+    const pipe = (stream, out, counts) => {
       let rest = '';
+      const take = (text) => {
+        if (counts && COMMAND_TAG.test(text.trim())) {
+          done += 1;
+          if (tty && Date.now() - drawnAt >= DRAW_EVERY_MS) {
+            drawnAt = Date.now();
+            process.stdout.write('\r\x1b[2K' + line());
+          }
+          return;
+        }
+        if (text.trim()) above(mask(text), out);
+      };
       stream.on('data', (chunk) => {
         const lines = (rest + chunk.toString()).split(/\r?\n/);
         rest = lines.pop() ?? '';
-        for (const line of lines) out.write(mask(line) + '\n');
+        for (const text of lines) take(text);
       });
       stream.on('end', () => {
-        if (rest) out.write(mask(rest) + '\n');
+        if (rest) take(rest);
       });
     };
-    pipe(child.stdout, process.stdout);
-    pipe(child.stderr, process.stderr);
+    pipe(child.stdout, process.stdout, Boolean(progress));
+    pipe(child.stderr, process.stderr, false);
+    child.on('close', () => {
+      if (!progress) return;
+      if (tty) process.stdout.write('\r\x1b[2K');
+      process.stdout.write(line() + '\n');
+      progress.all.done += Math.min(done, progress.total);
+    });
     child.on('error', (err) => {
       process.stderr.write(mask(`${title}: ${err.message}`) + '\n');
       resolve(1);
@@ -265,16 +348,26 @@ async function main() {
     if (code !== 0) return code;
   }
 
+  const totals = new Map(
+    SCRIPTS.map(([file]) => [
+      file,
+      statementsOf(readFileSync(path.join(ROOT, 'db', 'schema', file), 'utf8')),
+    ]),
+  );
+  const all = { done: 0, total: [...totals.values()].reduce((sum, n) => sum + n, 0) };
+
   for (const [file, role] of SCRIPTS) {
     const url = role === 'superuser' ? superuser : owner;
     const code = await run(
       // the role as the address names it
       `${file} (${decodeURIComponent(url.username)})`,
       'psql',
-      ['-q', '-v', 'ON_ERROR_STOP=1', '-f', path.join('db', 'schema', file), forPsql(url)],
+      // without -q psql prints the tag of each statement it ran: the count of the line
+      ['-v', 'ON_ERROR_STOP=1', '-f', path.join('db', 'schema', file), forPsql(url)],
       // the notices of a script that runs again (already exists, skipping) say nothing new
       { PGOPTIONS: '-c client_min_messages=warning' },
       mask,
+      { total: totals.get(file), all },
     );
     if (code !== 0) return code;
   }
