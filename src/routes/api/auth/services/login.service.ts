@@ -9,23 +9,19 @@ import {
   UnauthorizedError,
 } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
-import { canManageMoneyOf } from '@helpers/moneyManager.js';
-import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { verifyPass } from '@helpers/safePass.js';
 
-import type { LoginDto, LoginResponseDto } from 'types/dto/auth.dto.js';
+import type { LoginDto } from 'types/dto/auth.dto.js';
 
 import { setGuestContext } from '@db/dbContext.service.js';
-import { takeConsentAtLogin } from '@routes/api/legal/services/helpers/legalDocuments.helper.js';
-import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
-import { insertLoginLog } from './helpers/loginLogs.helper.js';
-import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
+import type { UserId } from 'types/ids.js';
+import { openSession, type OpenedSession } from './helpers/openSession.helper.js';
+import { secondStepOfLogin, type SecondStep } from './twoFactor.service.js';
 
-import { avatarOf } from '@utils/avatar.util.js';
+// a login opens a session, or, for an admin or root, asks for the second step
+export type LoginOutcome = { session: OpenedSession } | { secondStep: SecondStep };
 
-// local login flow
-// guest -> user context switch
-// migrate + log + issue tokens
+// local login flow: the password, then the second step of an admin or root, then the session
 export async function login({
   email,
   password,
@@ -34,7 +30,8 @@ export async function login({
   userAgent,
   userId: guestId,
   acceptedDocumentIds = [],
-}: LoginDto): Promise<{ result: LoginResponseDto; refreshToken: string; accessToken: string }> {
+  trustedDevice,
+}: LoginDto & { trustedDevice?: string | undefined }): Promise<LoginOutcome> {
   const cleanEmail = email.trim().toLowerCase();
 
   assertEmail(cleanEmail);
@@ -90,70 +87,29 @@ export async function login({
         throw new ForbiddenError('EMAIL_NOT_VERIFIED');
       }
 
-      // switches the transaction to the user context, everything below runs as this user
-      await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role });
-
-      // a customer accepts the versions in force that came since the last consent before the
-      // login goes on (LEGAL_ACCEPTANCE_REQUIRED names them); an admin or root buys nothing
-      if (u.role === 'USER') await takeConsentAtLogin(tx, u.id, acceptedDocumentIds);
-
-      await insertLoginLog(tx, {
-        userId: u.id as any,
-        email: cleanEmail,
-        role: u.role as any,
-        event: 'login.password',
-        ...(ip !== undefined ? { ip } : {}),
-        ...(userAgent !== undefined ? { userAgent } : {}),
-      });
-
-      // load full user profile
-      const user = await tx.user.findUnique({
-        where: { id: u.id },
-        select: {
-          id: true,
-          email: true,
-          role: true,
-          isVerified: true,
-          createdAt: true,
-          updatedAt: true,
-          name: true,
-          avatarUrl: true,
-          locale: true,
-          phone: true,
-          canManageNewsletters: true,
-          canManageMoney: true,
-          deletedAt: true,
-        },
-      });
-
-      if (!user) if (!user) throw new InternalError({ reason: 'USER_NOT_FOUND_AFTER_LOGIN' });
-
-      assertEmail(user.email);
-
-      // issue session tokens
-      const { accessToken, refreshToken } = await issueTokensOnLogin(tx, {
+      // an admin or root goes on to the second step, unless the browser is one an admin trusts;
+      // the password alone changes nothing then: no guest data move, no line of the journal
+      const secondStep = await secondStepOfLogin(tx, {
         userId: u.id,
         role: u.role,
+        event: 'login.password',
         rememberMe,
-        ...(userAgent !== undefined ? { userAgent } : {}),
+        deviceCookie: trustedDevice,
+      });
+      if (secondStep) return { secondStep };
+
+      const session = await openSession(tx, {
+        userId: u.id,
+        role: u.role,
+        guestId: guestId as UserId,
+        rememberMe,
+        event: 'login.password',
+        ip,
+        userAgent,
+        acceptedDocumentIds,
       });
 
-      const result: LoginResponseDto = {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        isVerified: user.isVerified,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-        ...(user.name ? { name: user.name } : {}),
-        ...avatarOf(user),
-        canManageNewsletters: canManageNewslettersOf(user),
-        canManageMoney: canManageMoneyOf(user),
-        ...(user.locale ? { locale: user.locale } : {}),
-        ...(user.phone ? { phone: user.phone } : {}),
-      };
-
-      return { result, refreshToken, accessToken };
+      return { session };
     });
   } catch (err) {
     if (err instanceof AppError) throw err;

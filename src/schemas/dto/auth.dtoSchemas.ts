@@ -322,6 +322,177 @@ const authCsrfTokenResponseSchema = {
   required: ['csrfToken'],
 } as const;
 
+// THE SECOND STEP OF THE LOGIN OF AN ADMIN OR ROOT
+
+const codeField = {
+  type: 'string',
+  minLength: 6,
+  maxLength: 12,
+  description: 'The six digits the authenticator app shows now (spaces are taken off).',
+} as const;
+
+const recoveryCodeField = {
+  type: 'string',
+  minLength: 10,
+  maxLength: 20,
+  description: 'One of the recovery codes, XXXXX-XXXXX (case, spaces and the dash do not matter).',
+} as const;
+
+const trustDeviceField = {
+  type: 'boolean',
+  description:
+    'An admin trusts this browser for 30 days: the code is not asked on it at a login. Root has no ' +
+    'trusted browsers, the field is ignored for root.',
+} as const;
+
+const authTwoFactorRequiredResponseSchema = {
+  $id: 'authTwoFactorRequiredResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    twoFactor: {
+      type: 'string',
+      enum: ['setup', 'code'],
+      description:
+        'setup: the account has no authenticator app yet (POST /api/auth/two-factor/setup); code: a ' +
+        'code of the app or a recovery code is next (POST /api/auth/two-factor/verify).',
+    },
+    canTrustDevice: {
+      type: 'boolean',
+      description: 'An admin may trust the browser, root may not.',
+    },
+  },
+  required: ['twoFactor', 'canTrustDevice'],
+} as const;
+
+const authTwoFactorSecretResponseSchema = {
+  $id: 'authTwoFactorSecretResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    otpauthUrl: {
+      type: 'string',
+      description: 'The otpauth:// link the page shows as a QR code for the app to scan.',
+    },
+    secret: {
+      type: 'string',
+      description: 'The same secret in base32, to type into the app by hand.',
+    },
+  },
+  required: ['otpauthUrl', 'secret'],
+} as const;
+
+const authTwoFactorConfirmBodySchema = {
+  $id: 'authTwoFactorConfirmBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: { code: codeField, trustDevice: trustDeviceField },
+  required: ['code'],
+} as const;
+
+const authTwoFactorVerifyBodySchema = {
+  $id: 'authTwoFactorVerifyBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  description: 'A code of the app or a recovery code, one of the two.',
+  properties: { code: codeField, recoveryCode: recoveryCodeField, trustDevice: trustDeviceField },
+} as const;
+
+const recoveryCodesField = {
+  type: 'array',
+  items: { type: 'string' },
+  description:
+    'The ten recovery codes, shown this once: the person keeps them apart from the phone.',
+} as const;
+
+const authTwoFactorSetupResponseSchema = {
+  $id: 'authTwoFactorSetupResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...authLoginResponseSchema.properties,
+    recoveryCodes: recoveryCodesField,
+  },
+  required: [...authLoginResponseSchema.required, 'recoveryCodes'],
+} as const;
+
+const authTwoFactorCodeBodySchema = {
+  $id: 'authTwoFactorCodeBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: { code: codeField },
+  required: ['code'],
+} as const;
+
+const authTwoFactorProofBodySchema = {
+  $id: 'authTwoFactorProofBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'A code of the old app or a recovery code; none in the 10 minutes after a login with a recovery code.',
+  properties: { code: codeField, recoveryCode: recoveryCodeField },
+} as const;
+
+const authTwoFactorRecoveryCodesResponseSchema = {
+  $id: 'authTwoFactorRecoveryCodesResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: { recoveryCodes: recoveryCodesField },
+  required: ['recoveryCodes'],
+} as const;
+
+const authTwoFactorStatusResponseSchema = {
+  $id: 'authTwoFactorStatusResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    enabledAt: {
+      type: 'string',
+      format: 'date-time',
+      description: 'When the account set the second step up first.',
+    },
+    recoveryCodesLeft: {
+      type: 'integer',
+      description: 'The recovery codes not used yet, of ten.',
+    },
+    devices: {
+      type: 'array',
+      description: 'The browsers the admin trusts, the expired ones left out; root has none.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          label: {
+            type: 'string',
+            description: 'The browser and the system, such as Chrome, Windows.',
+          },
+          createdAt: { type: 'string', format: 'date-time' },
+          lastUsedAt: {
+            type: 'string',
+            format: 'date-time',
+            description: 'The last login it let in without a code.',
+          },
+          expiresAt: { type: 'string', format: 'date-time' },
+          current: { type: 'boolean', description: 'The browser of this request.' },
+        },
+        required: ['id', 'label', 'createdAt', 'lastUsedAt', 'expiresAt', 'current'],
+      },
+    },
+  },
+  required: ['enabledAt', 'recoveryCodesLeft', 'devices'],
+} as const;
+
+const authTrustedDeviceParamsSchema = {
+  $id: 'authTrustedDeviceParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    deviceId: { type: 'string', format: 'uuid', description: 'The id of the trusted browser.' },
+  },
+  required: ['deviceId'],
+} as const;
+
 export const authDtoSchemas = [
   authLoginBodySchema,
   authLoginResponseSchema,
@@ -339,4 +510,14 @@ export const authDtoSchemas = [
   authSessionsResponseSchema,
   authRefreshResponseSchema,
   authCsrfTokenResponseSchema,
+  authTwoFactorRequiredResponseSchema,
+  authTwoFactorSecretResponseSchema,
+  authTwoFactorConfirmBodySchema,
+  authTwoFactorVerifyBodySchema,
+  authTwoFactorSetupResponseSchema,
+  authTwoFactorCodeBodySchema,
+  authTwoFactorProofBodySchema,
+  authTwoFactorRecoveryCodesResponseSchema,
+  authTwoFactorStatusResponseSchema,
+  authTrustedDeviceParamsSchema,
 ];

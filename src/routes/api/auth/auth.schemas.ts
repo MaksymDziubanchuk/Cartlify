@@ -215,6 +215,15 @@ const setLoginSchema = {
       $ref: 'authLoginResponseSchema#',
       examples: [authLoginResponseExample],
     },
+    202: {
+      description:
+        'The password is right and the account is an admin or root: the second step is next, its ticket ' +
+        'is in an httpOnly cookie for 10 minutes (no session yet, nothing of the guest moves). `setup`: ' +
+        'POST /api/auth/two-factor/setup; `code`: POST /api/auth/two-factor/verify. An admin on a ' +
+        'browser it trusts gets 200 at once.',
+      $ref: 'authTwoFactorRequiredResponseSchema#',
+      examples: [{ twoFactor: 'code', canTrustDevice: true }],
+    },
 
     400: {
       description: 'Invalid login request.',
@@ -349,7 +358,9 @@ const oauthCallbackSchemaOf = (provider: IdentityProvider) =>
       'OAUTH_EMAIL_NOT_VERIFIED, OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
       'the callback has to reach the browser whose guestId cookie is in the state), other OAUTH_* codes ' +
       'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
-      'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
+      'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure. ' +
+      'An admin or root goes on to the second step: no cookies of a session, the ticket in an httpOnly ' +
+      'cookie and ?twoFactor=setup|code (as the 202 of POST /api/auth/login).',
 
     querystring: {
       $ref: 'authOAuthCallbackQuerySchema#',
@@ -359,7 +370,8 @@ const oauthCallbackSchemaOf = (provider: IdentityProvider) =>
     response: {
       302: {
         description:
-          'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
+          'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure, ' +
+          '?twoFactor=setup|code when an admin or root goes on to the second step.',
         type: 'null',
       },
 
@@ -607,7 +619,9 @@ const setRefreshSchema = {
         '`REFRESH_TOKEN_ROW_NOT_FOUND`, `REFRESH_USER_NOT_FOUND`: the session or the account is gone. ' +
         '`REFRESH_TOKEN_USER_MISMATCH`, `REFRESH_TOKEN_WRONG_TYPE`, `REFRESH_PAYLOAD_USER_ID_INVALID`, ' +
         '`REFRESH_PAYLOAD_JWT_ID_INVALID`, `REFRESH_GUEST_TOKEN_FORBIDDEN`, `REFRESH_GUEST_USER_FORBIDDEN`: ' +
-        'the token does not belong to a session of an account.',
+        'the token does not belong to a session of an account. ' +
+        '`REFRESH_TWO_FACTOR_REQUIRED`: an admin or root without the second step of the login (a session ' +
+        'from before it, or root reset it): the session ends, the next login sets the second step up.',
       $ref: 'errorResponseSchema#',
     },
     403: {

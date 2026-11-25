@@ -157,6 +157,15 @@ export const AUDIT_EVENTS = [
   'user.export',
   'user.role_grant',
   'user.role_revoke',
+  // the second step of the login of an admin or root (the line is about the account): set up, moved
+  // to a new app, a login with a recovery code, a new set of recovery codes, a trusted browser
+  // forgotten, and the reset by root
+  'two_factor.enable',
+  'two_factor.replace',
+  'two_factor.recovery_login',
+  'two_factor.recovery_renew',
+  'two_factor.device_forget',
+  'two_factor.reset',
   // the newsletters: root gave an admin the right to run them or took it away (the line is about the
   // account of the admin); a newsletter (a campaign) made, changed, deleted, copied, planned,
   // cancelled before it started, stopped while it went, and a test mail of it sent to an admin; a

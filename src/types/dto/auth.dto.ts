@@ -180,3 +180,66 @@ export interface PasswordChangeBodyDto {
 export interface CsrfTokenResponseDto {
   csrfToken: string;
 }
+
+// THE SECOND STEP OF THE LOGIN OF AN ADMIN OR ROOT
+
+// 202 of a login: the password or the provider let an admin or root in, the second step is next
+export interface TwoFactorRequiredResponseDto {
+  // setup: the account has no authenticator app yet; code: a code of the app or a recovery code
+  twoFactor: 'setup' | 'code';
+  // an admin may trust the browser for 30 days, root may not
+  canTrustDevice: boolean;
+}
+
+// the secret of a new app: the link of the QR code, and the secret to type by hand
+export interface TwoFactorSecretResponseDto {
+  otpauthUrl: string;
+  secret: string;
+}
+
+export interface TwoFactorConfirmBodyDto {
+  code: string;
+  trustDevice?: boolean;
+}
+
+export interface TwoFactorVerifyBodyDto {
+  code?: string;
+  recoveryCode?: string;
+  trustDevice?: boolean;
+}
+
+// the setup opened the session: the profile and the recovery codes, shown this once
+export type TwoFactorSetupResponseDto = LoginResponseDto & { recoveryCodes: string[] };
+
+export interface TwoFactorCodeBodyDto {
+  code: string;
+}
+
+export interface TwoFactorProofBodyDto {
+  code?: string;
+  recoveryCode?: string;
+}
+
+export interface TwoFactorRecoveryCodesResponseDto {
+  recoveryCodes: string[];
+}
+
+export interface TrustedDeviceDto {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+  // the browser of this request
+  current: boolean;
+}
+
+export interface TwoFactorStatusResponseDto {
+  enabledAt: Date;
+  recoveryCodesLeft: number;
+  devices: TrustedDeviceDto[];
+}
+
+export interface TrustedDeviceParamsDto {
+  deviceId: string;
+}
