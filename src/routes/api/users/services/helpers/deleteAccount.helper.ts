@@ -229,8 +229,10 @@ async function eraseAccount(
         data: { status: 'closed', unreadCount: 0, adminRequestedAt: null, adminUnreadSince: null },
       });
 
-      // every session ends
+      // every session ends, and the second step of the login of an admin with it (the secret, the
+      // codes, the trusted browsers): the row of a deleted account stays, nothing cascades
       await db.userToken.deleteMany({ where: { userId } });
+      await db.userTwoFactor.deleteMany({ where: { userId } });
 
       // what is in force on the address ends with the account: the subscription of the account and
       // the one of the form. It has to run before the address below is made anonymous, because the

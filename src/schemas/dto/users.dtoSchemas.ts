@@ -819,6 +819,31 @@ const usersExportResponseSchema = {
       'The logins, the newest first: createdAt, ipAddress, userAgent, event (how the person came in).',
     ),
     sessions: exportRows('The open sessions: device, lastUsedAt, expiresAt.'),
+    twoFactor: {
+      type: ['object', 'null'],
+      description:
+        'The second step of the login of an admin or root: when it was set up, and the browsers it ' +
+        'trusts (the name, the dates); never the secret or the codes. Null without it.',
+      additionalProperties: false,
+      properties: {
+        enabledAt: { type: 'string', format: 'date-time' },
+        devices: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              label: { type: 'string' },
+              createdAt: { type: 'string', format: 'date-time' },
+              lastUsedAt: { type: 'string', format: 'date-time' },
+              expiresAt: { type: 'string', format: 'date-time' },
+            },
+            required: ['label', 'createdAt', 'lastUsedAt', 'expiresAt'],
+          },
+        },
+      },
+      required: ['enabledAt', 'devices'],
+    },
     legalAcceptances: exportRows(
       'The consents to the terms and the contract: documentId, kind, version, title, orderId (the ' +
         'versions an order was confirmed with), ip, userAgent, event (where the person agreed), createdAt.',
@@ -866,6 +891,7 @@ const usersExportResponseSchema = {
     'chats',
     'logins',
     'sessions',
+    'twoFactor',
     'legalAcceptances',
     'newsletterSubscriptions',
     'money',
