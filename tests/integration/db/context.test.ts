@@ -468,6 +468,13 @@ describe('without a context', () => {
         await db.rows(
           `insert into cartlify.tax_groups (name) values ('Group of the context test')`,
         );
+        // the second step of the login of the admin, written by the admin: the admin and root
+        // read it, nobody else
+        await db.as({ role: 'ADMIN', userId: admin.id });
+        await db.rows(
+          `insert into cartlify.user_two_factor ("userId", "secretEnc") values ($1, 'v1:a:b:c')`,
+          admin.id,
+        );
         await db.as(null);
 
         const tables = await tablesOf(db);
@@ -495,7 +502,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(47);
+    expect(Object.keys(hidden)).toHaveLength(48);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

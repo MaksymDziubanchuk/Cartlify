@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import { accessCookie } from '../../../helpers/actors.js';
+import { accessCookie, finishLogin } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { cookieHeader, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
@@ -1144,10 +1144,15 @@ describe('POST /api/auth/login and the consent', () => {
     expect(res.json()).toMatchObject({ errorCode: 'INVALID_CREDENTIALS' });
   });
 
+  // the login of an admin or root goes on to the second step, which opens the session with no
+  // versions to accept
   it('asks nothing of an admin or root, who buys nothing', async () => {
     for (const role of ['ADMIN', 'ROOT'] as const) {
-      const res = await loginAs(await newUser({ role }));
+      const user = await newUser({ role });
+      const first = await loginAs(user);
+      expect(first.statusCode).toBe(202);
 
+      const res = await finishLogin(app, csrf, user, first);
       expect(res.statusCode).toBe(200);
     }
   });

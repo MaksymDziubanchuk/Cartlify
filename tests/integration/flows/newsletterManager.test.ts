@@ -1,7 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { logIn, refreshWith, sessionCookie, signIn, type Session } from '../../helpers/actors.js';
+import {
+  finishLogin,
+  logIn,
+  refreshWith,
+  sessionCookie,
+  signIn,
+  type Session,
+} from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { cookieJar } from '../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
@@ -51,7 +58,9 @@ const send = (
   });
 
 const loggedIn = async (user: TestUser): Promise<{ session: Session; profile: any }> => {
-  const res = await logIn(app, csrf, { email: user.email, password: user.password });
+  // an admin goes through the second step: the first login sets the app up, a later one types a code
+  const first = await logIn(app, csrf, { email: user.email, password: user.password });
+  const res = await finishLogin(app, csrf, user, first);
   expect(res.statusCode).toBe(200);
   const jar = cookieJar(res);
   return {

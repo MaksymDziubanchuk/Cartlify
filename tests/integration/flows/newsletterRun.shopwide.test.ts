@@ -1,7 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { accessCookie, logIn, sessionCookie, signIn, type Session } from '../../helpers/actors.js';
+import {
+  accessCookie,
+  finishLogin,
+  logIn,
+  sessionCookie,
+  signIn,
+  type Session,
+} from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { cookieJar } from '../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
@@ -130,9 +137,14 @@ describe('a campaign from the draft of an admin to the mail of the readers', () 
       const promoted = await post(rootSession, '/api/root/admins', { userId: personId });
       expect(promoted.statusCode).toBe(201);
 
-      // the new admin logs in: the profile says admin with no right to run the newsletters, and the
-      // area of the campaigns is closed
-      const login = await logIn(app, csrf, { email: person.email, password: person.password });
+      // the new admin logs in and sets the authenticator app up: the profile says admin with no
+      // right to run the newsletters, and the area of the campaigns is closed
+      const login = await finishLogin(
+        app,
+        csrf,
+        person,
+        await logIn(app, csrf, { email: person.email, password: person.password }),
+      );
       expect(login.statusCode).toBe(200);
       expect(login.json()).toMatchObject({ role: 'ADMIN', canManageNewsletters: false });
       const jar = cookieJar(login);

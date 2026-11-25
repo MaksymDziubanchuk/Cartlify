@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { logIn, sessionCookie, signIn, type Session } from '../../helpers/actors.js';
+import { finishLogin, logIn, sessionCookie, signIn, type Session } from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { cookieJar } from '../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
@@ -41,8 +41,10 @@ const send = (
   payload: Record<string, unknown> = {},
 ) => app.inject({ method, url, headers: withCsrf(csrf, sessionCookie(session)), payload });
 
-const loggedIn = async (email: string, password: string, userAgent: string): Promise<Session> => {
-  const res = await logIn(app, csrf, { email, password }, { userAgent });
+// a login from a named device; an admin or root goes through the second step on it
+const loggedIn = async (user: TestUser, password: string, userAgent: string): Promise<Session> => {
+  const first = await logIn(app, csrf, { email: user.email, password }, { userAgent });
+  const res = await finishLogin(app, csrf, user, first, userAgent);
   expect(res.statusCode).toBe(200);
   const jar = cookieJar(res);
   return { accessToken: jar.accessToken!, refreshToken: jar.refreshToken! };
@@ -76,9 +78,10 @@ describe('the staff of the shop', () => {
     expect(admins.statusCode).toBe(200);
     expect((admins.json().items as { id: number }[]).map(({ id }) => id)).toEqual([personId]);
 
-    // the person logs in again on two devices and is an admin now
-    const laptop = await loggedIn(person.email, person.password, 'flow-staff-laptop');
-    await loggedIn(person.email, person.password, 'flow-staff-phone');
+    // the person logs in again on two devices and is an admin now: the first login sets the app up,
+    // the second asks for its code
+    const laptop = await loggedIn(person, person.password, 'flow-staff-laptop');
+    await loggedIn(person, person.password, 'flow-staff-phone');
     const me = await get(laptop, '/api/users/me');
     expect(me.statusCode).toBe(200);
     expect(me.json().role).toBe('ADMIN');
@@ -112,7 +115,7 @@ describe('the staff of the shop', () => {
       newPassword,
     });
     expect(changed.statusCode).toBe(204);
-    const office = await loggedIn(person.email, newPassword, 'flow-staff-office');
+    const office = await loggedIn(person, newPassword, 'flow-staff-office');
     expect((await send(office, 'POST', '/api/auth/logout', { allDevices: true })).statusCode).toBe(
       204,
     );
@@ -120,7 +123,7 @@ describe('the staff of the shop', () => {
     // root takes the role away: the next login is a buyer's
     const demoted = await send(rootSession, 'DELETE', `/api/root/admins/${personId}`);
     expect(demoted.statusCode).toBe(200);
-    const again = await loggedIn(person.email, newPassword, 'flow-staff-home');
+    const again = await loggedIn(person, newPassword, 'flow-staff-home');
     expect((await get(again, '/api/users/me')).json().role).toBe('USER');
     const noAdmins = await get(
       rootSession,
@@ -129,7 +132,7 @@ describe('the staff of the shop', () => {
     expect(noAdmins.json().items).toEqual([]);
 
     // root keeps its own sessions the same way and logs out of every device
-    await loggedIn(root.email, root.password, 'flow-staff-root-phone');
+    await loggedIn(root, root.password, 'flow-staff-root-phone');
     const rootSessions = await get(rootSession, '/api/auth/sessions');
     expect(rootSessions.statusCode).toBe(200);
     expect(rootSessions.json().items).toHaveLength(2);

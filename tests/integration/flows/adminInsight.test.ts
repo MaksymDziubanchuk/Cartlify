@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { logIn } from '../../helpers/actors.js';
+import { signIn } from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../helpers/csrf.js';
 import {
@@ -237,9 +237,8 @@ describe('what an admin learns of the shop', () => {
         expect.objectContaining({ actorId: admin.id, entityId: product.id }),
       ]),
     );
-    expect(
-      (await logIn(app, csrf, { email: admin.email, password: admin.password })).statusCode,
-    ).toBe(200);
+    // the login of the admin goes through its second step, the line is written when the session opens
+    await signIn(app, csrf, admin);
     const events = (await j.get(admin, '/api/admin/log-events')).json();
     expect(events.loginLog).toContain('login.password');
     const logins = await j.get(

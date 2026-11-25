@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { getMe, logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
+import { finishLogin, getMe, logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { giveMoneyRight } from '../../../helpers/moneyManager.js';
@@ -99,7 +99,13 @@ describe('POST /api/auth/login', () => {
   // it asks for the profile; the page keeps it fresh from GET /api/users/me
   describe('the right to run the newsletters in the profile', () => {
     const loginRight = async (user: Awaited<ReturnType<typeof newUser>>) => {
-      const res = await logIn(app, csrf, { email: user.email, password: user.password });
+      // an admin or root gets the profile when the second step opens the session
+      const res = await finishLogin(
+        app,
+        csrf,
+        user,
+        await logIn(app, csrf, { email: user.email, password: user.password }),
+      );
       expect(res.statusCode).toBe(200);
       return res.json().canManageNewsletters as unknown;
     };
@@ -128,7 +134,13 @@ describe('POST /api/auth/login', () => {
   // the right to handle the money comes with the role too, the same way
   describe('the right to handle the money in the profile', () => {
     const loginRight = async (user: Awaited<ReturnType<typeof newUser>>) => {
-      const res = await logIn(app, csrf, { email: user.email, password: user.password });
+      // an admin or root gets the profile when the second step opens the session
+      const res = await finishLogin(
+        app,
+        csrf,
+        user,
+        await logIn(app, csrf, { email: user.email, password: user.password }),
+      );
       expect(res.statusCode).toBe(200);
       return res.json().canManageMoney as unknown;
     };
