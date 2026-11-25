@@ -79,6 +79,22 @@
     "button": "Abrir la página de inicio de sesión",
     "leadTxt": "Se cambió la contraseña de tu cuenta de {{appName}} el {{changedAt}}. Se cerraron todas las demás sesiones de la cuenta."
   },
+  "twoFactorNotice": {
+    "resetSubject": "{{appName}} — Se restableció el segundo paso de tu inicio de sesión",
+    "resetTitle": "{{appName}} — Segundo paso restablecido",
+    "resetPreview": "Root restableció el segundo paso del inicio de sesión de tu cuenta de {{appName}}.",
+    "resetHeading": "Se restableció el segundo paso de tu inicio de sesión",
+    "resetBody": "Root restableció la aplicación de autenticación y los códigos de recuperación de tu cuenta el {{at}}, y se cerraron todas las sesiones de la cuenta. En tu próximo inicio de sesión configurarás la aplicación de nuevo y recibirás códigos de recuperación nuevos.",
+    "resetLeadTxt": "Root restableció la aplicación de autenticación y los códigos de recuperación de tu cuenta de {{appName}} el {{at}}, y se cerraron todas las sesiones de la cuenta. En tu próximo inicio de sesión configurarás la aplicación de nuevo y recibirás códigos de recuperación nuevos.",
+    "recoverySubject": "{{appName}} — Se usó un código de recuperación para iniciar sesión",
+    "recoveryTitle": "{{appName}} — Código de recuperación usado",
+    "recoveryPreview": "Alguien inició sesión en tu cuenta de {{appName}} con un código de recuperación.",
+    "recoveryHeading": "Se usó un código de recuperación para iniciar sesión",
+    "recoveryBody": "Se inició sesión en tu cuenta con un código de recuperación el {{at}}. Códigos de recuperación restantes: {{left}}. Si perdiste el teléfono, configura la aplicación en uno nuevo desde tu perfil.",
+    "recoveryLeadTxt": "Se inició sesión en tu cuenta de {{appName}} con un código de recuperación el {{at}}. Códigos de recuperación restantes: {{left}}. Si perdiste el teléfono, configura la aplicación en uno nuevo desde tu perfil.",
+    "notYou": "Si no fuiste tú, avisa a root enseguida y cambia tu contraseña.",
+    "button": "Abrir la página de inicio de sesión"
+  },
   "orderNotice": {
     "pickupReadySubject": "{{appName}} — El pedido #{{orderId}} está listo para recoger",
     "pickupReadyHeading": "Listo para recoger",

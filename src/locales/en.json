@@ -79,6 +79,22 @@
     "button": "Open the login page",
     "leadTxt": "The password of your {{appName}} account was changed on {{changedAt}}. Every other session of the account was closed."
   },
+  "twoFactorNotice": {
+    "resetSubject": "{{appName}} — The second step of your login was reset",
+    "resetTitle": "{{appName}} — Second step reset",
+    "resetPreview": "Root reset the second step of the login of your {{appName}} account.",
+    "resetHeading": "The second step of your login was reset",
+    "resetBody": "Root reset the authenticator app and the recovery codes of your account on {{at}}, and every session of the account was closed. At your next login you set up the app again and get new recovery codes.",
+    "resetLeadTxt": "Root reset the authenticator app and the recovery codes of your {{appName}} account on {{at}}, and every session of the account was closed. At your next login you set up the app again and get new recovery codes.",
+    "recoverySubject": "{{appName}} — A recovery code was used to log in",
+    "recoveryTitle": "{{appName}} — Recovery code used",
+    "recoveryPreview": "Someone logged in to your {{appName}} account with a recovery code.",
+    "recoveryHeading": "A recovery code was used to log in",
+    "recoveryBody": "Your account was logged in to with a recovery code on {{at}}. Recovery codes left: {{left}}. If you lost your phone, set up the app on a new one from your profile.",
+    "recoveryLeadTxt": "Your {{appName}} account was logged in to with a recovery code on {{at}}. Recovery codes left: {{left}}. If you lost your phone, set up the app on a new one from your profile.",
+    "notYou": "If this was not you, tell root at once and change your password.",
+    "button": "Open the login page"
+  },
   "orderNotice": {
     "pickupReadySubject": "{{appName}} — Order #{{orderId}} is ready for pickup",
     "pickupReadyHeading": "Ready for pickup",
