@@ -52,7 +52,7 @@ const usersGetByIdQuerySchema = {
       format: 'date-time',
       description:
         `For an admin or root: the start of the period of the lists, ${PROFILE_PERIOD_DEFAULT_DAYS} ` +
-        `days before to unless given. At most ${PROFILE_PERIOD_MAX_DAYS} days to to. Ignored for a user.`,
+        `days before \`to\` unless given. At most ${PROFILE_PERIOD_MAX_DAYS} days before \`to\`. Ignored for a user.`,
     },
     to: {
       type: 'string',
