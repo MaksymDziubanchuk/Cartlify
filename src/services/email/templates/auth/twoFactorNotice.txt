@@ -1,0 +1,8 @@
+{{leadTxt}}
+
+{{notYou}}
+{{loginUrl}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

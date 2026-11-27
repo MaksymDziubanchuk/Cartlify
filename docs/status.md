@@ -12,7 +12,7 @@
 | 🚚 [Delivery](delivery.md)                                         | the carriers of ShippyPro with their prices for the address, delivery zones, customs data, an order in several parcels and boxes, labels in one click, the parcels followed by the events of the carrier, voids, refusals and lost parcels                                                                                               |
 | 💶 [Money and disputes](disputes.md)                               | a journal of every movement of money, refunds followed to the end, disputes at the bank followed by the app itself, money given back by hand or by a bank shared among the goods, compensations, money that came back, alerts and reports of all of it                                                                                   |
 | ↩️ [Returns](returns.md)                                           | the EU withdrawal by the account or a public form, every parcel of a return, the goods taken back, the money back through the provider or outside the app (in parts when the payment holds less), what each statement still owes                                                                                                         |
-| 🔐 Accounts and security                                           | JWT with refresh, OAuth (Google, GitHub, LinkedIn), roles, CSRF, request limits, a captcha, row level security                                                                                                                                                                                                                           |
+| 🔐 [Accounts and security](two-factor.md)                          | JWT with refresh, OAuth (Google, GitHub, LinkedIn), a second step at the login of the staff (an authenticator app, recovery codes, trusted browsers), roles, CSRF, request limits, a captcha, row level security                                                                                                                         |
 | 📣 [Newsletters](newsletters.md)                                   | a double opt-in, campaigns in several languages, a sending pass with retries, a webhook for bounces and complaints                                                                                                                                                                                                                       |
 | 💬 Support                                                         | WebSocket chat, an OpenAI assistant that knows the catalog, a hand-over to an admin                                                                                                                                                                                                                                                      |
 | 📊 Admin                                                           | journals filtered by every column with their sums and groups, alerts, statistics, the product safety data of the EU (GPSR)                                                                                                                                                                                                               |
@@ -24,7 +24,7 @@
 
 ## 🔄 Next Up
 
-- stronger protection of the staff accounts and a full audit trail
+- a full audit trail
 
 ## ⏭️ Later
 

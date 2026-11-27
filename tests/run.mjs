@@ -1,13 +1,15 @@
-// test launcher: pick test parts in a checkbox list or by name, build the docker test database
+// test launcher: pick test parts in a list or by name, build the docker test database
 // when an integration part is picked, run jest, remove the database and print a summary per part
 //
 // usage:
-//   npm test                          checkbox list (all parts without an interactive terminal)
+//   npm test                          a list: a part checked or not, a service skip, mock or real,
+//                                     a for all (all parts without an interactive terminal)
 //   npm test -- unit api:orders       named parts, also the groups: all, unit, integration, api
 //   npm test -- --failed              rerun only the tests that failed in the last selection
 //   npm test -- api:orders --keep-db  leave the test database running after the tests
-//   npm test -- --workers=1           integration files one by one (by default one more than the
-//                                     cores docker has, at most 6 at a time)
+//   npm test -- --workers=1           integration files one by one (by default by the cores docker
+//                                     has and the ones left to the machine, at most 6 at a time:
+//                                     defaultWorkers; more than the memory takes runs out of time)
 //   npm test -- api:auth service:sendgrid   a service of SERVICES for real instead of its mock
 //   npm test -- integration skip:stripe       its own files left out (mock:<name> keeps the mock,
 //                                     as every service not named in the words)

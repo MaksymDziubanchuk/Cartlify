@@ -81,6 +81,8 @@ model User {
   canManageMoney Boolean @default(false)
 
   userTokens              UserToken[]
+  // the second step of the login of an ADMIN or ROOT, once it is set up
+  twoFactor               UserTwoFactor?
   loginLogs               LoginLog[]
   reviews                 Review[]
   votes                   ReviewVote[]
@@ -156,6 +158,42 @@ model UserToken {
   @@index([userId, type, createdAt])
   @@index([sessionId])
   @@map("user_tokens")
+}
+
+// The second step of the login of an ADMIN or ROOT: the secret of the authenticator app, the
+// recovery codes and the trusted browsers of an admin. A row is written when the first right code
+// of the app confirms the secret; a customer has none, and the row goes when the account stops
+// being an ADMIN or ROOT (db/05) or root resets it.
+model UserTwoFactor {
+  userId Int @id
+
+  // the secret of the app, encrypted with TWO_FACTOR_SECRET_KEY; the version of the key goes in
+  // front (v1:...)
+  secretEnc    String
+  // when the secret was confirmed the first time; a new app keeps it
+  enabledAt    DateTime @default(now())
+  // the last time step a code was taken for: a code of that step or of an earlier one is refused,
+  // so a code works once. It goes back only with a new secret (db/05)
+  lastUsedStep Int      @default(0)
+
+  // the sha256 of the recovery codes not used yet, and of the used ones (a used code is told apart
+  // from a wrong one); a new set replaces both, ten codes in all (db/06)
+  recoveryCodes     String[] @default([])
+  usedRecoveryCodes String[] @default([])
+
+  // the browsers an admin trusts for 30 days, root has none: a list of { id, tokenHash, label,
+  // createdAt, lastUsedAt, expiresAt }, ten at most (db/06)
+  trustedDevices Json @default("[]")
+
+  // the wrong codes in a row and the end of the pause they started
+  failedCodes Int       @default(0)
+  pausedUntil DateTime?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_two_factor")
 }
 
 // One successful login, written by the server. Only added: nobody edits or deletes a line. The

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { setUserContext } from '@db/dbContext.service.js';
 
-import { accessCookie, logIn } from '../../../helpers/actors.js';
+import { accessCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf } from '../../../helpers/csrf.js';
 import {
@@ -714,8 +714,8 @@ describe('what the journals say of root', () => {
   it('hides who root is in the log of logins from an admin, who picks none of its logins', async () => {
     const from = new Date(Date.now() - 1_000).toISOString();
     const fresh = await newUser({ role: 'ROOT' });
-    const res = await logIn(app, csrf, { email: fresh.email, password: fresh.password });
-    expect(res.statusCode).toBe(200);
+    // the login of root goes through its second step; the line is written when the session opens
+    await signIn(app, csrf, fresh);
 
     const seenByRoot = (await all('login-log', `userId=${fresh.id}`, root)).items[0]!;
     const byAccount = await all('login-log', `userId=${fresh.id}`);

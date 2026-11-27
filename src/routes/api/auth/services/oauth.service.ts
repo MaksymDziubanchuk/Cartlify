@@ -22,6 +22,7 @@ import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.helper.js';
 import { acceptedOfState, takeConsentAtOAuthLogin } from './helpers/oauthConsent.helper.js';
 import { newsletterOfState } from './helpers/oauthNewsletter.helper.js';
+import { secondStepOfLogin, type SecondStep } from './twoFactor.service.js';
 import {
   copyProviderAvatar,
   type OAuthAvatarRole,
@@ -55,12 +56,22 @@ export async function oauthStart(
 
 export async function oauthCallback(
   provider: IdentityProvider,
-  { code, state, guestId, role, ip, userAgent, log }: OAuthCallbackDto,
-): Promise<{
-  result: LoginResponseDto;
-  refreshToken: string;
-  accessToken: string;
-}> {
+  {
+    code,
+    state,
+    guestId,
+    role,
+    ip,
+    userAgent,
+    log,
+    trustedDevice,
+  }: OAuthCallbackDto & {
+    trustedDevice?: string | undefined;
+  },
+): Promise<
+  | { result: LoginResponseDto; refreshToken: string; accessToken: string }
+  | { secondStep: SecondStep }
+> {
   // a signed-in user cannot finish a login, the same as at the start
   if (role !== 'GUEST') {
     throw new AlreadyAuthenticatedError({ flow: 'OAUTH_CALLBACK', provider: provider.name });
@@ -91,7 +102,7 @@ export async function oauthCallback(
   // a language the shop does not answer in, or the wrong shape, is dropped
   const locale = enabledLocaleOf(person.locale);
 
-  let login: OAuthLoginOutcome;
+  let login: OAuthLoginOutcome | { secondStep: SecondStep };
 
   try {
     login = await prisma.$transaction(async (tx) => {
@@ -106,6 +117,17 @@ export async function oauthCallback(
         userNotFoundAfterConflictMsg: 'USER_NOT_FOUND_AFTER_CONFLICT',
         providerSubMismatchMsg: 'OAUTH_SUB_MISMATCH',
       });
+
+      // an admin or root goes on to the second step, as after a password (an account the login
+      // makes is a customer)
+      const secondStep = await secondStepOfLogin(tx, {
+        userId: u.id,
+        role: u.role as Role,
+        event: `login.${provider.name}`,
+        rememberMe: true,
+        deviceCookie: trustedDevice,
+      });
+      if (secondStep) return { secondStep };
 
       await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role as Role });
 
@@ -159,6 +181,8 @@ export async function oauthCallback(
 
     throw new InternalError({ reason: 'OAUTH_SERVICE_UNEXPECTED', provider: provider.name }, err);
   }
+
+  if ('secondStep' in login) return { secondStep: login.secondStep };
 
   // the box of the newsletter the page ticked at the start subscribes a new account, never an
   // account the shop had; whatever comes of it the login goes on

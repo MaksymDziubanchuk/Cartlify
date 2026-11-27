@@ -24,7 +24,7 @@ import {
 
 // The alerts of root of the checks of a payment the provider asks for (GET /api/admin/alerts): fraud_warnings counts the
 // orders not sent an early warning of fraud holds until root decides (no threshold; the order paid
-// first first, the hold says since when it waits), fraud_warnings_shipped the orders already sent
+// earliest first, the hold says since when it waits), fraud_warnings_shipped the orders already sent
 // the provider warned of in the last days (only an alert: a hold would keep them from being
 // delivered), payment_reviews the orders a review of the provider holds until it closes. Root alone
 // has them, each root for themselves; a case is an order. An order held for a check is not one the

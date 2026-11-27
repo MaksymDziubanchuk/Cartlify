@@ -11,6 +11,16 @@ import { logout } from './services/logout.service.js';
 import { refresh } from './services/refresh.service.js';
 import { closeSession, listSessions } from './services/sessions.service.js';
 import { changePassword } from './services/passwordChange.service.js';
+import {
+  confirmTwoFactorReplace,
+  confirmTwoFactorSetup,
+  forgetTrustedDevice,
+  renewRecoveryCodes,
+  startTwoFactorReplace,
+  startTwoFactorSetup,
+  twoFactorStatus,
+  verifyTwoFactor,
+} from './services/twoFactor.service.js';
 
 export const authServices = {
   login,
@@ -31,4 +41,13 @@ export const authServices = {
   listSessions,
   closeSession,
   changePassword,
+
+  startTwoFactorSetup,
+  confirmTwoFactorSetup,
+  verifyTwoFactor,
+  twoFactorStatus,
+  forgetTrustedDevice,
+  renewRecoveryCodes,
+  startTwoFactorReplace,
+  confirmTwoFactorReplace,
 };

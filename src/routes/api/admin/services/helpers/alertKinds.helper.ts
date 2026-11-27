@@ -410,7 +410,7 @@ export const HELD_ORDER_ALERTS = {
   payment_reviews: 'payment_review',
 } as const satisfies Partial<Record<AdminAlertKind, OrderHoldReason>>;
 
-// the paid orders held for the reason, the order paid first first: the buyer waits since they paid
+// the paid orders held for the reason, the order paid earliest first: the buyer waits since they paid
 // (each row names since when the hold waits, holds[].since)
 const heldOrders = (reason: OrderHoldReason): AdminAlertListDto => ({
   path: '/api/orders',
@@ -731,7 +731,7 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
     case 'tax_threshold_period_ended':
       return { path: '/api/root/countries', query: {} };
     // the receipts are documents of their orders (GET /api/orders/:orderId/documents): the orders
-    // that have one, the one waiting since before the threshold or refused, the order paid first first
+    // that have one, the one waiting since before the threshold or refused, the order paid earliest first
     case 'receipts_not_issued':
       return {
         path: '/api/orders',

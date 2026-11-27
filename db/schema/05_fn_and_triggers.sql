@@ -4512,6 +4512,41 @@ CREATE TRIGGER trg_user_tokens_update_columns
 BEFORE UPDATE ON cartlify.user_tokens FOR EACH ROW
 EXECUTE FUNCTION cartlify.user_tokens_update_columns ();
 
+-- Guard of the second step of a login: the row keeps its account, the time it was first set up and
+-- when it was made. The last step a code was taken for only grows, so a code works once; it starts
+-- over only together with a new secret (a new app).
+CREATE OR REPLACE FUNCTION cartlify.user_two_factor_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY[
+      'secretEnc', 'lastUsedStep', 'recoveryCodes', 'usedRecoveryCodes', 'trustedDevices',
+      'failedCodes', 'pausedUntil'
+    ]
+    AND (
+      NEW."lastUsedStep" >= OLD."lastUsedStep"
+      OR NEW."secretEnc" IS DISTINCT FROM OLD."secretEnc"
+    ) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'USER_TWO_FACTOR_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_user_two_factor_update_columns ON cartlify.user_two_factor;
+
+CREATE TRIGGER trg_user_two_factor_update_columns
+BEFORE UPDATE ON cartlify.user_two_factor FOR EACH ROW
+EXECUTE FUNCTION cartlify.user_two_factor_update_columns ();
+
 -- Guard of login logs: a line is history. Only two steps of the database change one:
 -- anonymize_login_logs gives the line of a deleted account the email the account has now, and
 -- cleanup_login_log_addresses empties the address and the browser of an old line.
@@ -15349,6 +15384,29 @@ WHEN (
   AND (NEW."canManageNewsletters" OR NEW."canManageMoney")
 )
 EXECUTE FUNCTION cartlify.users_clear_admin_rights ();
+
+-- The second step of the login goes with the role: an account that stops being an ADMIN or ROOT
+-- loses its secret, its recovery codes and its trusted browsers, and a new promotion sets them up
+-- again. Root changes the role, and the policy of db/03 (user_two_factor_delete) lets root remove
+-- the row of an account that is no root.
+CREATE OR REPLACE FUNCTION cartlify.users_drop_two_factor () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  DELETE FROM cartlify.user_two_factor AS t
+  WHERE t."userId" = NEW.id;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_users_drop_two_factor ON cartlify.users;
+
+CREATE TRIGGER trg_users_drop_two_factor
+AFTER UPDATE OF role ON cartlify.users FOR EACH ROW
+WHEN (
+  OLD.role IN ('ADMIN', 'ROOT')
+  AND NEW.role NOT IN ('ADMIN', 'ROOT')
+)
+EXECUTE FUNCTION cartlify.users_drop_two_factor ();
 
 -- Guard of a new account: it never brings a right of an admin (to run the newsletters, to handle the
 -- money). The policy of db/03 (users_insert) lets root insert an ADMIN and the system a verified

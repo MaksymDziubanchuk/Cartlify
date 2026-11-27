@@ -1,7 +1,7 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
-import { revokeAllActiveRefreshTokens } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
+import { closeAllSessions } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
 
 import {
   BadRequestError,
@@ -55,7 +55,7 @@ export async function removeAdmin(dto: DeleteAdminDto): Promise<DeleteAdminRespo
       });
 
       // a session holds the role it was opened with: the admin rights end with the sessions
-      await revokeAllActiveRefreshTokens(tx, { userId: adminId, at: new Date() });
+      await closeAllSessions(tx, { userId: adminId, at: new Date() });
 
       // write admin audit log for role change
       await writeAdminAuditLog(tx, {

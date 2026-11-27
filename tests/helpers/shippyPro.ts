@@ -930,26 +930,28 @@ export function shippyProWebhookBody(
       ErrorSuggestion: {},
     };
   }
+  // as the real account sent it (the log of the webhooks, 23.11.2026, a parcel of Nova Poshta): the
+  // ids, the dates but the one of the event and late are texts
+  const date = tracking.date ?? Math.floor(Date.now() / 1000);
   return {
     Event: 'TRACKING_UPDATE',
     tracking: parcel.trackingNumber ?? '',
-    date: tracking.date ?? Math.floor(Date.now() / 1000),
+    date,
     message: 'Carrier update',
     city: 'Madrid',
+    est_delivery_date: String(date + 3 * 86_400),
+    first_status_date: String(date),
+    late: '0',
     code: tracking.code ?? 2,
     extendedCode: tracking.extendedCode === undefined ? '2200' : tracking.extendedCode,
-    Category: 'IN TRANSIT',
-    IsReturning: false,
-    AtPudo: false,
-    PudoID: null,
-    OrderID,
+    OrderID: String(OrderID),
     TransactionID: parcel.reference,
     TrackingCarrier: 'MockExpress',
-    TrackingCarrierID: 7001,
-    ExternalLink: `https://track.example.com/${parcel.trackingNumber ?? ''}`,
-    est_delivery_date: null,
-    late: false,
+    TrackingCarrierID: '7001',
+    MarketplaceID: '0',
+    MarketplacePlatform: 'Manual shipment',
     IsReturn: false,
-    ReturnType: '',
+    ReturnType: null,
+    ExternalLink: `https://track.example.com/${parcel.trackingNumber ?? ''}`,
   };
 }

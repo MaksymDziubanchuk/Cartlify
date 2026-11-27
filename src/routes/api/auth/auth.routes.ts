@@ -6,6 +6,8 @@ import { identityProviders } from '@providers/identity/index.js';
 import { requestLimits } from '../../../plugins/requestLimits.js';
 import { authSchema } from './auth.schemas.js';
 import { authController } from './auth.controllers.js';
+import { twoFactorSchema } from './twoFactor.schemas.js';
+import { twoFactorController } from './twoFactor.controllers.js';
 
 export default async function authRouter(app: FastifyInstance) {
   app.post(
@@ -132,5 +134,54 @@ export default async function authRouter(app: FastifyInstance) {
       schema: authSchema.setRefreshSchema,
     },
     authController.postRefresh,
+  );
+
+  // the second step of the login of an admin or root: the ticket of the first step is in its cookie,
+  // so these run for a guest of the browser that logged in
+  const guestOnly = { preHandler: [authGuard, requireRole(['GUEST']), ...requestLimits.twoFactor] };
+  app.post(
+    '/two-factor/setup',
+    { ...guestOnly, schema: twoFactorSchema.twoFactorSetupStartSchema },
+    twoFactorController.postSetupStart,
+  );
+  app.post(
+    '/two-factor/setup/confirm',
+    { ...guestOnly, schema: twoFactorSchema.twoFactorSetupConfirmSchema },
+    twoFactorController.postSetupConfirm,
+  );
+  app.post(
+    '/two-factor/verify',
+    { ...guestOnly, schema: twoFactorSchema.twoFactorVerifySchema },
+    twoFactorController.postVerify,
+  );
+
+  // the second step of the signed-in admin or root
+  const staffOnly = {
+    preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), ...requestLimits.twoFactor],
+  };
+  app.get(
+    '/two-factor',
+    { ...staffOnly, schema: twoFactorSchema.getTwoFactorSchema },
+    twoFactorController.getStatus,
+  );
+  app.delete(
+    '/two-factor/devices/:deviceId',
+    { ...staffOnly, schema: twoFactorSchema.deleteTrustedDeviceSchema },
+    twoFactorController.deleteDevice,
+  );
+  app.post(
+    '/two-factor/recovery-codes',
+    { ...staffOnly, schema: twoFactorSchema.renewRecoveryCodesSchema },
+    twoFactorController.postRecoveryCodes,
+  );
+  app.post(
+    '/two-factor/replace',
+    { ...staffOnly, schema: twoFactorSchema.twoFactorReplaceStartSchema },
+    twoFactorController.postReplaceStart,
+  );
+  app.post(
+    '/two-factor/replace/confirm',
+    { ...staffOnly, schema: twoFactorSchema.twoFactorReplaceConfirmSchema },
+    twoFactorController.postReplaceConfirm,
   );
 }

@@ -39,6 +39,9 @@ export type ExportPersonResponseDto = {
   chats: Record<string, unknown>[];
   logins: Record<string, unknown>[];
   sessions: Record<string, unknown>[];
+  // the second step of the login of an admin or root: when it was set up and the browsers trusted
+  // (the name, the dates); never the secret or the codes. Null for an account without it
+  twoFactor: { enabledAt: Date; devices: Record<string, unknown>[] } | null;
   legalAcceptances: Record<string, unknown>[];
   // the subscriptions to the newsletter the address of the account has had, with their journal
   newsletterSubscriptions: ExportedNewsletterSubscription[];
@@ -397,6 +400,11 @@ export async function exportPerson({
         select: { userAgent: true, createdAt: true, expiresAt: true },
       });
 
+      const twoFactor = await tx.userTwoFactor.findUnique({
+        where: { userId },
+        select: { enabledAt: true, trustedDevices: true },
+      });
+
       const legalAcceptances = await tx.legalAcceptance.findMany({
         where: { userId },
         orderBy: { id: 'asc' },
@@ -509,6 +517,17 @@ export async function exportPerson({
           lastUsedAt: session.createdAt,
           expiresAt: session.expiresAt,
         })),
+        twoFactor: twoFactor
+          ? {
+              enabledAt: twoFactor.enabledAt,
+              devices: (twoFactor.trustedDevices as Record<string, unknown>[]).map((device) => ({
+                label: device.label,
+                createdAt: device.createdAt,
+                lastUsedAt: device.lastUsedAt,
+                expiresAt: device.expiresAt,
+              })),
+            }
+          : null,
         legalAcceptances: legalAcceptances.map(({ document, ...consent }) => ({
           documentId: consent.documentId,
           kind: document.kind,

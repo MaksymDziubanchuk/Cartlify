@@ -66,7 +66,7 @@ const exportOf = (cookie: string) =>
 const exportOfUser = (id: number | string, cookie: string) =>
   app.inject({ method: 'GET', url: `/api/users/${id}/export`, headers: cookie ? { cookie } : {} });
 
-// a buyer whose shipped order of three units was withdrawn from from the account, the parcel told
+// a buyer whose shipped order of three units was withdrawn from via the account, the parcel told
 async function buyerWithStatement() {
   const buyer = await newUser({ name: 'Anna Koval' });
   const name = `Export return ${buyer.id}`;

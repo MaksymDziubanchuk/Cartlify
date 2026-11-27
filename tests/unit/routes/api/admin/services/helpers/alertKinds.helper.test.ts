@@ -597,7 +597,7 @@ describe('alertListOf', () => {
   const listOf = (kind: Parameters<typeof alertListOf>[0], threshold: number | null) =>
     alertListOf(kind, alertWindowOf(kind, threshold, NOW, '2026-10-25'));
 
-  // a receipt is a document of its order: the orders that have one, the order paid first first
+  // a receipt is a document of its order: the orders that have one, the order paid earliest first
   it('sends to the orders with a receipt made before the minutes and not registered yet', () => {
     expect(listOf('receipts_not_issued', 60)).toEqual({
       path: '/api/orders',
@@ -832,7 +832,7 @@ describe('alertListOf', () => {
   });
 
   // root decides on a whole order not sent: its cases are orders, held for the reason, the order
-  // paid first first
+  // paid earliest first
   it.each([
     ['hand_refunds_to_decide', 'hand_refund'],
     ['fraud_warnings', 'fraud_warning'],

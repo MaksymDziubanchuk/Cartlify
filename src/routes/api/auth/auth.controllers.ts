@@ -30,12 +30,18 @@ import type {
   SessionsResponseDto,
   RefreshDto,
   CsrfTokenResponseDto,
+  TwoFactorRequiredResponseDto,
 } from 'types/dto/auth.dto.js';
 
 import type { IdentityProvider } from '@providers/identity/index.js';
 
 import { authServices } from './auth.services.js';
 import { documentIdsOfQuery } from './services/helpers/oauthConsent.helper.js';
+import {
+  setTwoFactorTicketCookie,
+  trustedDeviceCookieOf,
+  type TwoFactorTicket,
+} from './services/helpers/twoFactorTicket.helper.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { isUuid } from '@db/dbContext.service.js';
 import {
@@ -81,7 +87,12 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
   return reply.code(201).send(result);
 };
 
-const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = async (req, reply) => {
+const postLogin: ControllerRouter<
+  {},
+  LoginBodyDto,
+  {},
+  LoginResponseDto | TwoFactorRequiredResponseDto
+> = async (req, reply) => {
   const { email, password, rememberMe, acceptedDocumentIds } = req.body;
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
@@ -106,13 +117,24 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
   // (src/plugins/requestLimits.ts), the right one starts the count over
   let login: Awaited<ReturnType<typeof authServices.login>>;
   try {
-    login = await authServices.login(args);
+    login = await authServices.login({
+      ...args,
+      trustedDevice: trustedDeviceCookieOf(req.cookies ?? {}),
+    });
   } catch (err) {
     if (isAppError(err) && err.errorCode === 'INVALID_CREDENTIALS') recordLoginFailure(email);
     throw err;
   }
   clearLoginFailures(email);
-  const { result, refreshToken, accessToken } = login;
+
+  // an admin or root: the ticket goes to its cookie, the page asks for the code or the setup
+  if ('secondStep' in login) {
+    const { twoFactor, canTrustDevice, ticket } = login.secondStep;
+    setTwoFactorTicketCookie(reply, ticket);
+    return reply.code(202).send({ twoFactor, canTrustDevice });
+  }
+
+  const { result, refreshToken, accessToken } = login.session;
 
   const refreshTtl = rememberMe ? getTtl(rememberMe, 'refresh') : getTtl(false, 'refresh');
   const accessTtl = rememberMe ? getTtl(rememberMe, 'access') : getTtl(false, 'access');
@@ -189,7 +211,10 @@ const OAUTH_DECLINED_ERRORS = new Set([
 async function finishOAuthLogin(
   req: FastifyRequest,
   reply: FastifyReply,
-  login: () => Promise<{ accessToken: string; refreshToken: string }>,
+  login: () => Promise<
+    | { accessToken: string; refreshToken: string }
+    | { secondStep: { twoFactor: string; ticket: TwoFactorTicket } }
+  >,
 ): Promise<void> {
   let error: string | undefined;
 
@@ -202,7 +227,14 @@ async function finishOAuthLogin(
         : new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError });
     }
 
-    const { accessToken, refreshToken } = await login();
+    const outcome = await login();
+
+    // an admin or root: the ticket goes to its cookie, the page asks for the code or the setup
+    if ('secondStep' in outcome) {
+      setTwoFactorTicketCookie(reply, outcome.secondStep.ticket);
+      return finishRedirect(reply, { twoFactor: outcome.secondStep.twoFactor });
+    }
+    const { accessToken, refreshToken } = outcome;
 
     // derive ttl from refresh
     const { rememberMe } = verifyRefreshToken(refreshToken);
@@ -226,10 +258,15 @@ async function finishOAuthLogin(
     }
   }
 
-  // the frontend page that finishes an oauth login (WEB_PAGE_OAUTH_CALLBACK)
+  finishRedirect(reply, error ? { error } : {});
+}
+
+// the frontend page that finishes an oauth login (WEB_PAGE_OAUTH_CALLBACK): ?error=<errorCode> on a
+// refusal, ?twoFactor=setup|code when an admin or root goes on to the second step
+function finishRedirect(reply: FastifyReply, query: Record<string, string>): void {
   reply
     .code(302)
-    .redirect(webPageUrl(env.WEB_PAGE_OAUTH_CALLBACK, error ? { query: { error } } : {}));
+    .redirect(webPageUrl(env.WEB_PAGE_OAUTH_CALLBACK, Object.keys(query).length ? { query } : {}));
 }
 
 // the provider sends the browser back with the code of the login
@@ -249,7 +286,10 @@ const oauthCallbackOf =
         { ip, userAgent },
       );
 
-      return authServices.oauthCallback(provider, args);
+      return authServices.oauthCallback(provider, {
+        ...args,
+        trustedDevice: trustedDeviceCookieOf(req.cookies ?? {}),
+      });
     });
   };
 

@@ -5,6 +5,7 @@ import { signAccessToken } from '@utils/jwt.js';
 import { cookieHeader, cookieJar } from './cookies.js';
 import { withCsrf, type Csrf } from './csrf.js';
 import type { TestUser } from './factories.js';
+import { codeOf, newTestApp, postTwoFactor, ticketCookieOf } from './twoFactor.js';
 
 export type Session = { accessToken: string; refreshToken: string };
 
@@ -26,7 +27,8 @@ export function logIn(
   });
 }
 
-// a signed-in session of the user, the two auth cookies
+// a signed-in session of the user, the two auth cookies; an admin or root goes through the second
+// step as a person does
 export async function signIn(
   app: FastifyInstance,
   csrf: Csrf,
@@ -38,10 +40,59 @@ export async function signIn(
     password: user.password,
     ...(opts.rememberMe !== undefined ? { rememberMe: opts.rememberMe } : {}),
   });
-  if (res.statusCode !== 200) throw new Error(`login of ${user.email} answered ${res.statusCode}`);
+  const done = await finishLogin(app, csrf, user, res);
+  if (done.statusCode !== 200) {
+    throw new Error(`login of ${user.email} answered ${done.statusCode}`);
+  }
 
-  const jar = cookieJar(res);
+  const jar = cookieJar(done);
   return { accessToken: jar.accessToken!, refreshToken: jar.refreshToken! };
+}
+
+// the answer that opened the session: the login itself, or the second step of an admin or root the
+// way the person goes through it: the first login sets the app up with the secret the answer shows
+// (the user keeps the app), a later one types its code
+export async function finishLogin(
+  app: FastifyInstance,
+  csrf: Csrf,
+  user: TestUser,
+  res: Awaited<ReturnType<typeof logIn>>,
+  userAgent?: string,
+) {
+  if (res.statusCode !== 202) return res;
+  if (res.json().twoFactor === 'setup') {
+    const started = await postTwoFactor(
+      app,
+      csrf,
+      '/setup',
+      ticketCookieOf(res),
+      undefined,
+      userAgent,
+    );
+    if (started.statusCode !== 200) {
+      throw new Error(`the setup of ${user.email} answered ${started.statusCode}`);
+    }
+    user.twoFactorApp = newTestApp(started.json().secret);
+
+    return postTwoFactor(
+      app,
+      csrf,
+      '/setup/confirm',
+      ticketCookieOf(started),
+      { code: codeOf(user.twoFactorApp) },
+      userAgent,
+    );
+  }
+
+  if (!user.twoFactorApp) throw new Error(`${user.email} has no app to type a code from`);
+  return postTwoFactor(
+    app,
+    csrf,
+    '/verify',
+    ticketCookieOf(res),
+    { code: codeOf(user.twoFactorApp) },
+    userAgent,
+  );
 }
 
 export const sessionCookie = (session: Partial<Session>) => cookieHeader(session);

@@ -10,6 +10,7 @@ import { getCsrf, withCsrf } from '../../helpers/csrf.js';
 import { asAdmin } from '../../helpers/db.js';
 import { createProduct, createUser, uniqueTag, type TestUser } from '../../helpers/factories.js';
 import { mailedToken, watchMail, type SentMail } from '../../helpers/mail.js';
+import { enrollTwoFactor, freshCodeOf, type TestApp } from '../../helpers/twoFactor.js';
 
 // the demo data of db/tools/demo_data.mjs: a catalog of products with one, two or three variants each,
 // the stock of every variant and a few buyers made through the routes of the shop, by a process of its own against the app listening on a port, the way it runs
@@ -36,6 +37,7 @@ const DEMO_BUYERS = 3;
 let app: FastifyInstance;
 let baseUrl: string;
 let admin: TestUser;
+let adminApp: TestApp;
 let root: TestUser;
 // the buyers of the demo get addresses of a domain of this run
 let emailDomain: string;
@@ -70,13 +72,16 @@ type Run = { code: number | null; output: string };
 
 // the script in a process of its own, with only what it is given: the event loop of the tests
 // stays free to answer it
-function runDemo(env: Record<string, string> = {}): Promise<Run> {
+async function runDemo(env: Record<string, string> = {}): Promise<Run> {
   const childEnv: Record<string, string> = {
     PATH: process.env.PATH ?? '',
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
     DEMO_API_URL: baseUrl,
     DEMO_ADMIN_EMAIL: admin.email,
     DEMO_ADMIN_PASSWORD: ADMIN_PASSWORD,
+    // the code the app of the admin shows as the run starts, as the person types it in; a run with
+    // another password stops before the code
+    ...(env.DEMO_ADMIN_PASSWORD ? {} : { DEMO_ADMIN_CODE: await freshCodeOf(adminApp) }),
     DEMO_USERS_PASSWORD: USERS_PASSWORD,
     DEMO_EMAIL_DOMAIN: emailDomain,
     ...env,
@@ -261,6 +266,8 @@ beforeAll(async () => {
   await app.listen({ port: 0, host: '127.0.0.1' });
   baseUrl = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
   admin = await createUser({ role: 'ADMIN', password: ADMIN_PASSWORD });
+  // the admin set the authenticator app up already (the setup is the test of its routes and flows)
+  adminApp = (await enrollTwoFactor({ id: admin.id, role: 'ADMIN' })).app;
   root = await createUser({ role: 'ROOT' });
   emailDomain = `demo-${uniqueTag()}.example.com`;
 

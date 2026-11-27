@@ -54,6 +54,10 @@ const REQUIRED_AT_IMPORT: Record<string, string> = {
   STRIPE_WEBHOOK_SECRET: 'whsec_placeholder',
   // signs the codes of the links of withdrawal
   WITHDRAWAL_CODE_SECRET: 'test-withdrawal-code-secret-of-the-integration-tests',
+  // encrypts the secrets of the authenticator apps and signs the ticket of a login (32 bytes)
+  TWO_FACTOR_SECRET_KEY: Buffer.from('cartlify-tests-two-factor-secret-key-32b').toString(
+    'base64url',
+  ),
   // required when a test loads a module in development or production: the address of the API itself,
   // the one the tests fall back to without it (src/helpers/apiOrigin.ts)
   API_ORIGIN: 'http://localhost:4000',

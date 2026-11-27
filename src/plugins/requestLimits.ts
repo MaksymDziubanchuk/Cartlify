@@ -471,6 +471,9 @@ export const requestLimits = {
   checkout: [limitBy('checkout', REQUEST_LIMITS.checkoutPerUser, byUser)],
   deliveryPrices: [limitBy('deliveryPrices', REQUEST_LIMITS.deliveryPricesPerUser, byUser)],
   passwordChange: [limitBy('passwordChange', REQUEST_LIMITS.passwordChangePerUser, byUser)],
+  // the second step of a login and of the signed-in admin or root: each request reads a ticket,
+  // decrypts a secret and locks a row, so the address gets the budget of the logins, counted apart
+  twoFactor: [limitBy('twoFactor', REQUEST_LIMITS.loginPerAddress, byAddress)],
   export: [limitBy('export', REQUEST_LIMITS.exportPerUser, byUser)],
   review: [limitBy('review', REQUEST_LIMITS.reviewPerUser, byUser)],
   newsletterTranslate: [

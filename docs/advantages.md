@@ -43,9 +43,10 @@ See [architecture](architecture.md).
 
 - The withdrawal within the term of the EU by the account or a public form, with its statements, its parcels back and the money back.
 - The product safety data an offer needs (GPSR), the lowest price of the 30 days before every sale, customs data for the parcels abroad.
+- The VAT of the country of the buyer past the threshold of distance sales (OSS), imports with IOSS, exports without the tax of the seller; invoices and credit notes in PDF, fiscal receipts (Verifactu through fiskaly), a VAT report for the declarations.
 - Versioned terms, contract and privacy policy with the consents to them; terms of keeping personal data, with the cleanups that keep them, and an export of the data of a person.
 
-See [returns](returns.md) and [features](features.md).
+See [returns](returns.md), [taxes](taxes.md) and [features](features.md).
 
 ## ✅ Tested like a product
 

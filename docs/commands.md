@@ -81,7 +81,9 @@ npm run format
 # type check: the code of src first, then src together with the tests (tsconfig.test.json)
 npm run typecheck
 
-# tests: pick test parts in a checkbox list (all parts without an interactive terminal);
+# tests: pick test parts in a list (all parts without an interactive terminal): space checks a part
+# and moves a service on (skip, mock, real), the key a checks every part and takes every service
+# real (again: none), the choice is kept for the next run;
 # integration parts rebuild the Docker test database first and remove it after the run,
 # Docker must be running;
 # every answer of the app in the integration tests is held against the Swagger document: a status,
@@ -207,6 +209,7 @@ npm run test:integration
 # a server whose TURNSTILE_SECRET_KEY is the dummy secret of Cloudflare (local, dev until the
 # frontend has its widget) takes, and a server with the secret of a real widget refuses
 DEMO_API_URL='<api url>' DEMO_ADMIN_EMAIL='<admin email>' DEMO_ADMIN_PASSWORD='<password>' \
+  DEMO_ADMIN_CODE='<the code the authenticator app of the admin shows now>' \
   DEMO_USERS_PASSWORD='<password of the buyers>' node db/tools/demo_data.mjs
 
 # a copy of prod for dev with made-up people, not a backup: prod is read into a throwaway

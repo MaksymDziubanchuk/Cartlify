@@ -1,7 +1,7 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
-import { revokeAllActiveRefreshTokens } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
+import { closeAllSessions } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
 import { canManageMoneyOf } from '@helpers/moneyManager.js';
@@ -87,7 +87,7 @@ export async function addAdmin(args: AddAdminDto): Promise<AddAdminResponseDto> 
       });
 
       // a session holds the role it was opened with: the new role takes a new login
-      await revokeAllActiveRefreshTokens(tx, { userId, at: new Date() });
+      await closeAllSessions(tx, { userId, at: new Date() });
 
       // audit role change
       const changes: AuditChange[] = [{ field: 'role', old: before.role, new: updated.role }];

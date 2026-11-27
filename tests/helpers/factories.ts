@@ -7,6 +7,7 @@ import { hashPass } from '@helpers/safePass.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
 import { asAdmin, testTx } from './db.js';
+import type { TestApp } from './twoFactor.js';
 
 let counter = 0;
 
@@ -15,7 +16,14 @@ export const uniqueTag = () => `${Date.now()}-${process.pid}-${++counter}`;
 
 export const uniqueEmail = (prefix: string) => `${prefix}-${uniqueTag()}@example.com`;
 
-export type TestUser = { id: number; email: string; password: string; role: Role };
+export type TestUser = {
+  id: number;
+  email: string;
+  password: string;
+  role: Role;
+  // the authenticator app of an admin or root, once signIn set it up (tests/helpers/twoFactor.ts)
+  twoFactorApp?: TestApp;
+};
 
 // a user the way the app keeps one; a local user gets a password, an oauth one gets a provider id.
 // A user that has logged in cannot be deleted (the login log is append-only and only root

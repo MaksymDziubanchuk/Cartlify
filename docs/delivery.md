@@ -69,7 +69,25 @@ The provider posts every event of a parcel to `POST /api/delivery/shippypro/webh
 
 The order is `delivered` once every live parcel is over (delivered, back at the shop, lost), one of them at least is delivered, and a statement holds the units of the ones that did not reach the buyer: at the time of the last delivery. Until then a parcel back at the shop or lost keeps the order `shipped` (its alert asks the admin what became of the units), and the statement of the admin moves the order when it was the last thing missing. A parcel going back that the carrier delivers after all is `delivered`; a parcel back at the shop or lost does not change any more.
 
-A delivery that came without the pickup takes both steps. A repeat, an event back, an event of a voided parcel or of a parcel the shop does not know, and a body that is no event the app knows (a kind the provider added, a test of the webhook) change nothing and are answered `200`: any other answer and the provider posts it again. The moment of an event is never of the future and never before the order was paid (a date of the provider that is none), since the cost of the send is counted from it. An order something holds is not moved, its parcel is (the alert `parcels_ahead_of_order`). The order of the events of one order is kept: they go one after another.
+A delivery that came without the pickup takes both steps. A repeat, an event back, an event of a voided parcel or of a parcel the shop does not know, and a body that is no event the app knows (a kind the provider added, a test of the webhook) change nothing and are answered `200`: any other answer and the provider posts it again. The moment of an event is never of the future and never before the order was paid (a date of the provider that is none, or a carrier of another time zone: below), since the cost of the send is counted from it. An order something holds is not moved, its parcel is (the alert `parcels_ahead_of_order`). The order of the events of one order is kept: they go one after another.
+
+### The time of an event
+
+The provider tells the time of an event as the carrier gives it and does not say in which zone. Nova Poshta through ShippyPro gives the time of Kyiv written as if it were UTC, two hours ahead of the real moment (seen on a real parcel, 24.11.2026); a carrier of another country may be ahead or behind by the offset of its own zone. ShippyPro asks the carriers itself, every few hours, so an event comes hours after it happened, and only the last one between two asks.
+
+The app keeps the moment of an event between two bounds, so a carrier of any zone brings no error of the database:
+
+| The moment                                 | Not after | Not before                                           |
+| ------------------------------------------ | --------- | ---------------------------------------------------- |
+| the carrier took the parcel (`shippedAt`)  | now       | the payment of the order                             |
+| the order is delivered (`deliveredAt`)     | now       | the last parcel taken (the payment, when none was)   |
+| a refusal a provider tells (the statement) | now       | none of the app's: the database checks it, see below |
+
+What the zone of the carrier changes is only how close the moment is to the real one:
+
+- **A carrier east of UTC** (Ukraine, Czechia, Spain): the moment is later than the real one, by the offset at most (the time the event came, when it comes sooner). The cost of the send counts in the period of this moment, so a parcel taken late on the last day of a month may count in the next one; the period of withdrawal starts later, never shorter for the buyer.
+- **A carrier west of UTC** (the Americas): the moment is earlier, by the offset at most. A delivery just after midnight in the zone of the shop may count on the day before: the end of the period the buyer is told (`withdrawalEndsAt`) comes a day early, and the server still takes the statement in the grace that follows it (`withdrawalGraceDays`, [returns](returns.md)).
+- **A refusal a provider tells** is only cut at now. The database refuses a moment before the parcel was sent (`RETURN_STATED_AT_INVALID`), which only a carrier west of UTC telling a refusal less than its offset of hours after the payment could bring; the error is logged, and the alert `parcels_coming_back` keeps the parcel before the admin, who tells the refusal. ShippyPro tells no refusal at all: the admin always does, with the moment the carrier gives.
 
 ## Voids
 
